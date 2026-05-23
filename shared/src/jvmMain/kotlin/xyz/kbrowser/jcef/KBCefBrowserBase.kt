@@ -33,7 +33,8 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
 
         var cefBrowser = builder.myCefBrowser
         if (cefBrowser == null) {
-            cefBrowser = myCefClient.cefClient.createBrowser(builder.myUrl, CefRendering.DEFAULT, false, null)
+            val rendering = if (builder.myIsOffScreenRendering) CefRendering.OFFSCREEN else CefRendering.DEFAULT
+            cefBrowser = myCefClient.cefClient.createBrowser(builder.myUrl, rendering, false, null)
         }
         myCefBrowser = cefBrowser
 

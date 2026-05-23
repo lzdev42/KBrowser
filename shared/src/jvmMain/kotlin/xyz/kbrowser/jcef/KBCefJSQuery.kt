@@ -1,5 +1,7 @@
 package xyz.kbrowser.jcef
 
+import java.util.UUID
+
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.browser.CefMessageRouter
@@ -10,7 +12,7 @@ import org.cef.handler.CefMessageRouterHandlerAdapter
  * Ported from IntelliJ IDEA's KBCefJSQuery.
  */
 class KBCefJSQuery(val jbCefBrowser: KBCefBrowser) {
-    private val funcName = "cefQuery_" + System.currentTimeMillis()
+    private val funcName = "_q_" + UUID.randomUUID().toString().replace("-", "")
     private val myCefMessageRouter: CefMessageRouter
 
     init {

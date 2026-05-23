@@ -60,8 +60,9 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
             // 忽略找不到字段或设置失败的情况
         }
         
-        // 强制开启远程调试端口 (CDP)，使用非标准端口 58964
-        settings.remote_debugging_port = 58964
+        // 默认关闭 CDP 远程调试端口，防止被反自动化系统探测
+        // 开发者如需调试可通过 KBCefApp.getInstance().enableDebugging() 按需开启
+        settings.remote_debugging_port = 0
         
         // Fix: Set explicit cache path to avoid "Opening in existing browser session" warning
         val userHome = System.getProperty("user.home")
@@ -78,15 +79,10 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         if (!args.contains("--disable-component-update")) {
             args.add("--disable-component-update")
         }
-        // 强制绑定到本地 IPv4 并允许所有来源（配合调试端口）
-        if (!args.any { it.startsWith("--remote-debugging-port") }) {
-            args.add("--remote-debugging-port=58964")
-        }
-        if (!args.any { it.startsWith("--remote-debugging-address") }) {
-            args.add("--remote-debugging-address=127.0.0.1")
-        }
-        if (!args.contains("--remote-allow-origins=*")) {
-            args.add("--remote-allow-origins=*")
+        // 关闭 navigator.webdriver 标记，防止反自动化系统检测
+        // 这是库级别的底线保证：所有通过 KBrowser 产生的行为不可被 webdriver 指纹识别
+        if (!args.any { it.startsWith("--disable-features") && it.contains("AutomationControl") }) {
+            args.add("--disable-features=AutomationControl")
         }
 
         CefApp.addAppHandler(object : CefAppHandlerAdapter(args.toTypedArray()) {
