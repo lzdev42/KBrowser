@@ -1,51 +1,337 @@
 package xyz.kbrowser.webview
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import platform.WebKit.WKWebView
+import platform.WebKit.WKWebViewConfiguration
+import platform.WebKit.WKWebsiteDataStore
+import platform.WebKit.WKUserScript
+import platform.WebKit.WKUserScriptInjectionTime
+import platform.Foundation.*
+import platform.darwin.NSObject
+import kotlinx.cinterop.readValue
+import kotlinx.cinterop.ExperimentalForeignApi
 
-class IosWebViewController : WebViewController {
-    override val currentUrl = MutableStateFlow<String?>(null)
+class IosWebView(
+    private val initialUrl: String?,
+    val profile: KBProfile?
+) : KBWebView {
+    override val currentUrl = MutableStateFlow<String?>(initialUrl)
     override val currentTitle = MutableStateFlow<String?>(null)
     override val loadingState = MutableStateFlow<LoadingState>(LoadingState.Initializing)
     override val progress = MutableStateFlow(0f)
     override val canGoBack = MutableStateFlow(false)
     override val canGoForward = MutableStateFlow(false)
 
-    override fun loadUrl(url: String) {}
-    override fun loadHtml(html: String, baseUrl: String) {}
-    override fun reload() {}
-    override fun stopLoading() {}
-    override fun goBack() {}
-    override fun goForward() {}
-    override fun evaluateJavaScript(script: String, callback: ((String) -> Unit)?) {}
-    override fun registerJsCallback(name: String, callback: (String) -> String) {}
-    override fun unregisterJsCallback(name: String) {}
-    override fun clearCacheAndCookies() {}
+    private var webView: WKWebView? = null
+    private var webViewClient: KBWebViewClient? = null
+    private var webChromeClient: KBWebChromeClient? = null
 
-    override fun getOuterHtml(callback: (String) -> Unit) {}
-    override fun clickBySelector(selector: String) {}
-    override fun clickByCoordinates(x: Int, y: Int) {}
-    override fun hoverByCoordinates(x: Int, y: Int) {}
-    override fun getSemanticSnapshot(callback: (String) -> Unit) {}
+    @OptIn(ExperimentalForeignApi::class)
+    fun getOrCreateWebView(): WKWebView {
+        var w = webView
+        if (w == null) {
+            val store = if (profile != null) {
+                try {
+                    WKWebsiteDataStore.dataStoreForIdentifier(NSUUID(uUIDString = profile.profileId)!!)
+                } catch (e: Throwable) {
+                    WKWebsiteDataStore.nonPersistentDataStore()
+                }
+            } else {
+                WKWebsiteDataStore.defaultDataStore()
+            }
+            
+            val config = WKWebViewConfiguration().apply {
+                websiteDataStore = store
+            }
+            
+            // 注册 pageFinished 监听，用于更新页面状态，替代冲突的 navigationDelegate
+            val handler = object : NSObject(), platform.WebKit.WKScriptMessageHandlerProtocol {
+                override fun userContentController(
+                    userContentController: platform.WebKit.WKUserContentController,
+                    didReceiveScriptMessage: platform.WebKit.WKScriptMessage
+                ) {
+                    if (didReceiveScriptMessage.name == "pageFinished") {
+                        val url = didReceiveScriptMessage.body?.toString() ?: ""
+                        currentUrl.value = url
+                        loadingState.value = LoadingState.Finished
+                        progress.value = 1.0f
+                        canGoBack.value = webView?.canGoBack ?: false
+                        canGoForward.value = webView?.canGoForward ?: false
+                        webViewClient?.onPageFinished(url)
+                    }
+                }
+            }
+            config.userContentController.addScriptMessageHandler(handler, "pageFinished")
+            
+            val scriptSource = """
+                window.addEventListener('DOMContentLoaded', function() {
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pageFinished) {
+                        window.webkit.messageHandlers.pageFinished.postMessage(window.location.href);
+                    }
+                });
+            """.trimIndent()
+            val userScript = WKUserScript(
+                source = scriptSource,
+                injectionTime = WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentEnd,
+                forMainFrameOnly = true
+            )
+            config.userContentController.addUserScript(userScript)
 
-    override fun destroy() {}
+            val frame = platform.CoreGraphics.CGRectZero.readValue()
+            w = WKWebView(frame = frame, configuration = config)
+            
+            webView = w
+            if (initialUrl != null) {
+                val url = NSURL.URLWithString(initialUrl)
+                if (url != null) {
+                    w.loadRequest(NSURLRequest.requestWithURL(url))
+                }
+            }
+        }
+        return w
+    }
+
+    override fun loadUrl(url: String) {
+        val w = getOrCreateWebView()
+        val nsUrl = NSURL.URLWithString(url)
+        if (nsUrl != null) {
+            loadingState.value = LoadingState.Loading
+            progress.value = 0.1f
+            webViewClient?.onPageStarted(url)
+            w.loadRequest(NSURLRequest.requestWithURL(nsUrl))
+        }
+    }
+
+    override fun loadHtml(html: String) {
+        val w = getOrCreateWebView()
+        w.loadHTMLString(html, null)
+    }
+
+    override fun reload() {
+        webView?.reload()
+    }
+
+    override fun stopLoading() {
+        webView?.stopLoading()
+    }
+
+    override fun goBack() {
+        if (webView?.canGoBack == true) {
+            webView?.goBack()
+        }
+    }
+
+    override fun goForward() {
+        if (webView?.canGoForward == true) {
+            webView?.goForward()
+        }
+    }
+
+    override fun evaluateJavascript(script: String, callback: ((String) -> Unit)?) {
+        val w = getOrCreateWebView()
+        w.evaluateJavaScript(script) { result, error ->
+            if (error != null) {
+                callback?.invoke("ERROR: ${error.localizedDescription}")
+            } else {
+                val resString = result?.toString() ?: ""
+                callback?.invoke(resString)
+            }
+        }
+    }
+
+    override fun registerJsCallback(name: String, callback: (String) -> Unit) {
+        val userContentController = getOrCreateWebView().configuration.userContentController
+        val handler = object : NSObject(), platform.WebKit.WKScriptMessageHandlerProtocol {
+            override fun userContentController(
+                userContentController: platform.WebKit.WKUserContentController,
+                didReceiveScriptMessage: platform.WebKit.WKScriptMessage
+            ) {
+                if (didReceiveScriptMessage.name == name) {
+                    val bodyString = didReceiveScriptMessage.body?.toString() ?: ""
+                    callback(bodyString)
+                }
+            }
+        }
+        userContentController.addScriptMessageHandler(handler, name)
+        
+        val js = """
+            window.$name = {
+                postMessage: function(msg) {
+                    window.webkit.messageHandlers.$name.postMessage(msg);
+                }
+            };
+        """.trimIndent()
+        evaluateJavascript(js, null)
+    }
+
+    override fun unregisterJsCallback(name: String) {
+        val userContentController = webView?.configuration?.userContentController
+        userContentController?.removeScriptMessageHandlerForName(name)
+    }
+
+    override fun clearCacheAndCookies() {
+        val w = getOrCreateWebView()
+        val store = w.configuration.websiteDataStore
+        val date = NSDate(timeIntervalSinceReferenceDate = -978307200.0)
+        
+        val dataTypes = NSSet.setWithArray(listOf(platform.WebKit.WKWebsiteDataTypeCookies))
+        
+        store.removeDataOfTypes(
+            dataTypes,
+            modifiedSince = date
+        ) {
+            // 完成回调
+        }
+    }
+
+    override fun setWebViewClient(client: KBWebViewClient?) {
+        this.webViewClient = client
+    }
+
+    override fun setWebChromeClient(client: KBWebChromeClient?) {
+        this.webChromeClient = client
+    }
+
+    override fun destroy() {
+        webView = null
+    }
 }
 
 @Composable
-actual fun WebView(
-    controller: WebViewController,
+actual fun KBWebView(
+    webView: KBWebView,
     modifier: Modifier
 ) {
-    // Stub implementation for iOS
-    Box(modifier = modifier.background(Color.LightGray))
+    val iosWebView = webView as? IosWebView ?: return
+    androidx.compose.ui.viewinterop.UIKitView(
+        factory = {
+            iosWebView.getOrCreateWebView()
+        },
+        modifier = modifier
+    )
 }
 
 @Composable
-actual fun rememberWebViewController(initialUrl: String, isOsr: Boolean): WebViewController {
-    return androidx.compose.runtime.remember { IosWebViewController() }
+actual fun rememberKBWebView(
+    initialUrl: String?,
+    profile: KBProfile?
+): KBWebView {
+    val webView = androidx.compose.runtime.remember(initialUrl, profile) {
+        IosWebView(initialUrl, profile)
+    }
+    androidx.compose.runtime.DisposableEffect(webView) {
+        onDispose {
+            webView.destroy()
+        }
+    }
+    return webView
 }
+
+internal actual fun createHeadlessWebView(
+    initialUrl: String?,
+    profile: KBProfile?,
+    isOsr: Boolean
+): KBWebView {
+    return IosWebView(initialUrl, profile)
+}
+
+internal actual suspend fun performClickByCoordinates(
+    webView: KBWebView,
+    x: Int,
+    y: Int
+) {
+    val js = """
+        (function() {
+            var el = document.elementFromPoint($x, $y);
+            if (el) {
+                el.click();
+                return 'OK';
+            }
+            return 'NOT_FOUND';
+        })()
+    """.trimIndent()
+    webView.evaluateJavascript(js, null)
+}
+
+internal actual suspend fun performHoverByCoordinates(
+    webView: KBWebView,
+    x: Int,
+    y: Int
+) {
+    val js = """
+        (function() {
+            var el = document.elementFromPoint($x, $y);
+            if (el) {
+                var ev1 = new MouseEvent('mouseover', { bubbles: true });
+                var ev2 = new MouseEvent('mouseenter', { bubbles: true });
+                el.dispatchEvent(ev1);
+                el.dispatchEvent(ev2);
+                return 'OK';
+            }
+            return 'NOT_FOUND';
+        })()
+    """.trimIndent()
+    webView.evaluateJavascript(js, null)
+}
+
+internal actual suspend fun performScrollByCoordinates(
+    webView: KBWebView,
+    x: Int,
+    y: Int,
+    deltaX: Int,
+    deltaY: Int
+) {
+    val js = "window.scrollBy($deltaX, $deltaY);"
+    webView.evaluateJavascript(js, null)
+}
+
+internal actual suspend fun performDragByCoordinates(
+    webView: KBWebView,
+    startX: Int,
+    startY: Int,
+    endX: Int,
+    endY: Int
+) {
+    val js = """
+        (function() {
+            var startEl = document.elementFromPoint($startX, $startY);
+            if (!startEl) return 'NOT_FOUND';
+            
+            function fireTouch(type, clientX, clientY) {
+                var touch = new Touch({
+                    identifier: Date.now(),
+                    target: startEl,
+                    clientX: clientX,
+                    clientY: clientY,
+                    screenX: clientX,
+                    screenY: clientY
+                });
+                var touchEvent = new TouchEvent(type, {
+                    bubbles: true,
+                    cancelable: true,
+                    touches: [touch],
+                    targetTouches: [touch],
+                    changedTouches: [touch]
+                });
+                startEl.dispatchEvent(touchEvent);
+            }
+            
+            fireTouch('touchstart', $startX, $startY);
+            var steps = 5;
+            for (var i = 1; i <= steps; i++) {
+                var r = i / steps;
+                var currX = $startX + ($endX - $startX) * r;
+                var currY = $startY + ($endY - $startY) * r;
+                fireTouch('touchmove', currX, currY);
+            }
+            fireTouch('touchend', $endX, $endY);
+            return 'OK';
+        })()
+    """.trimIndent()
+    webView.evaluateJavascript(js, null)
+}
+
+internal actual fun performGlobalShutdown() {}

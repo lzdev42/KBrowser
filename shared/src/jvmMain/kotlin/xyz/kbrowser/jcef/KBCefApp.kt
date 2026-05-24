@@ -17,10 +17,13 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         private var ourInstance: KBCefApp? = null
 
         @Synchronized
+        @Suppress("DEPRECATION")
         fun getInstance(): KBCefApp {
             if (ourInstance == null) {
+                // 注意：JCEF 的系统属性必须在 AWT 初始化前设置完毕。
+                // 强制要求调用端在应用入口点调用 KBrowser.initialize()。
+
                 // IDEA Logic: Set forceDeviceScaleFactor if JRE HiDPI is disabled
-                // For simplicity in standalone, we check if property is already set
                 if (System.getProperty("jcef.forceDeviceScaleFactor") == null) {
                     val scale = JCefAppConfig.getForceDeviceScaleFactor()
                     if (scale > 0) {
@@ -84,6 +87,8 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         if (!args.any { it.startsWith("--disable-features") && it.contains("AutomationControl") }) {
             args.add("--disable-features=AutomationControl")
         }
+        
+        args.add("--disable-chrome-runtime")
 
         CefApp.addAppHandler(object : CefAppHandlerAdapter(args.toTypedArray()) {
             override fun onContextInitialized() {

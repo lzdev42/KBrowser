@@ -16,19 +16,27 @@ import org.cef.handler.CefDisplayHandlerAdapter
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.network.CefRequest
-import xyz.kbrowser.jcef.KBCefApp
-import xyz.kbrowser.jcef.KBCefBrowser
-import xyz.kbrowser.jcef.KBCefBrowserBuilder
-import xyz.kbrowser.jcef.KBCefJSQuery
-import javax.swing.SwingUtilities
+import xyz.kbrowser.jcef.*
+import java.awt.Component
+import java.awt.event.InputEvent
+import java.awt.event.MouseEvent
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
-import java.awt.event.InputEvent
-import java.awt.event.MouseEvent
+import javax.swing.SwingUtilities
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = false) : WebViewController {
+private val profileContextMap = java.util.concurrent.ConcurrentHashMap<String, org.cef.browser.CefRequestContext>()
+
+class JvmWebView(
+    initialUrl: String? = null,
+    isOsr: Boolean = false,
+    val profile: KBProfile? = null,
+    val isHeadless: Boolean = false
+) : KBWebView {
     private val isDestroyed = AtomicBoolean(false)
+    private var headlessFrame: javax.swing.JFrame? = null
 
     private val funcName = "_q_" + UUID.randomUUID().toString().replace("-", "")
     private val pendingCallbacks = java.util.concurrent.ConcurrentHashMap<String, (String) -> Unit>()
@@ -39,7 +47,7 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
     private val cefBrowser: CefBrowser
         get() = browser.getCefBrowser()
 
-    override val currentUrl = MutableStateFlow<String?>(initialUrl)
+    override val currentUrl = MutableStateFlow<String?>(initialUrl ?: "about:blank")
     override val currentTitle = MutableStateFlow<String?>(null)
     override val loadingState = MutableStateFlow<LoadingState>(LoadingState.Initializing)
     override val progress = MutableStateFlow(0f)
@@ -47,10 +55,8 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
     override val canGoBack = MutableStateFlow(false)
     override val canGoForward = MutableStateFlow(false)
 
-    private val _visualIndicatorFlow = kotlinx.coroutines.flow.MutableSharedFlow<VisualIndicatorEvent>(extraBufferCapacity = 10)
-
-    // AWT 遮罩 Glass Pane，盖在浏览器上面
-    val maskGlassPane = MaskGlassPane()
+    private var webViewClient: KBWebViewClient? = null
+    private var webChromeClient: KBWebChromeClient? = null
 
     init {
         // 1. Create client first
@@ -65,10 +71,19 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         
         // 3. Create the browser with this fully configured client
         val isMac = System.getProperty("os.name").lowercase().contains("mac")
+        
+        var requestContext: org.cef.browser.CefRequestContext? = null
+        if (profile != null) {
+            requestContext = profileContextMap.computeIfAbsent(profile.profileId) {
+                org.cef.browser.CefRequestContext.createContext(null)
+            }
+        }
+
         val builder = KBCefBrowserBuilder()
-            .setUrl(initialUrl)
+            .setUrl(initialUrl ?: "about:blank")
             .setOffScreenRendering(isOsr)
             .setClient(client)
+        builder.myRequestContext = requestContext
         if (isMac) {
             builder.myMouseWheelEventEnable = false
         }
@@ -153,6 +168,7 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
                 if (f.isMain) {
                     progress.value = 0.1f
                     loadingState.value = LoadingState.Loading
+                    webViewClient?.onPageStarted(b.url ?: "")
                 }
             }
 
@@ -160,6 +176,17 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
                 if (f.isMain) {
                     progress.value = 1f
                     loadingState.value = LoadingState.Finished
+                    webViewClient?.onPageFinished(b.url ?: "")
+                    
+                    // 重新注入 JS 回调，因为每次页面加载/刷新后 window 上下文会被重置
+                    jsCallbacks.forEach { (name, query) ->
+                        val script = """
+                            window.$name = function(arg) {
+                                ${query.inject("arg")}
+                            };
+                        """.trimIndent()
+                        b.executeJavaScript(script, b.url ?: "", 0)
+                    }
                 }
             }
 
@@ -170,13 +197,15 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
                 errorText: String,
                 failedUrl: String
             ) {
-                if (f.isMain) {
+                if (f.isMain && errorCode != CefLoadHandler.ErrorCode.ERR_ABORTED) {
                     progress.value = 1f
+                    val diag = Diagnostics(errorCode.ordinal, errorText, failedUrl)
                     loadingState.value = LoadingState.Error(
                         errorCode = errorCode.ordinal,
                         description = errorText,
                         failingUrl = failedUrl
                     )
+                    webViewClient?.onReceivedError(diag)
                 }
             }
         })
@@ -198,6 +227,22 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
                 }
             }
         })
+
+        if (isHeadless) {
+            SwingUtilities.invokeLater {
+                val frame = javax.swing.JFrame()
+                frame.isUndecorated = true
+                frame.setSize(1280, 800)
+                try {
+                    frame.opacity = 0.0f
+                } catch (e: Exception) {
+                    // 某些窗口管理器或 JDK 不支持半透明/透明窗口时忽略
+                }
+                frame.contentPane.add(browser.getComponent())
+                frame.isVisible = true
+                headlessFrame = frame
+            }
+        }
     }
 
     override fun loadUrl(url: String) {
@@ -206,12 +251,13 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         }
     }
 
-    override fun loadHtml(html: String, baseUrl: String) {
+    override fun loadHtml(html: String) {
         if (!isDestroyed.get()) {
             val encoded = Base64.getEncoder().encodeToString(html.toByteArray(Charsets.UTF_8))
             browser.loadURL("data:text/html;charset=utf-8;base64,$encoded")
         }
     }
+
 
     override fun reload() {
         if (!isDestroyed.get()) {
@@ -237,7 +283,7 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         }
     }
 
-    override fun evaluateJavaScript(script: String, callback: ((String) -> Unit)?) {
+    override fun evaluateJavascript(script: String, callback: ((String) -> Unit)?) {
         if (isDestroyed.get()) return
         if (callback == null) {
             cefBrowser.executeJavaScript(script, "", 0)
@@ -270,13 +316,22 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         }
     }
 
+    override fun setWebViewClient(client: KBWebViewClient?) {
+        this.webViewClient = client
+    }
+
+    override fun setWebChromeClient(client: KBWebChromeClient?) {
+        this.webChromeClient = client
+    }
+
     private val jsCallbacks = mutableMapOf<String, KBCefJSQuery>()
 
-    override fun registerJsCallback(name: String, callback: (String) -> String) {
+    override fun registerJsCallback(name: String, callback: (String) -> Unit) {
         if (isDestroyed.get()) return
         val query = KBCefJSQuery(browser)
         query.addHandler { request ->
             callback(request)
+            "OK"
         }
         jsCallbacks[name] = query
         val script = """
@@ -300,32 +355,7 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         }
     }
 
-    override fun getOuterHtml(callback: (String) -> Unit) {
-        val js = """
-            (function() {
-                var html = document.documentElement.outerHTML;
-                // 诊断信息：视口和缩放状态
-                var diag = {
-                    url: window.location.href,
-                    innerWidth: window.innerWidth,
-                    innerHeight: window.innerHeight,
-                    outerWidth: window.outerWidth,
-                    outerHeight: window.outerHeight,
-                    scrollX: window.scrollX,
-                    scrollY: window.scrollY,
-                    devicePixelRatio: window.devicePixelRatio,
-                    screenWidth: window.screen.width,
-                    screenHeight: window.screen.height,
-                    htmlLength: html.length
-                };
-                return JSON.stringify({diagnostics: diag, html: html});
-            })()
-        """.trimIndent()
-        evaluateJavaScript(js) { result ->
-            println("[DEBUG-getOuterHtml] 返回长度=${result.length}, 前100=${result.take(100)}")
-            callback(result)
-        }
-    }
+    // getOuterHtml removed
 
     /**
      * 统一坐标转换 JS 模板：
@@ -374,72 +404,9 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         return Pair(awtX, awtY)
     }
 
-    override fun clickBySelector(selector: String) {
-        if (isDestroyed.get()) return
-        val jsCode = """
-            (function() {
-                var el = document.querySelector('$selector');
-                if (!el) return 'NOT_FOUND';
-                var rect = el.getBoundingClientRect();
-                var docX = Math.round(rect.left + rect.width / 2 + window.scrollX);
-                var docY = Math.round(rect.top + rect.height / 2 + window.scrollY);
-                var vw = window.innerWidth;
-                var vh = window.innerHeight;
-                var scrollX = window.scrollX || window.pageXOffset;
-                var scrollY = window.scrollY || window.pageYOffset;
+    // clickBySelector removed
 
-                var clientX = docX - scrollX;
-                var clientY = docY - scrollY;
-
-                if (clientX < 0 || clientX > vw || clientY < 0 || clientY > vh) {
-                    var maxScrollX = Math.max(0, document.documentElement.scrollWidth - vw);
-                    var maxScrollY = Math.max(0, document.documentElement.scrollHeight - vh);
-                    var targetScrollX = Math.max(0, Math.min(docX - Math.floor(vw / 2), maxScrollX));
-                    var targetScrollY = Math.max(0, Math.min(docY - Math.floor(vh / 2), maxScrollY));
-
-                    window.scrollTo(targetScrollX, targetScrollY);
-
-                    clientX = docX - targetScrollX;
-                    clientY = docY - targetScrollY;
-                }
-
-                return clientX + ',' + clientY + ',' + vw + ',' + vh;
-            })();
-        """.trimIndent()
-
-        evaluateJavaScript(jsCode) { result ->
-            println("[DEBUG-clickBySelector] JS 回调结果: result='$result'")
-            if (result.trim('"') == "NOT_FOUND") {
-                println("[DEBUG-clickBySelector] ❌ 元素未找到")
-                return@evaluateJavaScript
-            }
-            val parts = result.trim('"').split(',')
-            if (parts.size < 4) {
-                println("[DEBUG-clickBySelector] ❌ 返回格式不正确，parts=$parts")
-                return@evaluateJavaScript
-            }
-            val clientX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavaScript
-            val clientY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavaScript
-            val innerWidth = parts[2].toDoubleOrNull() ?: return@evaluateJavaScript
-            val innerHeight = parts[3].toDoubleOrNull() ?: return@evaluateJavaScript
-
-            val comp = cefBrowser.uiComponent ?: return@evaluateJavaScript
-            val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
-
-            println("[DEBUG-clickBySelector] CSS视口坐标=($clientX, $clientY), 视口尺寸=${innerWidth}x${innerHeight}, AWT组件尺寸=${comp.width}x${comp.height}, AWT坐标=($awtX, $awtY)")
-
-            maskGlassPane.addClickAnimation(awtX, awtY)
-
-            val modifiers = InputEvent.BUTTON1_DOWN_MASK
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, MouseEvent.NOBUTTON))
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, MouseEvent.BUTTON1))
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, MouseEvent.BUTTON1))
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, MouseEvent.BUTTON1))
-            println("[DEBUG-clickBySelector] ✅ 鼠标事件已发送至 AWT 坐标 ($awtX, $awtY)")
-        }
-    }
-
-    override fun clickByCoordinates(x: Int, y: Int) {
+    fun clickByCoordinates(x: Int, y: Int) {
         println("[DEBUG-clickByCoordinates] 入口: 文档坐标=($x, $y), isDestroyed=${isDestroyed.get()}")
         if (isDestroyed.get()) {
             println("[DEBUG-clickByCoordinates] ❌ 已销毁，直接返回！")
@@ -449,13 +416,13 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         val jsCode = coordinateTransformJs(x, y)
 
         println("[DEBUG-clickByCoordinates] 开始执行 JS 坐标转换...")
-        evaluateJavaScript(jsCode) { result ->
+        evaluateJavascript(jsCode) { result ->
             println("[DEBUG-clickByCoordinates] JS 回调结果: result='$result'")
             val parts = result.trim('"').split(',')
             println("[DEBUG-clickByCoordinates] 解析 parts: size=${parts.size}, parts=$parts")
             if (parts.size < 4) {
                 println("[DEBUG-clickByCoordinates] ❌ 返回格式不正确（需要4个值：clientX,clientY,innerWidth,innerHeight）")
-                return@evaluateJavaScript
+                return@evaluateJavascript
             }
             val clientX = parts[0].toDoubleOrNull()?.toInt()
             val clientY = parts[1].toDoubleOrNull()?.toInt()
@@ -463,19 +430,15 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
             val innerHeight = parts[3].toDoubleOrNull()
             if (clientX == null || clientY == null || innerWidth == null || innerHeight == null) {
                 println("[DEBUG-clickByCoordinates] ❌ 坐标解析为 null！clientX=$clientX, clientY=$clientY, innerWidth=$innerWidth, innerHeight=$innerHeight")
-                return@evaluateJavaScript
+                return@evaluateJavascript
             }
 
             val comp = cefBrowser.uiComponent
             if (comp == null) {
                 println("[DEBUG-clickByCoordinates] ❌ uiComponent 为 null，无法发送鼠标事件！")
-                return@evaluateJavaScript
+                return@evaluateJavascript
             }
             val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
-
-            println("[DEBUG-clickByCoordinates] CSS视口坐标=($clientX, $clientY), 视口尺寸=${innerWidth}x${innerHeight}, AWT组件尺寸=${comp.width}x${comp.height}, AWT坐标=($awtX, $awtY), zoomLevel=${cefBrowser.zoomLevel}, devicePixelRatio=${java.awt.Toolkit.getDefaultToolkit().screenResolution}, scaleRatio=${comp.width.toDouble()/innerWidth}")
-
-            maskGlassPane.addClickAnimation(awtX, awtY)
 
             val modifiers = InputEvent.BUTTON1_DOWN_MASK
             println("[DEBUG-clickByCoordinates] ✅ 正在发送 AWT 鼠标事件: MOVED→PRESSED→RELEASED→CLICKED at ($awtX, $awtY)")
@@ -487,480 +450,248 @@ class JvmWebViewController(initialUrl: String = "about:blank", isOsr: Boolean = 
         }
     }
 
-    override fun hoverByCoordinates(x: Int, y: Int) {
+    fun hoverByCoordinates(x: Int, y: Int) {
         if (isDestroyed.get()) return
 
         val jsCode = coordinateTransformJs(x, y)
 
-        evaluateJavaScript(jsCode) { result ->
+        evaluateJavascript(jsCode) { result ->
             val parts = result.trim('"').split(',')
-            if (parts.size < 4) return@evaluateJavaScript
-            val clientX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavaScript
-            val clientY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavaScript
-            val innerWidth = parts[2].toDoubleOrNull() ?: return@evaluateJavaScript
-            val innerHeight = parts[3].toDoubleOrNull() ?: return@evaluateJavaScript
+            if (parts.size < 4) return@evaluateJavascript
+            val clientX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val clientY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val innerWidth = parts[2].toDoubleOrNull() ?: return@evaluateJavascript
+            val innerHeight = parts[3].toDoubleOrNull() ?: return@evaluateJavascript
 
-            val comp = cefBrowser.uiComponent ?: return@evaluateJavaScript
+            val comp = cefBrowser.uiComponent ?: return@evaluateJavascript
             val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
-
-            maskGlassPane.addHoverAnimation(awtX, awtY)
 
             cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, MouseEvent.NOBUTTON))
         }
     }
 
-    override fun getSemanticSnapshot(callback: (String) -> Unit) {
-        val js = """
-            (function() {
-                function getDirectText(node) {
-                    var text = '';
-                    for (var i = 0; i < node.childNodes.length; i++) {
-                        if (node.childNodes[i].nodeType === 3) {
-                            var t = node.childNodes[i].textContent.trim();
-                            if (t) text += t + ' ';
-                        }
-                    }
-                    return text.trim();
-                }
-
-                var elements = [];
-                // 输出 DOM 中所有元素，不做任何业务过滤
-                document.querySelectorAll('*').forEach(function(el, index) {
-                    var rect = el.getBoundingClientRect();
-                    var isVisible = rect.width > 0 && rect.height > 0;
-                    var textContent = '';
-                    try { textContent = getDirectText(el); } catch(e) { textContent = ''; }
-                    if (textContent.length > 200) textContent = textContent.substring(0, 200);
-                    var attrs = {};
-                    for (var i = 0; i < el.attributes.length; i++) {
-                        var attr = el.attributes[i];
-                        if (attr.name !== 'class' && attr.name !== 'id' && attr.name !== 'style') {
-                            attrs[attr.name] = attr.value.substring(0, 100);
-                        }
-                    }
-                    elements.push({
-                        tagName: el.tagName.toLowerCase(),
-                        id: el.id || '',
-                        className: (el.className && typeof el.className === 'string') ? el.className : '',
-                        attributes: attrs,
-                        text: textContent,
-                        isVisible: isVisible,
-                        x: Math.round(rect.left + window.scrollX),
-                        y: Math.round(rect.top + window.scrollY),
-                        width: Math.round(rect.width),
-                        height: Math.round(rect.height),
-                        centerX: Math.round(rect.left + window.scrollX + rect.width / 2),
-                        centerY: Math.round(rect.top + window.scrollY + rect.height / 2),
-                        childCount: el.children.length
-                    });
-                });
-
-                // iframe 内所有元素
-                var iframeInfos = [];
-                try {
-                    document.querySelectorAll('iframe').forEach(function(iframe, iframeIdx) {
-                        var iframeRect = iframe.getBoundingClientRect();
-                        iframeInfos.push({
-                            src: iframe.src || '',
-                            title: iframe.title || '',
-                            name: iframe.name || '',
-                            isVisible: iframeRect.width > 0 && iframeRect.height > 0,
-                            x: Math.round(iframeRect.left + window.scrollX),
-                            y: Math.round(iframeRect.top + window.scrollY),
-                            width: Math.round(iframeRect.width),
-                            height: Math.round(iframeRect.height)
-                        });
-                        try {
-                            var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                            iframeDoc.querySelectorAll('*').forEach(function(el, index) {
-                                var rect = el.getBoundingClientRect();
-                                var isVisible = rect.width > 0 && rect.height > 0;
-                                var textContent = '';
-                                try { textContent = getDirectText(el); } catch(e) {}
-                                if (textContent.length > 200) textContent = textContent.substring(0, 200);
-                                var attrs = {};
-                                for (var i = 0; i < el.attributes.length; i++) {
-                                    var attr = el.attributes[i];
-                                    if (attr.name !== 'class' && attr.name !== 'id' && attr.name !== 'style') {
-                                        attrs[attr.name] = attr.value.substring(0, 100);
-                                    }
-                                }
-                                elements.push({
-                                    tagName: el.tagName.toLowerCase(),
-                                    id: el.id || '',
-                                    className: (el.className && typeof el.className === 'string') ? el.className : '',
-                                    attributes: attrs,
-                                    text: textContent,
-                                    isVisible: isVisible,
-                                    iframeSrc: iframe.src || '',
-                                    x: Math.round(rect.left + iframeRect.left + window.scrollX),
-                                    y: Math.round(rect.top + iframeRect.top + window.scrollY),
-                                    width: Math.round(rect.width),
-                                    height: Math.round(rect.height),
-                                    centerX: Math.round(rect.left + iframeRect.left + window.scrollX + rect.width / 2),
-                                    centerY: Math.round(rect.top + iframeRect.top + window.scrollY + rect.height / 2),
-                                    childCount: el.children.length
-                                });
-                            });
-                        } catch(e) {
-                            // 跨域 iframe 无法访问内容
-                        }
-                    });
-                } catch(e) {}
-
-                var diag = {
-                    url: window.location.href,
-                    innerWidth: window.innerWidth,
-                    innerHeight: window.innerHeight,
-                    scrollX: window.scrollX,
-                    scrollY: window.scrollY,
-                    documentWidth: document.documentElement.scrollWidth,
-                    documentHeight: document.documentElement.scrollHeight,
-                    devicePixelRatio: window.devicePixelRatio,
-                    totalElements: elements.length,
-                    visibleElements: elements.filter(function(e) { return e.isVisible; }).length,
-                    hiddenElements: elements.filter(function(e) { return !e.isVisible; }).length,
-                    iframeCount: iframeInfos.length
-                };
-                return JSON.stringify({diagnostics: diag, iframeInfos: iframeInfos, ariaTree: elements});
-            })()
-        """.trimIndent()
-        
-        evaluateJavaScript(js) { json ->
-            println("[DEBUG-getSemanticSnapshot] 返回长度=${json.length}")
-            callback(json)
-        }
-    }
-
-    override fun getSelectors(callback: (String) -> Unit) {
-        val js = """
-            (function() {
-                function getDirectText(node) {
-                    var text = '';
-                    for (var i = 0; i < node.childNodes.length; i++) {
-                        if (node.childNodes[i].nodeType === 3) {
-                            var t = node.childNodes[i].textContent.trim();
-                            if (t) text += t + ' ';
-                        }
-                    }
-                    return text.trim();
-                }
-
-                function generateUniqueSelector(el) {
-                    if (el.id) return '#' + CSS.escape(el.id);
-                    var parts = [];
-                    var current = el;
-                    var depth = 0;
-                    while (current && current !== document.documentElement && depth < 5) {
-                        depth++;
-                        var part = current.tagName.toLowerCase();
-                        if (current.id) {
-                            parts.unshift('#' + CSS.escape(current.id));
-                            break;
-                        }
-                        if (current.className && typeof current.className === 'string') {
-                            var classes = current.className.trim().split(/\s+/).filter(function(c) { return c && !c.startsWith('__'); });
-                            if (classes.length > 0) {
-                                part += '.' + classes.map(function(c) { return CSS.escape(c); }).join('.');
-                            }
-                        }
-                        var parent = current.parentElement;
-                        if (parent) {
-                            var siblings = Array.from(parent.children).filter(function(s) { return s.tagName === current.tagName; });
-                            if (siblings.length > 1) {
-                                var idx = siblings.indexOf(current) + 1;
-                                part += ':nth-of-type(' + idx + ')';
-                            }
-                        }
-                        parts.unshift(part);
-                        current = current.parentElement;
-                    }
-                    return parts.join(' > ');
-                }
-
-                var selectorsData = [];
-                // 输出 DOM 中所有元素的 CSS 选择器，不做任何业务过滤
-                document.querySelectorAll('*').forEach(function(el, index) {
-                    var rect = el.getBoundingClientRect();
-                    var isVisible = rect.width > 0 && rect.height > 0;
-                    var textContent = '';
-                    try { textContent = getDirectText(el); } catch(e) {}
-                    if (textContent.length > 100) textContent = textContent.substring(0, 100);
-                    selectorsData.push({
-                        selector: generateUniqueSelector(el),
-                        tagName: el.tagName.toLowerCase(),
-                        id: el.id || '',
-                        className: (el.className && typeof el.className === 'string') ? el.className : '',
-                        text: textContent,
-                        isVisible: isVisible,
-                        x: Math.round(rect.left + window.scrollX),
-                        y: Math.round(rect.top + window.scrollY),
-                        width: Math.round(rect.width),
-                        height: Math.round(rect.height),
-                        centerX: Math.round(rect.left + window.scrollX + rect.width / 2),
-                        centerY: Math.round(rect.top + window.scrollY + rect.height / 2)
-                    });
-                });
-
-                // iframe 内所有元素的选择器
-                try {
-                    document.querySelectorAll('iframe').forEach(function(iframe, iframeIdx) {
-                        try {
-                            var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                            var iframeRect = iframe.getBoundingClientRect();
-                            iframeDoc.querySelectorAll('*').forEach(function(el, index) {
-                                var rect = el.getBoundingClientRect();
-                                var isVisible = rect.width > 0 && rect.height > 0;
-                                var textContent = '';
-                                try { textContent = getDirectText(el); } catch(e) {}
-                                if (textContent.length > 100) textContent = textContent.substring(0, 100);
-                                selectorsData.push({
-                                    selector: generateUniqueSelector(el),
-                                    iframeSrc: iframe.src || '',
-                                    tagName: el.tagName.toLowerCase(),
-                                    id: el.id || '',
-                                    className: (el.className && typeof el.className === 'string') ? el.className : '',
-                                    text: textContent,
-                                    isVisible: isVisible,
-                                    x: Math.round(rect.left + iframeRect.left + window.scrollX),
-                                    y: Math.round(rect.top + iframeRect.top + window.scrollY),
-                                    width: Math.round(rect.width),
-                                    height: Math.round(rect.height),
-                                    centerX: Math.round(rect.left + iframeRect.left + window.scrollX + rect.width / 2),
-                                    centerY: Math.round(rect.top + iframeRect.top + window.scrollY + rect.height / 2)
-                                });
-                            });
-                        } catch(e) {}
-                    });
-                } catch(e) {}
-
-                var visibleCount = selectorsData.filter(function(s) { return s.isVisible; }).length;
-                var hiddenCount = selectorsData.filter(function(s) { return !s.isVisible; }).length;
-                return JSON.stringify({total: selectorsData.length, visible: visibleCount, hidden: hiddenCount, selectors: selectorsData});
-            })()
-        """.trimIndent()
-        
-        evaluateJavaScript(js) { json ->
-            println("[DEBUG-getSelectors] 返回长度=${json.length}")
-            callback(json)
-        }
-    }
-
     override fun destroy() {
         if (isDestroyed.compareAndSet(false, true)) {
-            maskGlassPane.stopAnimationTimer()
             browser.dispose()
-        }
-    }
-
-    override fun setMaskEnabled(enabled: Boolean) {
-        maskGlassPane.setActive(enabled)
-    }
-}
-
-/**
- * AWT 遮罩 Glass Pane：盖在浏览器组件上面
- * - 激活时：半透明、吞噬所有鼠标事件、渲染动画
- * - 关闭时：完全透明、不吞噬事件
- * - 程序代码的 cefBrowser.sendMouseEvent() 直达CEF组件，绕过此层
- */
-class MaskGlassPane : javax.swing.JPanel() {
-    private var active = false
-    
-    // 动画事件列表
-    private val animations = java.util.concurrent.CopyOnWriteArrayList<AnimEvent>()
-    
-    // 动画刷新定时器 (约60fps)
-    private val timer = javax.swing.Timer(16, java.awt.event.ActionListener {
-        val now = System.currentTimeMillis()
-        // 移除已完成的动画
-        animations.removeAll { anim -> now - anim.startTime >= anim.duration }
-        repaint()
-    })
-    
-    data class AnimEvent(
-        val type: AnimType,
-        val x: Int,
-        val y: Int,
-        val startTime: Long,
-        val duration: Long
-    )
-    
-    enum class AnimType { CLICK, HOVER }
-    
-    init {
-        isOpaque = false
-        isFocusable = false
-        
-        // 吞噬所有鼠标事件
-        addMouseListener(object : java.awt.event.MouseAdapter() {
-            override fun mouseClicked(e: java.awt.event.MouseEvent) { if (active) consume(e) }
-            override fun mousePressed(e: java.awt.event.MouseEvent) { if (active) consume(e) }
-            override fun mouseReleased(e: java.awt.event.MouseEvent) { if (active) consume(e) }
-            override fun mouseEntered(e: java.awt.event.MouseEvent) { if (active) consume(e) }
-            override fun mouseExited(e: java.awt.event.MouseEvent) { if (active) consume(e) }
-        })
-        addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
-            override fun mouseMoved(e: java.awt.event.MouseEvent) { if (active) consume(e) }
-            override fun mouseDragged(e: java.awt.event.MouseEvent) { if (active) consume(e) }
-        })
-    }
-    
-    private fun consume(e: java.awt.event.MouseEvent) {
-        e.consume()
-    }
-    
-    fun setActive(enabled: Boolean) {
-        active = enabled
-        if (enabled) {
-            timer.start()
-        } else {
-            timer.stop()
-            animations.clear()
-        }
-        repaint()
-    }
-    
-    fun addClickAnimation(x: Int, y: Int) {
-        if (!active) return
-        animations.add(AnimEvent(AnimType.CLICK, x, y, System.currentTimeMillis(), 600))
-    }
-    
-    fun addHoverAnimation(x: Int, y: Int) {
-        if (!active) return
-        animations.add(AnimEvent(AnimType.HOVER, x, y, System.currentTimeMillis(), 800))
-    }
-    
-    fun stopAnimationTimer() {
-        timer.stop()
-    }
-    
-    override fun paintComponent(g: java.awt.Graphics) {
-        super.paintComponent(g)
-        if (!active) return
-        
-        val g2d = g as java.awt.Graphics2D
-        g2d.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
-        
-        // 半透明遮罩底色 (5% 黑色)
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.05f)
-        g2d.color = java.awt.Color.BLACK
-        g2d.fillRect(0, 0, width, height)
-        
-        // 边框 (橙色虚线，标识自动化模式)
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.5f)
-        g2d.color = java.awt.Color(255, 69, 0) // #FF4500
-        g2d.stroke = java.awt.BasicStroke(2f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 10f, floatArrayOf(10f), 0f)
-        g2d.drawRect(2, 2, width - 4, height - 4)
-        
-        // 右上角标签 "AUTO MODE"
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.7f)
-        g2d.color = java.awt.Color(255, 69, 0)
-        val font = g2d.font.deriveFont(java.awt.Font.BOLD, 13f)
-        g2d.font = font
-        val label = "AUTO MODE"
-        val fm = g2d.fontMetrics
-        val labelWidth = fm.stringWidth(label)
-        val labelHeight = fm.height
-        val labelX = width - labelWidth - 12
-        val labelY = 14 + labelHeight / 2
-        // 背景
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.6f)
-        g2d.color = java.awt.Color(30, 30, 30)
-        g2d.fillRoundRect(labelX - 6, 4, labelWidth + 12, labelHeight + 8, 6, 6)
-        // 文字
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.9f)
-        g2d.color = java.awt.Color(255, 69, 0)
-        g2d.drawString(label, labelX, labelY)
-        
-        // 绘制动画
-        val now = System.currentTimeMillis()
-        for (anim in animations) {
-            val progress = ((now - anim.startTime).toFloat() / anim.duration.toFloat()).coerceIn(0f, 1f)
-            val alpha = (1f - progress)
-            
-            when (anim.type) {
-                AnimType.CLICK -> drawClickRipple(g2d, anim.x, anim.y, progress, alpha)
-                AnimType.HOVER -> drawHoverPulse(g2d, anim.x, anim.y, progress, alpha)
+            try {
+                headlessFrame?.dispose()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
-    
-    private fun drawClickRipple(g2d: java.awt.Graphics2D, x: Int, y: Int, progress: Float, alpha: Float) {
-        // 中心点
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha * 0.95f)
-        g2d.color = java.awt.Color(255, 69, 0)
-        g2d.fillOval(x - 6, y - 6, 12, 12)
-        
-        // 内圈涟漪
-        val innerR = (14 + progress * 22).toInt()
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha * 0.5f)
-        g2d.color = java.awt.Color(255, 69, 0)
-        g2d.stroke = java.awt.BasicStroke(3f)
-        g2d.drawOval(x - innerR, y - innerR, innerR * 2, innerR * 2)
-        
-        // 外圈涟漪
-        val outerR = (18 + progress * 30).toInt()
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha * 0.35f)
-        g2d.color = java.awt.Color.WHITE
-        g2d.stroke = java.awt.BasicStroke(2f)
-        g2d.drawOval(x - outerR, y - outerR, outerR * 2, outerR * 2)
-    }
-    
-    private fun drawHoverPulse(g2d: java.awt.Graphics2D, x: Int, y: Int, progress: Float, alpha: Float) {
-        val r = (10 + progress * 10).toInt()
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha * 0.6f)
-        g2d.color = java.awt.Color(0, 191, 255)
-        g2d.fillOval(x - r, y - r, r * 2, r * 2)
-        
-        g2d.composite = java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha * 0.8f)
-        g2d.color = java.awt.Color.WHITE
-        g2d.fillOval(x - 3, y - 3, 6, 6)
-    }
-}
 
-@Composable
-actual fun WebView(
-    controller: WebViewController,
-    modifier: Modifier
-) {
-    val jvmController = controller as? JvmWebViewController ?: return
+    fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int) {
+        if (isDestroyed.get()) return
+        val jsCode = coordinateTransformJs(x, y)
+        evaluateJavascript(jsCode) { result ->
+            val parts = result.trim('"').split(',')
+            if (parts.size < 4) return@evaluateJavascript
+            val clientX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val clientY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val innerWidth = parts[2].toDoubleOrNull() ?: return@evaluateJavascript
+            val innerHeight = parts[3].toDoubleOrNull() ?: return@evaluateJavascript
 
-    SwingPanel(
-        factory = {
-            // 用 JLayeredPane 包装浏览器组件和遮罩 Glass Pane
-            val layeredPane = javax.swing.JLayeredPane()
-            val browserComp = jvmController.browser.getComponent()
-            val glassPane = jvmController.maskGlassPane
-            
-// 浏览器在底层
-            layeredPane.add(browserComp, javax.swing.JLayeredPane.DEFAULT_LAYER as Int)
-            // 遮罩在上层
-            layeredPane.add(glassPane, javax.swing.JLayeredPane.PALETTE_LAYER as Int)
-            
-            // 响应尺寸变化
-            layeredPane.addComponentListener(object : java.awt.event.ComponentAdapter() {
-                override fun componentResized(e: java.awt.event.ComponentEvent) {
-                    val w = layeredPane.width
-                    val h = layeredPane.height
-                    browserComp.setBounds(0, 0, w, h)
-                    glassPane.setBounds(0, 0, w, h)
+            val comp = cefBrowser.uiComponent ?: return@evaluateJavascript
+            val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
+
+            val wheelRotation = if (deltaY > 0) 1 else if (deltaY < 0) -1 else 0
+            if (wheelRotation != 0) {
+                val wheelEvent = java.awt.event.MouseWheelEvent(
+                    comp, java.awt.event.MouseWheelEvent.MOUSE_WHEEL, System.currentTimeMillis(),
+                    0, awtX, awtY, 0, false,
+                    java.awt.event.MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, wheelRotation
+                )
+                try {
+                    val method = cefBrowser.javaClass.getMethod("sendMouseWheelEvent", java.awt.event.MouseWheelEvent::class.java)
+                    method.invoke(cefBrowser, wheelEvent)
+                } catch (ex: Exception) {
+                    evaluateJavascript("window.scrollBy($deltaX, $deltaY)")
                 }
-            })
-            
-            layeredPane
-        },
-        modifier = modifier
-    )
-}
-
-@Composable
-actual fun rememberWebViewController(initialUrl: String, isOsr: Boolean): WebViewController {
-    val controller = androidx.compose.runtime.remember(initialUrl, isOsr) { JvmWebViewController(initialUrl, isOsr) }
-    androidx.compose.runtime.DisposableEffect(controller) {
-        onDispose {
-            controller.destroy()
+            }
         }
     }
-    return controller
+
+    fun dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int) {
+        if (isDestroyed.get()) return
+        val jsCode = """
+            (function() {
+                var vw = window.innerWidth;
+                var vh = window.innerHeight;
+                var scrollX = window.scrollX || window.pageXOffset;
+                var scrollY = window.scrollY || window.pageYOffset;
+                
+                var startCX = $startX - scrollX;
+                var startCY = $startY - scrollY;
+                var endCX = $endX - scrollX;
+                var endCY = $endY - scrollY;
+                
+                return startCX + ',' + startCY + ',' + endCX + ',' + endCY + ',' + vw + ',' + vh;
+            })()
+        """.trimIndent()
+        
+        evaluateJavascript(jsCode) { result ->
+            val parts = result.trim('"').split(',')
+            if (parts.size < 6) return@evaluateJavascript
+            val startCX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val startCY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val endCX = parts[2].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val endCY = parts[3].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val innerWidth = parts[4].toDoubleOrNull() ?: return@evaluateJavascript
+            val innerHeight = parts[5].toDoubleOrNull() ?: return@evaluateJavascript
+            
+            val comp = cefBrowser.uiComponent ?: return@evaluateJavascript
+            val (startAwtX, startAwtY) = convertToAwtCoordinates(startCX, startCY, innerWidth, innerHeight, comp)
+            val (endAwtX, endAwtY) = convertToAwtCoordinates(endCX, endCY, innerWidth, innerHeight, comp)
+            
+            val modifiers = java.awt.event.InputEvent.BUTTON1_DOWN_MASK
+            
+            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, startAwtX, startAwtY, 0, false, MouseEvent.NOBUTTON))
+            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), modifiers, startAwtX, startAwtY, 1, false, MouseEvent.BUTTON1))
+            
+            val steps = 5
+            for (i in 1..steps) {
+                val ratio = i.toDouble() / steps
+                val currX = (startAwtX + (endAwtX - startAwtX) * ratio).toInt()
+                val currY = (startAwtY + (endAwtY - startAwtY) * ratio).toInt()
+                cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_DRAGGED, System.currentTimeMillis(), modifiers, currX, currY, 0, false, MouseEvent.NOBUTTON))
+                try { Thread.sleep(20) } catch(e: Exception) {}
+            }
+            
+            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, endAwtX, endAwtY, 1, false, MouseEvent.BUTTON1))
+        }
+    }
+
+}
+
+object JcefWebViewFactory {
+    fun create(initialUrl: String?, isOsr: Boolean, profile: KBProfile?): KBWebView {
+        return JvmWebView(initialUrl, isOsr, profile)
+    }
+}
+
+object JcefWebViewRender {
+    @Composable
+    fun render(webView: KBWebView, modifier: Modifier) {
+        val jvmWebView = webView as? JvmWebView ?: return
+
+        SwingPanel(
+            factory = {
+                jvmWebView.browser.getComponent()
+            },
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+actual fun KBWebView(
+    webView: KBWebView,
+    modifier: Modifier
+) {
+    if (!JcefChecker.isJcefAvailable) {
+        androidx.compose.foundation.layout.Box(
+            modifier = modifier,
+            contentAlignment = androidx.compose.ui.Alignment.Center
+        ) {
+            androidx.compose.material3.Text(
+                text = "请将SDK切换为包含JCEF的JBR",
+                color = androidx.compose.ui.graphics.Color.Red,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                style = androidx.compose.ui.text.TextStyle(
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            )
+        }
+        return
+    }
+
+    JcefWebViewRender.render(webView, modifier)
+}
+
+@Composable
+actual fun rememberKBWebView(
+    initialUrl: String?,
+    profile: KBProfile?
+): KBWebView {
+    val webView = androidx.compose.runtime.remember(initialUrl, profile) {
+        if (JcefChecker.isJcefAvailable) {
+            JcefWebViewFactory.create(initialUrl, false, profile)
+        } else {
+            FallbackWebView(initialUrl ?: "about:blank")
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(webView) {
+        onDispose {
+            webView.destroy()
+        }
+    }
+    return webView
+}
+
+
+internal actual fun createHeadlessWebView(
+    initialUrl: String?,
+    profile: KBProfile?,
+    isOsr: Boolean
+): KBWebView {
+    if (JcefChecker.isJcefAvailable) {
+        return JvmWebView(initialUrl, isOsr = isOsr, profile = profile, isHeadless = false)
+    } else {
+        return FallbackWebView(initialUrl ?: "about:blank")
+    }
+}
+
+internal actual suspend fun performClickByCoordinates(
+    webView: KBWebView,
+    x: Int,
+    y: Int
+) {
+    if (webView is JvmWebView) {
+        webView.clickByCoordinates(x, y)
+    }
+}
+
+internal actual suspend fun performHoverByCoordinates(
+    webView: KBWebView,
+    x: Int,
+    y: Int
+) {
+    if (webView is JvmWebView) {
+        webView.hoverByCoordinates(x, y)
+    }
+}
+
+internal actual suspend fun performScrollByCoordinates(
+    webView: KBWebView,
+    x: Int,
+    y: Int,
+    deltaX: Int,
+    deltaY: Int
+) {
+    if (webView is JvmWebView) {
+        webView.scrollByCoordinates(x, y, deltaX, deltaY)
+    }
+}
+
+internal actual suspend fun performDragByCoordinates(
+    webView: KBWebView,
+    startX: Int,
+    startY: Int,
+    endX: Int,
+    endY: Int
+) {
+    if (webView is JvmWebView) {
+        webView.dragByCoordinates(startX, startY, endX, endY)
+    }
+}
+
+internal actual fun performGlobalShutdown() {
+    if (JcefChecker.isJcefAvailable) {
+        try {
+            xyz.kbrowser.jcef.KBCefApp.getInstance().dispose()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 }

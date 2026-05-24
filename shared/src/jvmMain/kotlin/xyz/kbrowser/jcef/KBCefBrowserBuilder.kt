@@ -11,6 +11,7 @@ class KBCefBrowserBuilder {
     var myCreateImmediately: Boolean = false
     var myWindowlessFrameRate: Int = 30
     var myMouseWheelEventEnable: Boolean = true
+    var myRequestContext: org.cef.browser.CefRequestContext? = null
 
     fun setUrl(url: String): KBCefBrowserBuilder {
         myUrl = url
