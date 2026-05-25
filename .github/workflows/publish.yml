@@ -7,37 +7,19 @@ on:
 
 jobs:
   publish:
-    runs-on: macos-latest # macOS runner required for compilation of iOS targets
+    runs-on: macos-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up JetBrains Runtime with JCEF (JDK 21)
-        run: |
-          ARCH=$(uname -m)
-          if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
-            JBR_ARCH="aarch64"
-          else
-            JBR_ARCH="x64"
-          fi
-          echo "Determined architecture: $JBR_ARCH"
-          
-          URL="https://cache-redirector.jetbrains.com/intellij-jbr/jbr_jcef-21_0_3-osx-${JBR_ARCH}-b509.11.tar.gz"
-          echo "Downloading JBR from $URL"
-          curl -L "$URL" -o jbr.tar.gz
-          
-          mkdir -p $HOME/jbr
-          tar -xzf jbr.tar.gz -C $HOME/jbr
-          
-          JBR_HOME=$(find $HOME/jbr -maxdepth 3 -name "Home" -type d | head -n 1)
-          if [ -z "$JBR_HOME" ]; then
-            echo "Error: Could not find JBR Home directory"
-            exit 1
-          fi
-          echo "JBR Home found at: $JBR_HOME"
-          
-          echo "JAVA_HOME=$JBR_HOME" >> $GITHUB_ENV
-          echo "$JBR_HOME/bin" >> $GITHUB_PATH
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'jetbrains'
+          java-version: '21'
+          java-package: 'jdk+jcef'
+        env:
+          GITHUB_TOKEN: ${{ secrets.COMMON }}
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
