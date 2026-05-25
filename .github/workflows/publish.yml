@@ -12,12 +12,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JetBrains Runtime with JCEF (JDK 21)
+      - name: Set up JetBrains Runtime with JCEF (JDK 25)
         uses: actions/setup-java@v5
         with:
           distribution: 'jetbrains'
-          java-version: '21'
-          java-package: 'jre+jcef'
+          java-version: '25'
+          java-package: 'jdk+jcef'
         env:
           GITHUB_TOKEN: ${{ secrets.COMMON }}
 
