@@ -59,8 +59,8 @@ iosApp/iosApp.xcodeproj/xcuserdata/
 *.tar.gz
 *.rar
 
-# 强制保留 gradle 目录下的所有文件（防止被上面的 *.jar 误伤）
-!gradle/
+# 强制保留 gradle 目录下的相关文件（防止被上面的 *.jar 误伤）
+!gradle/wrapper/gradle-wrapper.jar
 
 # virtual machine crash logs
 hs_err_pid*
