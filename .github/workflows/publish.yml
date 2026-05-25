@@ -18,7 +18,8 @@ jobs:
           distribution: 'jetbrains'
           java-version: '21'
           java-package: 'jre+jcef'
-          token: ${{ secrets.COMMON }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.COMMON }}
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
