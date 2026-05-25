@@ -9,12 +9,12 @@ plugins {
     id("com.vanniktech.maven.publish") version "0.36.0"
 }
 
-group = "xyz.lzdev42"
+group = "io.github.lzdev42"
 val releaseVersion: String = project.findProperty("RELEASE_VERSION") as? String ?: "0.1.0"
 version = releaseVersion
 
 mavenPublishing {
-    coordinates("xyz.lzdev42", "kbrowser", releaseVersion)
+    coordinates("io.github.lzdev42", "kbrowser", releaseVersion)
 
     publishToMavenCentral(automaticRelease = true)
     signAllPublications()
