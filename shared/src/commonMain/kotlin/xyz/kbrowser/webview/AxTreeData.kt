@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 data class AxNode(
     val refid: String = "",
     val tagName: String = "",
+    val role: String = "",
     val id: String = "",
     val className: String = "",
     val text: String = "",

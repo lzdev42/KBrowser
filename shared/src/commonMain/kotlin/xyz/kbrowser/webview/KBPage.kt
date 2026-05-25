@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.random.Random
 
 class KBPage internal constructor(val webView: KBWebView) {
@@ -12,6 +14,12 @@ class KBPage internal constructor(val webView: KBWebView) {
     
     val currentUrl: StateFlow<String?> get() = webView.currentUrl
     val title: StateFlow<String?> get() = webView.currentTitle
+
+    /**
+     * Cache of node coordinates, refreshed on [getRawAxTree].
+     */
+    private val nodeCacheLock = Mutex()
+    private var nodeCache: Map<String, AxNode> = emptyMap()
 
     suspend fun loadUrl(url: String) {
         withContext(Dispatchers.Main) {
@@ -25,7 +33,7 @@ class KBPage internal constructor(val webView: KBWebView) {
                     override fun onReceivedError(error: Diagnostics) {
                         webView.setWebViewClient(null)
                         if (continuation.isActive) {
-                            continuation.resumeWith(Result.failure(Exception("加载页面失败: ${error.description} (Code: ${error.errorCode})")))
+                            continuation.resumeWith(Result.failure(Exception("Failed to load page: ${error.description} (Code: ${error.errorCode})")))
                         }
                     }
                 }
@@ -67,55 +75,46 @@ class KBPage internal constructor(val webView: KBWebView) {
     suspend fun getRawAxTree(): AxTreeData {
         val json = evaluateJavascript(JsScripts.EXTRACT_SNAPSHOT)
         val jsonParser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-        return jsonParser.decodeFromString<AxTreeData>(json)
+        val treeData = jsonParser.decodeFromString<AxTreeData>(json)
+        // Update node coordinates cache
+        val newCache = treeData.nodes.associateBy { it.refid }
+        nodeCacheLock.withLock {
+            nodeCache = newCache
+        }
+        return treeData
     }
 
-    suspend fun clickByRefId(refid: String) {
-        val js = """
-            (function() {
-                var el = window.__kb_element_map ? window.__kb_element_map.get("$refid") : null;
-                if (!el) return 'NOT_FOUND';
-                el.click();
-                return 'OK';
-            })()
-        """.trimIndent()
-        val result = evaluateJavascript(js)
-        if (result.trim('"') == "NOT_FOUND") {
-            throw ElementNotFoundException(refid)
-        }
+    /**
+     * Clicks the element with the specified [refid] using coordinate-based interaction.
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun click(refid: String) {
+        val node = nodeCacheLock.withLock { nodeCache[refid] }
+            ?: throw ElementNotFoundException(refid)
+        clickByCoordinates(node.centerX, node.centerY)
     }
 
-    suspend fun hoverByRefId(refid: String) {
-        val js = """
-            (function() {
-                var el = window.__kb_element_map ? window.__kb_element_map.get("$refid") : null;
-                if (!el) return 'NOT_FOUND';
-                var ev1 = new MouseEvent('mouseover', { bubbles: true });
-                var ev2 = new MouseEvent('mouseenter', { bubbles: true });
-                el.dispatchEvent(ev1);
-                el.dispatchEvent(ev2);
-                return 'OK';
-            })()
-        """.trimIndent()
-        val result = evaluateJavascript(js)
-        if (result.trim('"') == "NOT_FOUND") {
-            throw ElementNotFoundException(refid)
-        }
+    /**
+     * Hovers over the element with the specified [refid] using coordinate-based interaction.
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun hover(refid: String) {
+        val node = nodeCacheLock.withLock { nodeCache[refid] }
+            ?: throw ElementNotFoundException(refid)
+        hoverByCoordinates(node.centerX, node.centerY)
     }
 
-    suspend fun scrollByRefId(refid: String, deltaX: Int, deltaY: Int) {
-        val js = """
-            (function() {
-                var el = window.__kb_element_map ? window.__kb_element_map.get("$refid") : null;
-                if (!el) return 'NOT_FOUND';
-                el.scrollBy($deltaX, $deltaY);
-                return 'OK';
-            })()
-        """.trimIndent()
-        val result = evaluateJavascript(js)
-        if (result.trim('"') == "NOT_FOUND") {
-            throw ElementNotFoundException(refid)
-        }
+    /**
+     * Scrolls the element with the specified [refid] using coordinate-based interaction.
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun scroll(refid: String, deltaX: Int, deltaY: Int) {
+        val node = nodeCacheLock.withLock { nodeCache[refid] }
+            ?: throw ElementNotFoundException(refid)
+        scrollByCoordinates(node.centerX, node.centerY, deltaX, deltaY)
     }
 
     suspend fun clickByCoordinates(x: Int, y: Int) {
@@ -132,6 +131,48 @@ class KBPage internal constructor(val webView: KBWebView) {
 
     suspend fun dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int) {
         performDragByCoordinates(webView, startX, startY, endX, endY)
+    }
+
+    // ===== KBLocator Factory Methods =====
+
+    /**
+     * Creates a [KBLocator] for the given selector.
+     * Supports "css=" and "xpath=" prefixes. Defaults to CSS.
+     */
+    fun locator(selector: String): KBLocator {
+        return if (selector.startsWith("xpath=")) {
+            KBLocator(this, selector.removePrefix("xpath="), KBSelectorType.XPATH)
+        } else {
+            KBLocator(this, selector.removePrefix("css="), KBSelectorType.CSS)
+        }
+    }
+
+    fun getByRole(role: String, name: String? = null): KBLocator {
+        return KBLocator(this, role, KBSelectorType.ROLE, name = name)
+    }
+
+    fun getByText(text: String, exact: Boolean = true): KBLocator {
+        return KBLocator(this, text, KBSelectorType.TEXT, exact = exact)
+    }
+
+    fun getByLabel(label: String): KBLocator {
+        return KBLocator(this, label, KBSelectorType.LABEL)
+    }
+
+    fun getByPlaceholder(text: String): KBLocator {
+        return KBLocator(this, text, KBSelectorType.PLACEHOLDER)
+    }
+
+    fun getByAltText(text: String): KBLocator {
+        return KBLocator(this, text, KBSelectorType.ALT_TEXT)
+    }
+
+    fun getByTitle(title: String): KBLocator {
+        return KBLocator(this, title, KBSelectorType.TITLE)
+    }
+
+    fun getByTestId(testId: String): KBLocator {
+        return KBLocator(this, testId, KBSelectorType.TEST_ID)
     }
 
     fun close() {

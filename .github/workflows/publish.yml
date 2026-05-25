@@ -1,0 +1,62 @@
+name: Publish to Maven Central
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  publish:
+    runs-on: macos-latest # macOS runner required for compilation of iOS targets
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JetBrains Runtime with JCEF (JDK 21)
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+            JBR_ARCH="aarch64"
+          else
+            JBR_ARCH="x64"
+          fi
+          echo "Determined architecture: $JBR_ARCH"
+          
+          URL="https://cache-redirector.jetbrains.com/intellij-jbr/jbr_jcef-21_0_3-osx-${JBR_ARCH}-b509.11.tar.gz"
+          echo "Downloading JBR from $URL"
+          curl -L "$URL" -o jbr.tar.gz
+          
+          mkdir -p $HOME/jbr
+          tar -xzf jbr.tar.gz -C $HOME/jbr
+          
+          JBR_HOME=$(find $HOME/jbr -maxdepth 3 -name "Home" -type d | head -n 1)
+          if [ -z "$JBR_HOME" ]; then
+            echo "Error: Could not find JBR Home directory"
+            exit 1
+          fi
+          echo "JBR Home found at: $JBR_HOME"
+          
+          echo "JAVA_HOME=$JBR_HOME" >> $GITHUB_ENV
+          echo "$JBR_HOME/bin" >> $GITHUB_PATH
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+
+      - name: Publish to Maven Central
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION_NAME=${GITHUB_REF#refs/tags/}
+            VERSION_NAME=${VERSION_NAME#v}
+            echo "Releasing version from tag: $VERSION_NAME"
+            ./gradlew publishToMavenCentral -PRELEASE_VERSION=$VERSION_NAME --no-configuration-cache
+          else
+            echo "Releasing default version..."
+            ./gradlew publishToMavenCentral --no-configuration-cache
+          fi
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_KEY_CONTENTS }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}

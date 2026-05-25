@@ -20,18 +20,20 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         @Suppress("DEPRECATION")
         fun getInstance(): KBCefApp {
             if (ourInstance == null) {
-                // 注意：JCEF 的系统属性必须在 AWT 初始化前设置完毕。
-                // 强制要求调用端在应用入口点调用 KBrowser.initialize()。
-
-                // IDEA Logic: Set forceDeviceScaleFactor if JRE HiDPI is disabled
-                if (System.getProperty("jcef.forceDeviceScaleFactor") == null) {
-                    val scale = JCefAppConfig.getForceDeviceScaleFactor()
-                    if (scale > 0) {
-                        System.setProperty("jcef.forceDeviceScaleFactor", scale.toString())
+                val config = try {
+                    if (System.getProperty("jcef.forceDeviceScaleFactor") == null) {
+                        val scale = JCefAppConfig.getForceDeviceScaleFactor()
+                        if (scale > 0) {
+                            System.setProperty("jcef.forceDeviceScaleFactor", scale.toString())
+                        }
                     }
+                    JCefAppConfig.getInstance()
+                } catch (t: Throwable) {
+                    throw IllegalStateException(
+                        "JetBrains Runtime (JBR) with JCEF module is required but not detected. " +
+                        "Please check your JDK configuration.", t
+                    )
                 }
-
-                val config = JCefAppConfig.getInstance()
                 ourInstance = KBCefApp(config)
             }
             return ourInstance!!
@@ -55,7 +57,7 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         settings.windowless_rendering_enabled = true
         settings.log_severity = CefSettings.LogSeverity.LOGSEVERITY_INFO
         
-        // 强制禁用 Chrome Runtime 模式，确保只渲染网页内容（Alloy 模式）
+        // Ensure Alloy rendering mode by disabling Chrome Runtime
         try {
             val chromeRuntimeField = settings.javaClass.getField("chrome_runtime")
             chromeRuntimeField.set(settings, false)
@@ -63,11 +65,10 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
             // 忽略找不到字段或设置失败的情况
         }
         
-        // 默认关闭 CDP 远程调试端口，防止被反自动化系统探测
-        // 开发者如需调试可通过 KBCefApp.getInstance().enableDebugging() 按需开启
+        // Disable remote debugging port by default
         settings.remote_debugging_port = 0
         
-        // Fix: Set explicit cache path to avoid "Opening in existing browser session" warning
+        // Set explicit cache path to avoid session warning
         val userHome = System.getProperty("user.home")
         settings.cache_path = "$userHome/.browserpilot/jcef_cache"
         
@@ -82,8 +83,7 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         if (!args.contains("--disable-component-update")) {
             args.add("--disable-component-update")
         }
-        // 关闭 navigator.webdriver 标记，防止反自动化系统检测
-        // 这是库级别的底线保证：所有通过 KBrowser 产生的行为不可被 webdriver 指纹识别
+        // Disable navigator.webdriver control flag
         if (!args.any { it.startsWith("--disable-features") && it.contains("AutomationControl") }) {
             args.add("--disable-features=AutomationControl")
         }
