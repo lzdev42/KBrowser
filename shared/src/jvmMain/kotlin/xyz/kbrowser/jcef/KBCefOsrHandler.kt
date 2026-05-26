@@ -108,7 +108,6 @@ open class KBCefOsrHandler(
         width: Int,
         height: Int
     ) {
-        println("[OSR-DBG] onPaint called: popup=$popup, ${width}x${height}")
         val rect = getViewRect(browser)
         val w = rect.width * pixelDensity
         val h = rect.height * pixelDensity
@@ -182,7 +181,6 @@ open class KBCefOsrHandler(
 
     fun paint(g: Graphics2D) {
         val frameSize = getCurrentFrameSize()
-        println("[OSR-DBG] paint called, frameSize=$frameSize")
         frameSize ?: return
         var vi = myVolatileImage
 

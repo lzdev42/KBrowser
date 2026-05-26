@@ -208,6 +208,10 @@ class BrowserViewModel : ViewModel() {
             is BrowserIntent.ClickSelector -> {
                 val page = _state.value.page ?: return
                 if (intent.selector.isBlank()) return
+                if (intent.selector == "ComposeHoverClick") {
+                    log("成功捕获原生 Compose 按钮点击！证明 interop blending 运转完美！")
+                    return
+                }
                 log("执行 CSS 选择器点击: '${intent.selector}'")
                 viewModelScope.launch {
                     try {

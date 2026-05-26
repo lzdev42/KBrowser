@@ -563,11 +563,13 @@ class JvmWebView(
     fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int) {
         resolveAwtCoordinates(x, y) { awtX, awtY, comp ->
             val wheelRotation = if (deltaY > 0) 1 else if (deltaY < 0) -1 else 0
-            if (wheelRotation != 0) {
+            val scrollAmount = kotlin.math.abs(deltaY)
+            
+            if (scrollAmount != 0) {
                 val wheelEvent = java.awt.event.MouseWheelEvent(
                     comp, java.awt.event.MouseWheelEvent.MOUSE_WHEEL, System.currentTimeMillis(),
                     0, awtX, awtY, 0, false,
-                    java.awt.event.MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, wheelRotation
+                    java.awt.event.MouseWheelEvent.WHEEL_UNIT_SCROLL, scrollAmount, wheelRotation
                 )
                 try {
                     val method = cefBrowser.javaClass.getMethod("sendMouseWheelEvent", java.awt.event.MouseWheelEvent::class.java)

@@ -44,7 +44,6 @@ class KBCefNativeOsrHandler(
         }
         mySharedMemCache = cache
         sharedMemCacheGetMethod = getMethod
-        println("[OSR-DBG] SharedMemoryCache init: cache=${cache != null}, method=${getMethod != null}")
     }
 
     override fun disposeNativeResources() {}
@@ -58,7 +57,6 @@ class KBCefNativeOsrHandler(
         width: Int,
         height: Int
     ) {
-        println("[OSR-DBG] onPaintWithSharedMem called: popup=$popup, ${width}x${height}, shmem=$sharedMemName")
         try {
             val cache = mySharedMemCache ?: return
             val getMethod = sharedMemCacheGetMethod ?: return
@@ -99,7 +97,6 @@ class KBCefNativeOsrHandler(
         val h = myFrameHeight
         if (w > 0 && h > 0) return Dimension(w, h)
         val fallback = super.getCurrentFrameSize()
-        println("[OSR-DBG] getCurrentFrameSize: native=${w}x${h}, fallback=$fallback")
         return fallback
     }
 

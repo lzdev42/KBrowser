@@ -306,6 +306,44 @@ fun BrowserExampleScreen(
                             webView = activePage.webView,
                             modifier = Modifier.fillMaxSize()
                         )
+                        
+                        // 实验：在浏览器视口上方直接重叠挂载一个 Compose 的交互式悬浮卡片
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(16.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xE61A1A1E))
+                                .border(1.dp, Color(0xFF3A3A42), RoundedCornerShape(12.dp))
+                                .padding(12.dp)
+                                .width(220.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "⚡️ Compose 混合渲染实验",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "此悬浮卡片为纯 Compose 视图，目前正完美覆盖在 OSR 浏览器画布上层。",
+                                    color = Color(0xFF9E9EA8),
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp
+                                )
+                                Button(
+                                    onClick = { 
+                                        viewModel.dispatch(BrowserIntent.ClickSelector("ComposeHoverClick"))
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    shape = RoundedCornerShape(6.dp),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    Text("点击此 Compose 按钮", fontSize = 11.sp, color = Color(0xFF121214), fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
                     } else {
                         Box(
                             modifier = Modifier.fillMaxSize(),
