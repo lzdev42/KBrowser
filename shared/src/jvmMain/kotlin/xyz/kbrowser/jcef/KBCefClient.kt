@@ -10,9 +10,13 @@ import org.cef.network.CefRequest
 import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentLinkedQueue
+import javax.swing.SwingUtilities
 
 class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     private val myIsDisposed = AtomicBoolean(false)
+    val jsQueryPool = JSQueryPool()
     
     private val myContextMenuHandler = HandlerSupport<CefContextMenuHandler>()
     private val myDialogHandler = HandlerSupport<CefDialogHandler>()
@@ -44,6 +48,55 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
             .setUrl(url)
             .setClient(this)
         return KBCefBrowser(builder)
+    }
+
+    inner class JSQueryPool {
+        private val freeSlots = ConcurrentLinkedQueue<KBCefJSQuery.JSQueryFunc>()
+        private val myCounter = AtomicInteger(0)
+        
+        init {
+            // Pre-populate 5 slots so their routers are registered early before any browser is created.
+            try {
+                val createAction = {
+                    for (i in 0 until 5) {
+                        freeSlots.add(KBCefJSQuery.JSQueryFunc(this@KBCefClient, myCounter.getAndIncrement()))
+                    }
+                }
+                if (SwingUtilities.isEventDispatchThread()) {
+                    createAction()
+                } else {
+                    SwingUtilities.invokeAndWait(createAction)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        
+        fun useFreeSlot(): KBCefJSQuery.JSQueryFunc {
+            var slot = freeSlots.poll()
+            if (slot != null) return slot
+            
+            synchronized(this) {
+                slot = freeSlots.poll()
+                if (slot == null) {
+                    var newSlot: KBCefJSQuery.JSQueryFunc? = null
+                    val createAction = {
+                        newSlot = KBCefJSQuery.JSQueryFunc(this@KBCefClient, myCounter.getAndIncrement())
+                    }
+                    if (SwingUtilities.isEventDispatchThread()) {
+                        createAction()
+                    } else {
+                        SwingUtilities.invokeAndWait(createAction)
+                    }
+                    slot = newSlot!!
+                }
+            }
+            return slot!!
+        }
+        
+        fun releaseUsedSlot(slot: KBCefJSQuery.JSQueryFunc) {
+            freeSlots.add(slot)
+        }
     }
 
     private inner class HandlerSupport<T> {
@@ -129,6 +182,12 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     fun addLoadHandler(handler: CefLoadHandler, browser: CefBrowser) {
         myLoadHandler.add(handler, browser) {
             cefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
+                override fun onLoadingStateChange(b: CefBrowser, isLoading: Boolean, goBack: Boolean, goForward: Boolean) {
+                    myLoadHandler.handleAll(b) { it.onLoadingStateChange(b, isLoading, goBack, goForward) }
+                }
+                override fun onLoadStart(b: CefBrowser, f: CefFrame, t: CefRequest.TransitionType) {
+                    myLoadHandler.handleAll(b) { it.onLoadStart(b, f, t) }
+                }
                 override fun onLoadEnd(b: CefBrowser, f: CefFrame, s: Int) {
                     myLoadHandler.handleAll(b) { it.onLoadEnd(b, f, s) }
                 }

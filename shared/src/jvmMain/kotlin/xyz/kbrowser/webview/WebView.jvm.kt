@@ -30,18 +30,36 @@ import kotlinx.coroutines.withContext
 
 private val profileContextMap = java.util.concurrent.ConcurrentHashMap<String, org.cef.browser.CefRequestContext>()
 
+/**
+ * OSR 模式状态跟踪。
+ * 默认尝试 OSR；若首次创建失败则永久降级到非 OSR，整个生命周期内不再重试。
+ * 对调用方透明，不暴露任何配置接口。
+ */
+object OsrMode {
+    @Volatile private var state: State = State.UNKNOWN
+
+    private enum class State { UNKNOWN, OSR_OK, FALLBACK }
+
+    /** 当前是否应该尝试 OSR */
+    fun shouldUseOsr(): Boolean = state != State.FALLBACK
+
+    /** 标记 OSR 已成功，后续直接走 OSR */
+    fun markOk() { if (state == State.UNKNOWN) state = State.OSR_OK }
+
+    /** 标记 OSR 失败，后续所有实例降级到非 OSR */
+    fun markFailed() {
+        println("[OsrMode] OSR 初始化失败，本次运行全程降级到非 OSR 模式")
+        state = State.FALLBACK
+    }
+}
+
 class JvmWebView(
-    initialUrl: String? = null,
-    isOsr: Boolean = false,
-    val profile: KBProfile? = null,
+    initialUrl: String?,
+    profile: KBProfile? = null,
     val isHeadless: Boolean = false
 ) : KBWebView {
     private val isDestroyed = AtomicBoolean(false)
     private var headlessFrame: javax.swing.JFrame? = null
-
-    private val funcName = "_q_" + UUID.randomUUID().toString().replace("-", "")
-    private val pendingCallbacks = java.util.concurrent.ConcurrentHashMap<String, (String) -> Unit>()
-    private val jsQueryRouter: CefMessageRouter
 
     val browser: KBCefBrowser
 
@@ -60,19 +78,24 @@ class JvmWebView(
     private var webChromeClient: KBWebChromeClient? = null
 
     init {
-        // 1. Create client first
         val client = KBCefApp.getInstance().createClient()
-
-        // 2. Register the message router before browser creation to prevent V8 context injection race conditions!
-        val config = CefMessageRouter.CefMessageRouterConfig()
-        config.jsQueryFunction = funcName
-        config.jsCancelFunction = funcName + "_cancel"
-        jsQueryRouter = CefMessageRouter.create(config)
-        client.cefClient.addMessageRouter(jsQueryRouter)
-        
-        // 3. Create the browser with this fully configured client
         val isMac = System.getProperty("os.name").lowercase().contains("mac")
-        
+
+        val applyResponsiveScaling = { b: CefBrowser ->
+            val comp = b.uiComponent
+            if (comp != null) {
+                val currentWidth = comp.width
+                val targetWidth = 1280.0
+                if (currentWidth > 0 && currentWidth < targetWidth) {
+                    val scale = currentWidth / targetWidth
+                    val zoomLevel = kotlin.math.ln(scale) / kotlin.math.ln(1.2)
+                    b.zoomLevel = zoomLevel
+                } else {
+                    b.zoomLevel = 0.0
+                }
+            }
+        }
+
         var requestContext: org.cef.browser.CefRequestContext? = null
         if (profile != null) {
             requestContext = profileContextMap.computeIfAbsent(profile.profileId) {
@@ -80,15 +103,30 @@ class JvmWebView(
             }
         }
 
-        val builder = KBCefBrowserBuilder()
-            .setUrl(initialUrl ?: "about:blank")
-            .setOffScreenRendering(isOsr)
-            .setClient(client)
-        builder.myRequestContext = requestContext
-        if (isMac) {
-            builder.myMouseWheelEventEnable = false
+        // OSR 为默认渲染模式，失败时自动降级到非 OSR（对调用方透明）
+        fun buildBrowser(useOsr: Boolean): KBCefBrowser {
+            val builder = KBCefBrowserBuilder()
+                .setUrl(initialUrl ?: "about:blank")
+                .setOffScreenRendering(useOsr)
+                .setClient(client)
+            builder.myRequestContext = requestContext
+            if (isMac) builder.myMouseWheelEventEnable = false
+            return KBCefBrowser(builder)
         }
-        browser = KBCefBrowser(builder)
+
+        browser = if (OsrMode.shouldUseOsr()) {
+            try {
+                val b = buildBrowser(useOsr = true)
+                OsrMode.markOk()
+                b
+            } catch (e: Exception) {
+                println("[JvmWebView] OSR 创建失败 (${e.message})，降级到非 OSR")
+                OsrMode.markFailed()
+                buildBrowser(useOsr = false)
+            }
+        } else {
+            buildBrowser(useOsr = false)
+        }
         
         if (isMac) {
             cefBrowser.uiComponent?.addMouseWheelListener { e ->
@@ -107,35 +145,6 @@ class JvmWebView(
             }
         }
         
-        jsQueryRouter.addHandler(object : CefMessageRouterHandlerAdapter() {
-            override fun onQuery(
-                b: CefBrowser,
-                f: CefFrame,
-                queryId: Long,
-                request: String,
-                persistent: Boolean,
-                callback: CefQueryCallback
-            ): Boolean {
-                val colonIndex = request.indexOf(':')
-                if (colonIndex != -1) {
-                    val qId = request.substring(0, colonIndex)
-                    val payload = request.substring(colonIndex + 1)
-                    println("[DEBUG-onQuery] 收到 JS 回调: qId=$qId, payload长度=${payload.length}, payload前100=${payload.take(100)}")
-                    val cb = pendingCallbacks.remove(qId)
-                    if (cb != null) {
-                        println("[DEBUG-onQuery] ✅ 找到匹配回调，准备执行")
-                        cb(payload)
-                        callback.success("OK")
-                        return true
-                    } else {
-                        println("[DEBUG-onQuery] ❌ 未找到匹配回调 qId=$qId, pendingCallbacks keys=${pendingCallbacks.keys}")
-                    }
-                }
-                callback.failure(1, "No handler found")
-                return true
-            }
-        }, false)
-
         // Register display handler to capture url and title changes
         browser.myCefClient.addDisplayHandler(object : CefDisplayHandlerAdapter() {
             override fun onAddressChange(b: CefBrowser, f: CefFrame, u: String) {
@@ -147,8 +156,8 @@ class JvmWebView(
             }
         }, cefBrowser)
 
-        // Register load handler directly with the underlying CefClient to bypass KBCefClient limits
-        browser.myCefClient.cefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
+        // Register load handler using our new multi-listener HandlerSupport to isolate callbacks
+        val myLoadHandlerInstance = object : CefLoadHandlerAdapter() {
             override fun onLoadingStateChange(
                 b: CefBrowser,
                 isLoading: Boolean,
@@ -188,6 +197,11 @@ class JvmWebView(
                         """.trimIndent()
                         b.executeJavaScript(script, b.url ?: "", 0)
                     }
+
+                    // 页面加载完成后重新适配屏幕大小以恢复 zoom 状态
+                    SwingUtilities.invokeLater {
+                        applyResponsiveScaling(b)
+                    }
                 }
             }
 
@@ -209,23 +223,13 @@ class JvmWebView(
                     webViewClient?.onReceivedError(diag)
                 }
             }
-        })
+        }
+        browser.myCefClient.addLoadHandler(myLoadHandlerInstance, cefBrowser)
 
         // 动态监听组件大小变化，让网页自动缩放到适合当前视口的尺寸 (Desktop Responsive Scaling)
         cefBrowser.uiComponent?.addComponentListener(object : java.awt.event.ComponentAdapter() {
             override fun componentResized(e: java.awt.event.ComponentEvent) {
-                val comp = e.component
-                val currentWidth = comp.width
-                // 假设绝大部分桌面端网页的目标设计宽度为 1280 像素
-                val targetWidth = 1280.0
-                if (currentWidth > 0 && currentWidth < targetWidth) {
-                    val scale = currentWidth / targetWidth
-                    // Chromium 的 zoomLevel 公式: scale = 1.2 ^ zoomLevel
-                    val zoomLevel = kotlin.math.ln(scale) / kotlin.math.ln(1.2)
-                    cefBrowser.zoomLevel = zoomLevel
-                } else {
-                    cefBrowser.zoomLevel = 0.0
-                }
+                applyResponsiveScaling(cefBrowser)
             }
         })
 
@@ -289,31 +293,14 @@ class JvmWebView(
         if (callback == null) {
             cefBrowser.executeJavaScript(script, "", 0)
         } else {
-            val queryId = "q_" + System.currentTimeMillis() + "_" + (1000..9999).random()
-            pendingCallbacks[queryId] = callback
-            
-            val base64Script = Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_8))
-            val jsCode = """
-                (function() {
-                    try {
-                        var scriptText = decodeURIComponent(escape(atob("$base64Script")));
-                        var result = window.eval(scriptText);
-                        var responseText = (typeof result === 'string' ? result : JSON.stringify(result));
-                        window.$funcName({
-                            request: "$queryId:" + responseText,
-                            onSuccess: function(r){},
-                            onFailure: function(e,m){}
-                        });
-                    } catch(err) {
-                        window.$funcName({
-                            request: "$queryId:ERROR:" + err.message,
-                            onSuccess: function(r){},
-                            onFailure: function(e,m){}
-                        });
-                    }
-                })();
-            """.trimIndent()
-            cefBrowser.executeJavaScript(jsCode, "", 0)
+            val jsQuery = KBCefJSQuery.create(browser)
+            jsQuery.addHandler { response ->
+                callback(response)
+                // 用完即丢，自动触发 dispose 归还槽位
+                jsQuery.dispose()
+                KBCefJSQuery.Response("OK")
+            }
+            cefBrowser.executeJavaScript(jsQuery.inject(script), "", 0)
         }
     }
 
@@ -329,10 +316,10 @@ class JvmWebView(
 
     override fun registerJsCallback(name: String, callback: (String) -> Unit) {
         if (isDestroyed.get()) return
-        val query = KBCefJSQuery(browser)
+        val query = KBCefJSQuery.create(browser)
         query.addHandler { request ->
             callback(request)
-            "OK"
+            KBCefJSQuery.Response("OK")
         }
         jsCallbacks[name] = query
         val script = """
@@ -344,7 +331,8 @@ class JvmWebView(
     }
 
     override fun unregisterJsCallback(name: String) {
-        jsCallbacks.remove(name)
+        val query = jsCallbacks.remove(name)
+        query?.dispose() // 回收到池
         cefBrowser.executeJavaScript("delete window.$name;", "", 0)
     }
 
@@ -644,8 +632,8 @@ class JvmWebView(
 }
 
 object JcefWebViewFactory {
-    fun create(initialUrl: String?, isOsr: Boolean, profile: KBProfile?): KBWebView {
-        return JvmWebView(initialUrl, isOsr, profile)
+    fun create(initialUrl: String?, profile: KBProfile?): KBWebView {
+        return JvmWebView(initialUrl, profile)
     }
 }
 
@@ -695,7 +683,7 @@ actual fun rememberKBWebView(
 ): KBWebView {
     val webView = androidx.compose.runtime.remember(initialUrl, profile) {
         if (JcefChecker.isJcefAvailable) {
-            JcefWebViewFactory.create(initialUrl, false, profile)
+            JcefWebViewFactory.create(initialUrl, profile)
         } else {
             FallbackWebView(initialUrl ?: "about:blank")
         }
@@ -711,11 +699,10 @@ actual fun rememberKBWebView(
 
 internal actual fun createHeadlessWebView(
     initialUrl: String?,
-    profile: KBProfile?,
-    isOsr: Boolean
+    profile: KBProfile?
 ): KBWebView {
     if (JcefChecker.isJcefAvailable) {
-        return JvmWebView(initialUrl, isOsr = isOsr, profile = profile, isHeadless = false)
+        return JvmWebView(initialUrl, profile = profile, isHeadless = true)
     } else {
         return FallbackWebView(initialUrl ?: "about:blank")
     }

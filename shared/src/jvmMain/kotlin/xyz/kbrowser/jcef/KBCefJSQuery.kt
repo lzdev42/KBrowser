@@ -1,50 +1,69 @@
 package xyz.kbrowser.jcef
 
-import java.util.UUID
-
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.browser.CefMessageRouter
 import org.cef.callback.CefQueryCallback
+import org.cef.handler.CefMessageRouterHandler
 import org.cef.handler.CefMessageRouterHandlerAdapter
+import java.util.Collections
+import java.util.HashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Ported from IntelliJ IDEA's KBCefJSQuery.
- */
-class KBCefJSQuery(val jbCefBrowser: KBCefBrowser) {
-    private val funcName = "_q_" + UUID.randomUUID().toString().replace("-", "")
-    private val myCefMessageRouter: CefMessageRouter
+class KBCefJSQuery private constructor(
+    private val myBrowser: KBCefBrowserBase,
+    private val myFunc: JSQueryFunc
+) : KBCefDisposable {
+    private val myDisposeHelper = AtomicBoolean(false)
+    private val myHandlerMap = Collections.synchronizedMap(HashMap<((String) -> Response), CefMessageRouterHandler>())
 
-    init {
-        val config = CefMessageRouter.CefMessageRouterConfig()
-        config.jsQueryFunction = funcName
-        config.jsCancelFunction = funcName + "_cancel"
-        myCefMessageRouter = CefMessageRouter.create(config)
-        jbCefBrowser.myCefClient.cefClient.addMessageRouter(myCefMessageRouter)
+    class JSQueryFunc(client: KBCefClient, index: Int) {
+        val myFuncName = "cefQuery_${client.hashCode()}_slot_$index"
+        val myRouter: CefMessageRouter
+        init {
+            val config = CefMessageRouter.CefMessageRouterConfig()
+            config.jsQueryFunction = myFuncName
+            config.jsCancelFunction = "cefQuery_cancel_${client.hashCode()}_slot_$index"
+            myRouter = CefMessageRouter.create(config)
+            client.cefClient.addMessageRouter(myRouter)
+        }
     }
 
-    fun addHandler(handler: (String) -> String?) {
-        myCefMessageRouter.addHandler(object : CefMessageRouterHandlerAdapter() {
-            override fun onQuery(
-                browser: CefBrowser,
-                frame: CefFrame,
-                query_id: Long,
-                request: String,
-                persistent: Boolean,
-                callback: CefQueryCallback
-            ): Boolean {
+    class Response(val result: String, val errCode: Int = 0, val errMsg: String? = null) {
+        fun isSuccess() = errCode == 0
+    }
+
+    fun inject(script: String): String = """
+        window.${myFunc.myFuncName}({ request: '' + ($script), onSuccess: function(r){}, onFailure: function(c,m){} });
+    """.trimIndent()
+
+    fun addHandler(handler: (String) -> Response) {
+        val cefHandler = object : CefMessageRouterHandlerAdapter() {
+            override fun onQuery(b: CefBrowser, f: CefFrame, queryId: Long, request: String, persistent: Boolean, callback: CefQueryCallback): Boolean {
                 val response = handler(request)
-                if (response != null) {
-                    callback.success(response)
-                } else {
-                    callback.failure(1, "Handler returned null")
-                }
+                if (response.isSuccess()) callback.success(response.result) else callback.failure(response.errCode, response.errMsg)
                 return true
             }
-        }, false)
+        }
+        myFunc.myRouter.addHandler(cefHandler, false)
+        myHandlerMap[handler] = cefHandler
     }
 
-    fun inject(request: String): String {
-        return "window.$funcName({request: $request, onSuccess: function(r){}, onFailure: function(e,m){}});"
+    override fun dispose() {
+        if (myDisposeHelper.compareAndSet(false, true)) {
+            val pool = myBrowser.myCefClient.jsQueryPool
+            myHandlerMap.values.forEach { myFunc.myRouter.removeHandler(it) }
+            myHandlerMap.clear()
+            pool.releaseUsedSlot(myFunc)
+        }
+    }
+
+    override fun isDisposed(): Boolean = myDisposeHelper.get()
+
+    companion object {
+        fun create(browser: KBCefBrowserBase): KBCefJSQuery {
+            val pool = browser.myCefClient.jsQueryPool
+            return KBCefJSQuery(browser, pool.useFreeSlot())
+        }
     }
 }

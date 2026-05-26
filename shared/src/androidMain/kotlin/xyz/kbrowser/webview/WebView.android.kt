@@ -201,8 +201,7 @@ actual fun rememberKBWebView(
 
 internal actual fun createHeadlessWebView(
     initialUrl: String?,
-    profile: KBProfile?,
-    isOsr: Boolean
+    profile: KBProfile?
 ): KBWebView {
     return AndroidWebView(initialUrl, profile)
 }

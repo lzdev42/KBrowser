@@ -333,24 +333,7 @@ fun BrowserExampleScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                // 开关区
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = state.isOsrMode,
-                        onCheckedChange = { viewModel.dispatch(BrowserIntent.ToggleOsr(it)) },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary,
-                            uncheckedColor = Color(0xFF888894)
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("OSR", color = Color.White, fontSize = 12.sp)
-                }
+                // OSR Checkbox has been removed; rendering is decided by engine natively
 
                 // 终端日志
                 Column(
@@ -418,19 +401,179 @@ fun BrowserExampleScreen(
                                 }
                                 HorizontalDivider(color = Color(0xFF23232A))
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text("CSS 选择器点击", color = Color(0xFF888894), fontSize = 12.sp)
-                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("KBLocator 自动化定位测试", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    
+                                    // 1. 选择器类型单选 Row
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        listOf("CSS", "XPath", "Text", "Role", "Placeholder", "TestId").forEach { type ->
+                                            val isSelected = state.locatorSelectorType == type
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (isSelected) MaterialTheme.colorScheme.primary else Color(0xFF2E2E36))
+                                                    .clickable { viewModel.dispatch(BrowserIntent.ChangeLocatorSelectorType(type)) }
+                                                    .padding(vertical = 4.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = type,
+                                                    color = if (isSelected) Color(0xFF121214) else Color.White,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // 2. 选择器表达式输入
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         OutlinedTextField(
-                                            value = state.customSelector,
-                                            onValueChange = { viewModel.dispatch(BrowserIntent.ChangeCustomSelector(it)) },
-                                            placeholder = { Text(".btn-login", fontSize = 12.sp) },
+                                            value = state.locatorSelector,
+                                            onValueChange = { viewModel.dispatch(BrowserIntent.ChangeLocatorSelector(it)) },
+                                            placeholder = { Text(
+                                                text = when (state.locatorSelectorType) {
+                                                    "Role" -> "例如: button, link"
+                                                    "XPath" -> "//button[@id='submit']"
+                                                    "Text" -> "查找匹配文本"
+                                                    "Placeholder" -> "输入框的placeholder"
+                                                    "TestId" -> "data-testid 属性值"
+                                                    else -> "CSS: .btn-login, input[type=text]"
+                                                },
+                                                fontSize = 11.sp
+                                            ) },
                                             modifier = Modifier.weight(1f),
                                             singleLine = true,
-                                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color(0xFF2E2E36)),
-                                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                                unfocusedBorderColor = Color(0xFF2E2E36)
+                                            ),
+                                            textStyle = LocalTextStyle.current.copy(fontSize = 11.sp)
                                         )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Button(onClick = { viewModel.dispatch(BrowserIntent.ClickSelector(state.customSelector)) }, shape = RoundedCornerShape(8.dp)) { Text("点击", fontSize = 13.sp) }
+                                        
+                                        if (state.locatorSelectorType == "Role") {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            OutlinedTextField(
+                                                value = state.locatorRoleName,
+                                                onValueChange = { viewModel.dispatch(BrowserIntent.ChangeLocatorRoleName(it)) },
+                                                placeholder = { Text("Name (可选)", fontSize = 11.sp) },
+                                                modifier = Modifier.weight(0.7f),
+                                                singleLine = true,
+                                                colors = OutlinedTextFieldDefaults.colors(
+                                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                                    unfocusedBorderColor = Color(0xFF2E2E36)
+                                                ),
+                                                textStyle = LocalTextStyle.current.copy(fontSize = 11.sp)
+                                            )
+                                        }
+                                    }
+
+                                    // 3. 填充值输入框（针对 Fill, Type 等操作）
+                                    OutlinedTextField(
+                                        value = state.locatorValue,
+                                        onValueChange = { viewModel.dispatch(BrowserIntent.ChangeLocatorValue(it)) },
+                                        placeholder = { Text("输入测试值 (用于 Fill / Type / Select)", fontSize = 11.sp) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                            unfocusedBorderColor = Color(0xFF2E2E36)
+                                        ),
+                                        textStyle = LocalTextStyle.current.copy(fontSize = 11.sp)
+                                    )
+
+                                    // 4. 按钮交互矩阵
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorClick) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5))
+                                            ) {
+                                                Text("点击 (Click)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorHover) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00ACC1))
+                                            ) {
+                                                Text("悬停 (Hover)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorFocus) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF43A047))
+                                            ) {
+                                                Text("聚焦 (Focus)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorCheck) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE91E63))
+                                            ) {
+                                                Text("勾选 (Check)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                        }
+                                        
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorFill) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5))
+                                            ) {
+                                                Text("填充 (Fill)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorType) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
+                                            ) {
+                                                Text("打字 (Type)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorGetText) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9C27B0))
+                                            ) {
+                                                Text("文本 (getText)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.dispatch(BrowserIntent.LocatorIsVisible) },
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(4.dp),
+                                                contentPadding = PaddingValues(vertical = 4.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF607D8B))
+                                            ) {
+                                                Text("可见 (isVisible)", fontSize = 10.sp, color = Color.White)
+                                            }
+                                        }
                                     }
                                 }
                                 HorizontalDivider(color = Color(0xFF23232A))

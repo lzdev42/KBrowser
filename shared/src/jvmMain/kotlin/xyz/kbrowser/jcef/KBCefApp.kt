@@ -50,6 +50,19 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         ourInitialized.set(true)
         SystemBootstrap.setLoader(config.loader)
 
+        try {
+            val isRemote = try {
+                val method = config.javaClass.getMethod("isRemoteEnabled")
+                method.invoke(config) as Boolean
+            } catch (e: Exception) {
+                System.getProperty("jcef.remote.enabled") == "true"
+            }
+            CefApp.setIsRemoteEnabled(isRemote)
+            println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: $isRemote")
+        } catch (e: Throwable) {
+            println("[KBCefApp] Failed to set remote mode: ${e.message}")
+        }
+
         val macCefFrameworkPathOSX = config.cefFrameworkPathOSX
         val settings = config.cefSettings
         
@@ -90,15 +103,19 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         
         args.add("--disable-chrome-runtime")
 
+        println("[KBCefApp] Adding app handler...")
+        System.out.flush()
         CefApp.addAppHandler(object : CefAppHandlerAdapter(args.toTypedArray()) {
             override fun onContextInitialized() {
                 println("[KBCefApp] Context Initialized")
+                System.out.flush()
             }
             
             override fun onBeforeChildProcessLaunch(commandLine: String?) {
                 // IDEA tracks GPU crashes here
                 if (commandLine?.contains("--type=gpu-process") == true) {
                     println("[KBCefApp] Launching GPU process...")
+                    System.out.flush()
                 }
             }
         })
@@ -106,14 +123,26 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         // Platform specific startup is required on macOS to load the framework path
         if (OS.isMacintosh() && macCefFrameworkPathOSX != null) {
             println("[KBCefApp] MacOS: Calling startupAsync with $macCefFrameworkPathOSX")
+            System.out.flush()
             CefApp.startupAsync(macCefFrameworkPathOSX)
+            println("[KBCefApp] MacOS: startupAsync returned")
+            System.out.flush()
         } else {
+            println("[KBCefApp] Other OS: Calling startup...")
+            System.out.flush()
             CefApp.startup(args.toTypedArray())
+            println("[KBCefApp] Other OS: startup returned")
+            System.out.flush()
         }
 
         myCefSettings = settings
+        println("[KBCefApp] Calling CefApp.getInstance...")
+        System.out.flush()
+        
         // Fix: Pass args to getInstance
         myCefApp = CefApp.getInstance(args.toTypedArray(), settings, config.serverExe)
+        println("[KBCefApp] CefApp.getInstance returned successfully!")
+        System.out.flush()
     }
 
     fun createClient(): KBCefClient {

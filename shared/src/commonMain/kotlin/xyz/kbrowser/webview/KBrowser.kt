@@ -20,9 +20,9 @@ object KBrowser {
         this.config = config
     }
 
-    suspend fun newPage(url: String? = null, profile: KBProfile? = null, isOsr: Boolean = false): KBPage {
-        val webView = withContext(Dispatchers.Default) {
-            createHeadlessWebView(null, profile, isOsr)
+    suspend fun newPage(url: String? = null, profile: KBProfile? = null): KBPage {
+        val webView = withContext(Dispatchers.Main) {
+            createHeadlessWebView(null, profile)
         }
         val page = KBPage(webView)
         _pages.update { it + page }

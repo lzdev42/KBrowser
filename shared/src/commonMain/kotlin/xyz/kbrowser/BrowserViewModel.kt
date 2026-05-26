@@ -19,14 +19,17 @@ data class BrowserViewState(
     val snapshotText: String = "",
     val selectorsText: String = "",
     val htmlPreview: String = "",
-    val isOsrMode: Boolean = false,
-    val navigateUrlInput: String = "https://www.zhipin.com/",
+    val navigateUrlInput: String = "https://www.bing.com/",
     val customSelector: String = "",
     val selectedTab: Int = 0,
     val coordX: String = "250",
     val coordY: String = "450",
     val isLoading: Boolean = false,
-    val keyboardInputText: String = "Hello KBrowser"
+    val keyboardInputText: String = "Hello KBrowser",
+    val locatorSelector: String = "",
+    val locatorSelectorType: String = "CSS",
+    val locatorRoleName: String = "",
+    val locatorValue: String = ""
 )
 
 sealed interface BrowserIntent {
@@ -35,7 +38,6 @@ sealed interface BrowserIntent {
     data class ChangeCoordX(val x: String) : BrowserIntent
     data class ChangeCoordY(val y: String) : BrowserIntent
     data class ChangeTab(val tab: Int) : BrowserIntent
-    data class ToggleOsr(val enabled: Boolean) : BrowserIntent
     object Navigate : BrowserIntent
     object ClearLogs : BrowserIntent
     object FetchHtml : BrowserIntent
@@ -52,6 +54,20 @@ sealed interface BrowserIntent {
     object SimulateCtrlA : BrowserIntent
     object SimulateCmdA : BrowserIntent
     object SimulateBackspace : BrowserIntent
+
+    // KBLocator 测试意图
+    data class ChangeLocatorSelector(val selector: String) : BrowserIntent
+    data class ChangeLocatorSelectorType(val type: String) : BrowserIntent
+    data class ChangeLocatorRoleName(val name: String) : BrowserIntent
+    data class ChangeLocatorValue(val value: String) : BrowserIntent
+    object LocatorClick : BrowserIntent
+    object LocatorHover : BrowserIntent
+    object LocatorFocus : BrowserIntent
+    object LocatorCheck : BrowserIntent
+    object LocatorFill : BrowserIntent
+    object LocatorType : BrowserIntent
+    object LocatorGetText : BrowserIntent
+    object LocatorIsVisible : BrowserIntent
 }
 
 class BrowserViewModel : ViewModel() {
@@ -95,28 +111,6 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.ChangeTab -> {
                 _state.update { it.copy(selectedTab = intent.tab) }
-            }
-            is BrowserIntent.ToggleOsr -> {
-                val url = _state.value.navigateUrlInput
-                val oldPage = _state.value.page
-                
-                _state.update { it.copy(isOsrMode = intent.enabled) }
-                
-                viewModelScope.launch {
-                    log("正在切换 OSR 离屏渲染模式为: ${intent.enabled}，重建浏览器...")
-                    // TODO: 如果有资源清理逻辑，可以在这里清理 oldPage
-                    try {
-                        val newPage = KBrowser.newPage(
-                            url = url,
-                            profile = KBProfile("default_session"),
-                            isOsr = intent.enabled
-                        )
-                        _state.update { it.copy(page = newPage) }
-                        log("模式切换完成！")
-                    } catch (e: Exception) {
-                        log("模式切换失败: ${e.message}")
-                    }
-                }
             }
             is BrowserIntent.Navigate -> {
                 val url = _state.value.navigateUrlInput
@@ -362,6 +356,199 @@ class BrowserViewModel : ViewModel() {
                     }
                 }
             }
+            is BrowserIntent.ChangeLocatorSelector -> {
+                _state.update { it.copy(locatorSelector = intent.selector) }
+            }
+            is BrowserIntent.ChangeLocatorSelectorType -> {
+                _state.update { it.copy(locatorSelectorType = intent.type) }
+            }
+            is BrowserIntent.ChangeLocatorRoleName -> {
+                _state.update { it.copy(locatorRoleName = intent.name) }
+            }
+            is BrowserIntent.ChangeLocatorValue -> {
+                _state.update { it.copy(locatorValue = intent.value) }
+            }
+            is BrowserIntent.LocatorClick -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').click()")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        locator.click()
+                        log("Locator 点击成功")
+                    } catch (e: Exception) {
+                        log("Locator 点击失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.LocatorHover -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').hover()")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        locator.hover()
+                        log("Locator 悬停成功")
+                    } catch (e: Exception) {
+                        log("Locator 悬停失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.LocatorFocus -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').focus()")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        locator.focus()
+                        log("Locator 聚焦成功")
+                    } catch (e: Exception) {
+                        log("Locator 聚焦失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.LocatorCheck -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').check()")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        locator.check()
+                        log("Locator 勾选成功")
+                    } catch (e: Exception) {
+                        log("Locator 勾选失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.LocatorFill -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                val value = _state.value.locatorValue
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').fill(\"$value\")")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        locator.fill(value)
+                        log("Locator 填充完毕")
+                    } catch (e: Exception) {
+                        log("Locator 填充失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.LocatorType -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                val value = _state.value.locatorValue
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').type(\"$value\")")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        locator.type(value)
+                        log("Locator 物理打字完毕")
+                    } catch (e: Exception) {
+                        log("Locator 物理打字失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.LocatorGetText -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').getText()")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        val text = locator.getText()
+                        log("Locator 获取文本成功: \"$text\"")
+                    } catch (e: Exception) {
+                        log("Locator 获取文本失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.LocatorIsVisible -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) {
+                    log("错误: 选择器不能为空")
+                    return
+                }
+                log("执行 Locator($typeStr='$selector').isVisible()")
+                viewModelScope.launch {
+                    try {
+                        val locator = createLocator(page, selector, typeStr, roleName)
+                        val visible = locator.isVisible()
+                        log("Locator 可见性验证结果: $visible")
+                    } catch (e: Exception) {
+                        log("Locator 可见性验证失败: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun createLocator(page: KBPage, selector: String, typeStr: String, roleName: String): xyz.kbrowser.webview.KBLocator {
+        val type = when (typeStr) {
+            "XPath" -> xyz.kbrowser.webview.KBSelectorType.XPATH
+            "Text" -> xyz.kbrowser.webview.KBSelectorType.TEXT
+            "Role" -> xyz.kbrowser.webview.KBSelectorType.ROLE
+            "Placeholder" -> xyz.kbrowser.webview.KBSelectorType.PLACEHOLDER
+            "Title" -> xyz.kbrowser.webview.KBSelectorType.TITLE
+            "TestId" -> xyz.kbrowser.webview.KBSelectorType.TEST_ID
+            "Label" -> xyz.kbrowser.webview.KBSelectorType.LABEL
+            "AltText" -> xyz.kbrowser.webview.KBSelectorType.ALT_TEXT
+            else -> xyz.kbrowser.webview.KBSelectorType.CSS
+        }
+        return if (type == xyz.kbrowser.webview.KBSelectorType.ROLE) {
+            page.getByRole(selector, roleName.takeIf { it.isNotEmpty() })
+        } else {
+            xyz.kbrowser.webview.KBLocator(page, selector, type)
         }
     }
 
