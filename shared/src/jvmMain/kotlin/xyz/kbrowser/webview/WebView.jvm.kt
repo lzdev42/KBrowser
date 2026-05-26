@@ -19,6 +19,7 @@ import org.cef.network.CefRequest
 import xyz.kbrowser.jcef.*
 import java.awt.Component
 import java.awt.event.InputEvent
+import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
 import java.util.Base64
 import java.util.UUID
@@ -404,42 +405,32 @@ class JvmWebView(
         return Pair(awtX, awtY)
     }
 
+    private inline fun resolveAwtCoordinates(
+        x: Int,
+        y: Int,
+        crossinline onResolved: (awtX: Int, awtY: Int, comp: java.awt.Component) -> Unit
+    ) {
+        if (isDestroyed.get()) return
+        val jsCode = coordinateTransformJs(x, y)
+        evaluateJavascript(jsCode) { result ->
+            val parts = result.trim('"').split(',')
+            if (parts.size < 4) return@evaluateJavascript
+            val clientX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val clientY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
+            val innerWidth = parts[2].toDoubleOrNull() ?: return@evaluateJavascript
+            val innerHeight = parts[3].toDoubleOrNull() ?: return@evaluateJavascript
+
+            val comp = cefBrowser.uiComponent ?: return@evaluateJavascript
+            val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
+            onResolved(awtX, awtY, comp)
+        }
+    }
+
     // clickBySelector removed
 
     fun clickByCoordinates(x: Int, y: Int) {
         println("[DEBUG-clickByCoordinates] 入口: 文档坐标=($x, $y), isDestroyed=${isDestroyed.get()}")
-        if (isDestroyed.get()) {
-            println("[DEBUG-clickByCoordinates] ❌ 已销毁，直接返回！")
-            return
-        }
-
-        val jsCode = coordinateTransformJs(x, y)
-
-        println("[DEBUG-clickByCoordinates] 开始执行 JS 坐标转换...")
-        evaluateJavascript(jsCode) { result ->
-            println("[DEBUG-clickByCoordinates] JS 回调结果: result='$result'")
-            val parts = result.trim('"').split(',')
-            println("[DEBUG-clickByCoordinates] 解析 parts: size=${parts.size}, parts=$parts")
-            if (parts.size < 4) {
-                println("[DEBUG-clickByCoordinates] ❌ 返回格式不正确（需要4个值：clientX,clientY,innerWidth,innerHeight）")
-                return@evaluateJavascript
-            }
-            val clientX = parts[0].toDoubleOrNull()?.toInt()
-            val clientY = parts[1].toDoubleOrNull()?.toInt()
-            val innerWidth = parts[2].toDoubleOrNull()
-            val innerHeight = parts[3].toDoubleOrNull()
-            if (clientX == null || clientY == null || innerWidth == null || innerHeight == null) {
-                println("[DEBUG-clickByCoordinates] ❌ 坐标解析为 null！clientX=$clientX, clientY=$clientY, innerWidth=$innerWidth, innerHeight=$innerHeight")
-                return@evaluateJavascript
-            }
-
-            val comp = cefBrowser.uiComponent
-            if (comp == null) {
-                println("[DEBUG-clickByCoordinates] ❌ uiComponent 为 null，无法发送鼠标事件！")
-                return@evaluateJavascript
-            }
-            val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
-
+        resolveAwtCoordinates(x, y) { awtX, awtY, comp ->
             val modifiers = InputEvent.BUTTON1_DOWN_MASK
             println("[DEBUG-clickByCoordinates] ✅ 正在发送 AWT 鼠标事件: MOVED→PRESSED→RELEASED→CLICKED at ($awtX, $awtY)")
             cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, MouseEvent.NOBUTTON))
@@ -451,23 +442,123 @@ class JvmWebView(
     }
 
     fun hoverByCoordinates(x: Int, y: Int) {
-        if (isDestroyed.get()) return
-
-        val jsCode = coordinateTransformJs(x, y)
-
-        evaluateJavascript(jsCode) { result ->
-            val parts = result.trim('"').split(',')
-            if (parts.size < 4) return@evaluateJavascript
-            val clientX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val clientY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val innerWidth = parts[2].toDoubleOrNull() ?: return@evaluateJavascript
-            val innerHeight = parts[3].toDoubleOrNull() ?: return@evaluateJavascript
-
-            val comp = cefBrowser.uiComponent ?: return@evaluateJavascript
-            val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
-
+        resolveAwtCoordinates(x, y) { awtX, awtY, comp ->
             cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, MouseEvent.NOBUTTON))
         }
+    }
+
+    // ===== Native Key Event Methods (JCEF DevTools CDP) =====
+
+    /**
+     * Maps [KeyboardKey] to Windows Virtual Key Code (used by CDP Input.dispatchKeyEvent).
+     */
+    private fun keyToWindowsKeyCode(key: KeyboardKey): Int = when (key) {
+        KeyboardKey.ENTER -> 13
+        KeyboardKey.TAB -> 9
+        KeyboardKey.ESCAPE -> 27
+        KeyboardKey.BACKSPACE -> 8
+        KeyboardKey.DELETE -> 46
+        KeyboardKey.ARROW_UP -> 38
+        KeyboardKey.ARROW_DOWN -> 40
+        KeyboardKey.ARROW_LEFT -> 37
+        KeyboardKey.ARROW_RIGHT -> 39
+        KeyboardKey.SHIFT -> 16
+        KeyboardKey.CONTROL -> 17
+        KeyboardKey.ALT -> 18
+        KeyboardKey.META -> 91 // Left Windows / Command key
+        KeyboardKey.SPACE -> 32
+        KeyboardKey.HOME -> 36
+        KeyboardKey.END -> 35
+        KeyboardKey.PAGE_UP -> 33
+        KeyboardKey.PAGE_DOWN -> 34
+        KeyboardKey.INSERT -> 45
+        KeyboardKey.F1 -> 112
+        KeyboardKey.F2 -> 113
+        KeyboardKey.F3 -> 114
+        KeyboardKey.F4 -> 115
+        KeyboardKey.F5 -> 116
+        KeyboardKey.F6 -> 117
+        KeyboardKey.F7 -> 118
+        KeyboardKey.F8 -> 119
+        KeyboardKey.F9 -> 120
+        KeyboardKey.F10 -> 121
+        KeyboardKey.F11 -> 122
+        KeyboardKey.F12 -> 123
+        KeyboardKey.A -> 65
+        KeyboardKey.C -> 67
+        KeyboardKey.V -> 86
+        KeyboardKey.X -> 88
+        KeyboardKey.S -> 83
+        KeyboardKey.Z -> 90
+    }
+
+    /**
+     * Maps [KeyboardKey] modifier to CDP modifier mask (Alt=1, Ctrl=2, Meta=4, Shift=8).
+     */
+    private fun keyToCdpModifierMask(key: KeyboardKey): Int = when (key) {
+        KeyboardKey.ALT -> 1
+        KeyboardKey.CONTROL -> 2
+        KeyboardKey.META -> 4
+        KeyboardKey.SHIFT -> 8
+        else -> 0
+    }
+
+    /**
+     * Presses a single key using CDP Input.dispatchKeyEvent.
+     */
+    fun pressKey(key: KeyboardKey) {
+        if (isDestroyed.get()) return
+        val keyCode = keyToWindowsKeyCode(key)
+        val devTools = cefBrowser.devToolsClient ?: return
+
+        // keydown
+        devTools.executeDevToolsMethod(
+            "Input.dispatchKeyEvent",
+            "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode}"
+        )
+        // keyup
+        devTools.executeDevToolsMethod(
+            "Input.dispatchKeyEvent",
+            "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode}"
+        )
+    }
+
+    /**
+     * Presses a key combination (modifier + key) using CDP.
+     */
+    fun pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey) {
+        if (isDestroyed.get()) return
+        val keyCode = keyToWindowsKeyCode(key)
+        val modMask = keyToCdpModifierMask(modifier)
+        val devTools = cefBrowser.devToolsClient ?: return
+
+        // keydown with modifiers
+        devTools.executeDevToolsMethod(
+            "Input.dispatchKeyEvent",
+            "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode,\"modifiers\":$modMask}"
+        )
+        // keyup with modifiers
+        devTools.executeDevToolsMethod(
+            "Input.dispatchKeyEvent",
+            "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode,\"modifiers\":$modMask}"
+        )
+    }
+
+    /**
+     * Types a single character using CDP.
+     */
+    fun typeChar(char: Char) {
+        if (isDestroyed.get()) return
+        val devTools = cefBrowser.devToolsClient ?: return
+        
+        // Escape json string properly
+        val escaped = char.toString().replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t").replace("\\", "\\\\")
+        
+        // Use Input.insertText for robust character injection regardless of OS focus state
+        devTools.executeDevToolsMethod(
+            "Input.insertText",
+            "{\"text\":\"$escaped\"}"
+        )
     }
 
     override fun destroy() {
@@ -482,19 +573,7 @@ class JvmWebView(
     }
 
     fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int) {
-        if (isDestroyed.get()) return
-        val jsCode = coordinateTransformJs(x, y)
-        evaluateJavascript(jsCode) { result ->
-            val parts = result.trim('"').split(',')
-            if (parts.size < 4) return@evaluateJavascript
-            val clientX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val clientY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val innerWidth = parts[2].toDoubleOrNull() ?: return@evaluateJavascript
-            val innerHeight = parts[3].toDoubleOrNull() ?: return@evaluateJavascript
-
-            val comp = cefBrowser.uiComponent ?: return@evaluateJavascript
-            val (awtX, awtY) = convertToAwtCoordinates(clientX, clientY, innerWidth, innerHeight, comp)
-
+        resolveAwtCoordinates(x, y) { awtX, awtY, comp ->
             val wheelRotation = if (deltaY > 0) 1 else if (deltaY < 0) -1 else 0
             if (wheelRotation != 0) {
                 val wheelEvent = java.awt.event.MouseWheelEvent(
@@ -683,6 +762,34 @@ internal actual suspend fun performDragByCoordinates(
 ) {
     if (webView is JvmWebView) {
         webView.dragByCoordinates(startX, startY, endX, endY)
+    }
+}
+
+internal actual suspend fun performKeyPress(
+    webView: KBWebView,
+    key: KeyboardKey
+) {
+    if (webView is JvmWebView) {
+        webView.pressKey(key)
+    }
+}
+
+internal actual suspend fun performKeyCombination(
+    webView: KBWebView,
+    modifier: KeyboardKey,
+    key: KeyboardKey
+) {
+    if (webView is JvmWebView) {
+        webView.pressKeyCombination(modifier, key)
+    }
+}
+
+internal actual suspend fun performTypeChar(
+    webView: KBWebView,
+    char: Char
+) {
+    if (webView is JvmWebView) {
+        webView.typeChar(char)
     }
 }
 

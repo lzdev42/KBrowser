@@ -2,6 +2,7 @@ package xyz.kbrowser.webview
 
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.delay
+import kotlin.random.Random
 
 data class KBLocator(
     val page: KBPage,
@@ -121,17 +122,31 @@ data class KBLocator(
         page.evaluateJavascript(fillJs)
     }
 
+    /**
+     * Types text character by character using native platform key events.
+     * Each character has a random delay (30-150ms) to simulate real human typing.
+     * This is the highest anti-detection input method — no JS injection, no DOM modification.
+     *
+     * Steps:
+     * 1. Click to focus the element (physical coordinate click)
+     * 2. Clear existing value: Ctrl+A → Delete (native key events)
+     * 3. Type each character via native key event API with random delay
+     */
     suspend fun type(text: String) {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        // 1. Click to focus
         page.clickByCoordinates(node.centerX, node.centerY)
         delay(100)
-        val escapedText = escapeJs(text)
-        val escapedSelector = escapeJs(selector)
-        val typeJs = JsScripts.TYPE_TEXT
-            .replace("__SELECTOR__", escapedSelector)
-            .replace("__TEXT__", escapedText)
-            .replace("__SELECTOR_TYPE__", selectorType.name)
-        page.evaluateJavascript(typeJs)
+        // 2. Clear existing value: Ctrl+A → Delete
+        page.pressKeyCombination(KeyboardKey.CONTROL, KeyboardKey.A)
+        delay(50)
+        page.press(KeyboardKey.DELETE)
+        delay(50)
+        // 3. Type each character with random delay
+        for (char in text) {
+            page.typeChar(char)
+            delay(Random.nextLong(30, 150))
+        }
     }
 
     suspend fun focus() {
@@ -167,6 +182,29 @@ data class KBLocator(
                 // ignore or log
             }
         }
+    }
+
+    /**
+     * Presses a single key after focusing the element.
+     * Uses native platform key event API (JCEF sendKeyEvent on JVM).
+     */
+    suspend fun press(key: KeyboardKey) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        page.clickByCoordinates(node.centerX, node.centerY)
+        delay(50)
+        page.press(key)
+    }
+
+    /**
+     * Presses a key combination (modifier + key) after focusing the element.
+     * e.g. Ctrl+A, Ctrl+C, Ctrl+V
+     * Uses native platform key event API.
+     */
+    suspend fun pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        page.clickByCoordinates(node.centerX, node.centerY)
+        delay(50)
+        page.pressKeyCombination(modifier, key)
     }
 
     // ===== Query Methods =====

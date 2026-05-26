@@ -25,7 +25,8 @@ data class BrowserViewState(
     val selectedTab: Int = 0,
     val coordX: String = "250",
     val coordY: String = "450",
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val keyboardInputText: String = "Hello KBrowser"
 )
 
 sealed interface BrowserIntent {
@@ -44,6 +45,13 @@ sealed interface BrowserIntent {
     data class ClickCoordinates(val x: Int, val y: Int) : BrowserIntent
     data class HoverCoordinates(val x: Int, val y: Int) : BrowserIntent
     object RunAutoFlow : BrowserIntent
+    
+    // 键盘按键与输入测试
+    data class ChangeKeyboardInput(val text: String) : BrowserIntent
+    object SimulateTypeString : BrowserIntent
+    object SimulateCtrlA : BrowserIntent
+    object SimulateCmdA : BrowserIntent
+    object SimulateBackspace : BrowserIntent
 }
 
 class BrowserViewModel : ViewModel() {
@@ -57,7 +65,7 @@ class BrowserViewModel : ViewModel() {
                 println("[DEBUG] BrowserViewModel: 开始初始化默认浏览器标签页")
                 log("正在初始化默认浏览器标签页...")
                 val newPage = KBrowser.newPage(
-                    url = "https://www.zhipin.com/",
+                    url = _state.value.navigateUrlInput,
                     profile = KBProfile("default_session")
                 )
                 println("[DEBUG] BrowserViewModel: KBrowser.newPage 返回成功")
@@ -299,6 +307,58 @@ class BrowserViewModel : ViewModel() {
                         log("自动化测试流程全部执行完毕")
                     } catch (e: Exception) {
                         log("自动化测试流程执行出错: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.ChangeKeyboardInput -> {
+                _state.update { it.copy(keyboardInputText = intent.text) }
+            }
+            is BrowserIntent.SimulateTypeString -> {
+                val page = _state.value.page ?: return
+                val text = _state.value.keyboardInputText
+                log("模拟键盘物理打字输入: \"$text\"")
+                viewModelScope.launch {
+                    try {
+                        page.type(text)
+                        log("物理打字输入发送完毕")
+                    } catch (e: Exception) {
+                        log("物理打字输入失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.SimulateCtrlA -> {
+                val page = _state.value.page ?: return
+                log("模拟键盘组合键: Ctrl+A")
+                viewModelScope.launch {
+                    try {
+                        page.pressKeyCombination(xyz.kbrowser.webview.KeyboardKey.CONTROL, xyz.kbrowser.webview.KeyboardKey.A)
+                        log("组合键 Ctrl+A 发送完毕")
+                    } catch (e: Exception) {
+                        log("组合键 Ctrl+A 发送失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.SimulateCmdA -> {
+                val page = _state.value.page ?: return
+                log("模拟键盘组合键: Cmd+A (Mac)")
+                viewModelScope.launch {
+                    try {
+                        page.pressKeyCombination(xyz.kbrowser.webview.KeyboardKey.META, xyz.kbrowser.webview.KeyboardKey.A)
+                        log("组合键 Cmd+A 发送完毕")
+                    } catch (e: Exception) {
+                        log("组合键 Cmd+A 发送失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.SimulateBackspace -> {
+                val page = _state.value.page ?: return
+                log("模拟键盘单个按键: Backspace")
+                viewModelScope.launch {
+                    try {
+                        page.press(xyz.kbrowser.webview.KeyboardKey.BACKSPACE)
+                        log("按键 Backspace 发送完毕")
+                    } catch (e: Exception) {
+                        log("按键 Backspace 发送失败: ${e.message}")
                     }
                 }
             }

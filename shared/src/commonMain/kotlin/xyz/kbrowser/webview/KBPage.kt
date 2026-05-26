@@ -14,6 +14,8 @@ class KBPage internal constructor(val webView: KBWebView) {
     
     val currentUrl: StateFlow<String?> get() = webView.currentUrl
     val title: StateFlow<String?> get() = webView.currentTitle
+    val loadingState: StateFlow<LoadingState> get() = webView.loadingState
+    val progress: StateFlow<Float> get() = webView.progress
 
     /**
      * Cache of node coordinates, refreshed on [getRawAxTree].
@@ -131,6 +133,27 @@ class KBPage internal constructor(val webView: KBWebView) {
 
     suspend fun dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int) {
         performDragByCoordinates(webView, startX, startY, endX, endY)
+    }
+
+    // ===== Native Key Event Methods =====
+
+    suspend fun press(key: KeyboardKey) {
+        performKeyPress(webView, key)
+    }
+
+    suspend fun pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey) {
+        performKeyCombination(webView, modifier, key)
+    }
+
+    suspend fun typeChar(char: Char) {
+        performTypeChar(webView, char)
+    }
+
+    suspend fun type(text: String) {
+        for (char in text) {
+            typeChar(char)
+            kotlinx.coroutines.delay(Random.nextLong(30, 150))
+        }
     }
 
     // ===== KBLocator Factory Methods =====

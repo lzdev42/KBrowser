@@ -286,4 +286,137 @@ internal actual suspend fun performDragByCoordinates(
     }
 }
 
+internal actual suspend fun performKeyPress(
+    webView: KBWebView,
+    key: KeyboardKey
+) {
+    if (webView is AndroidWebView) {
+        val w = webView.getOrCreateWebView(AndroidContextHolder.context)
+        val downTime = SystemClock.uptimeMillis()
+        val keyCode = keyToAndroidKeyCode(key)
+        val event = android.view.KeyEvent(downTime, downTime,
+            android.view.KeyEvent.ACTION_DOWN, keyCode, 0)
+        w.dispatchKeyEvent(event)
+        val upEvent = android.view.KeyEvent(downTime, downTime + 50,
+            android.view.KeyEvent.ACTION_UP, keyCode, 0)
+        w.dispatchKeyEvent(upEvent)
+    }
+}
+
+internal actual suspend fun performKeyCombination(
+    webView: KBWebView,
+    modifier: KeyboardKey,
+    key: KeyboardKey
+) {
+    if (webView is AndroidWebView) {
+        val w = webView.getOrCreateWebView(AndroidContextHolder.context)
+        val downTime = SystemClock.uptimeMillis()
+        val modKeyCode = keyToAndroidKeyCode(modifier)
+        val keyCode = keyToAndroidKeyCode(key)
+        val modMetaState = keyToAndroidMetaState(modifier)
+
+        // Modifier DOWN
+        val modDown = android.view.KeyEvent(downTime, downTime,
+            android.view.KeyEvent.ACTION_DOWN, modKeyCode, modMetaState)
+        w.dispatchKeyEvent(modDown)
+
+        // Key DOWN (with modifier meta state)
+        val keyDown = android.view.KeyEvent(downTime, downTime + 10,
+            android.view.KeyEvent.ACTION_DOWN, keyCode, modMetaState)
+        w.dispatchKeyEvent(keyDown)
+
+        // Key UP (with modifier meta state)
+        val keyUp = android.view.KeyEvent(downTime, downTime + 60,
+            android.view.KeyEvent.ACTION_UP, keyCode, modMetaState)
+        w.dispatchKeyEvent(keyUp)
+
+        // Modifier UP
+        val modUp = android.view.KeyEvent(downTime, downTime + 70,
+            android.view.KeyEvent.ACTION_UP, modKeyCode, 0)
+        w.dispatchKeyEvent(modUp)
+    }
+}
+
+internal actual suspend fun performTypeChar(
+    webView: KBWebView,
+    char: Char
+) {
+    if (webView is AndroidWebView) {
+        val w = webView.getOrCreateWebView(AndroidContextHolder.context)
+        val downTime = SystemClock.uptimeMillis()
+        val keyCode = charToAndroidKeyCode(char)
+
+        val metaState = if (char.isUpperCase()) android.view.KeyEvent.META_SHIFT_ON else 0
+
+        // ACTION_DOWN
+        val downEvent = android.view.KeyEvent(downTime, downTime,
+            android.view.KeyEvent.ACTION_DOWN, keyCode, 0, metaState)
+        w.dispatchKeyEvent(downEvent)
+
+        // ACTION_UP
+        val upEvent = android.view.KeyEvent(downTime, downTime + 50,
+            android.view.KeyEvent.ACTION_UP, keyCode, 0, metaState)
+        w.dispatchKeyEvent(upEvent)
+    }
+}
+
+private fun keyToAndroidKeyCode(key: KeyboardKey): Int = when (key) {
+    KeyboardKey.ENTER -> android.view.KeyEvent.KEYCODE_ENTER
+    KeyboardKey.TAB -> android.view.KeyEvent.KEYCODE_TAB
+    KeyboardKey.ESCAPE -> android.view.KeyEvent.KEYCODE_ESCAPE
+    KeyboardKey.BACKSPACE -> android.view.KeyEvent.KEYCODE_DEL
+    KeyboardKey.DELETE -> android.view.KeyEvent.KEYCODE_FORWARD_DEL
+    KeyboardKey.ARROW_UP -> android.view.KeyEvent.KEYCODE_DPAD_UP
+    KeyboardKey.ARROW_DOWN -> android.view.KeyEvent.KEYCODE_DPAD_DOWN
+    KeyboardKey.ARROW_LEFT -> android.view.KeyEvent.KEYCODE_DPAD_LEFT
+    KeyboardKey.ARROW_RIGHT -> android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+    KeyboardKey.SHIFT -> android.view.KeyEvent.KEYCODE_SHIFT_LEFT
+    KeyboardKey.CONTROL -> android.view.KeyEvent.KEYCODE_CTRL_LEFT
+    KeyboardKey.ALT -> android.view.KeyEvent.KEYCODE_ALT_LEFT
+    KeyboardKey.META -> android.view.KeyEvent.KEYCODE_META_LEFT
+    KeyboardKey.SPACE -> android.view.KeyEvent.KEYCODE_SPACE
+    KeyboardKey.HOME -> android.view.KeyEvent.KEYCODE_MOVE_HOME
+    KeyboardKey.END -> android.view.KeyEvent.KEYCODE_MOVE_END
+    KeyboardKey.PAGE_UP -> android.view.KeyEvent.KEYCODE_PAGE_UP
+    KeyboardKey.PAGE_DOWN -> android.view.KeyEvent.KEYCODE_PAGE_DOWN
+    KeyboardKey.INSERT -> android.view.KeyEvent.KEYCODE_INSERT
+    KeyboardKey.F1 -> android.view.KeyEvent.KEYCODE_F1
+    KeyboardKey.F2 -> android.view.KeyEvent.KEYCODE_F2
+    KeyboardKey.F3 -> android.view.KeyEvent.KEYCODE_F3
+    KeyboardKey.F4 -> android.view.KeyEvent.KEYCODE_F4
+    KeyboardKey.F5 -> android.view.KeyEvent.KEYCODE_F5
+    KeyboardKey.F6 -> android.view.KeyEvent.KEYCODE_F6
+    KeyboardKey.F7 -> android.view.KeyEvent.KEYCODE_F7
+    KeyboardKey.F8 -> android.view.KeyEvent.KEYCODE_F8
+    KeyboardKey.F9 -> android.view.KeyEvent.KEYCODE_F9
+    KeyboardKey.F10 -> android.view.KeyEvent.KEYCODE_F10
+    KeyboardKey.F11 -> android.view.KeyEvent.KEYCODE_F11
+    KeyboardKey.F12 -> android.view.KeyEvent.KEYCODE_F12
+    KeyboardKey.A -> android.view.KeyEvent.KEYCODE_A
+    KeyboardKey.C -> android.view.KeyEvent.KEYCODE_C
+    KeyboardKey.V -> android.view.KeyEvent.KEYCODE_V
+    KeyboardKey.X -> android.view.KeyEvent.KEYCODE_X
+    KeyboardKey.S -> android.view.KeyEvent.KEYCODE_S
+    KeyboardKey.Z -> android.view.KeyEvent.KEYCODE_Z
+}
+
+private fun keyToAndroidMetaState(key: KeyboardKey): Int = when (key) {
+    KeyboardKey.SHIFT -> android.view.KeyEvent.META_SHIFT_ON
+    KeyboardKey.CONTROL -> android.view.KeyEvent.META_CTRL_ON
+    KeyboardKey.ALT -> android.view.KeyEvent.META_ALT_ON
+    KeyboardKey.META -> android.view.KeyEvent.META_META_ON
+    else -> 0
+}
+
+private fun charToAndroidKeyCode(char: Char): Int = when (char) {
+    '\n' -> android.view.KeyEvent.KEYCODE_ENTER
+    '\t' -> android.view.KeyEvent.KEYCODE_TAB
+    '\b' -> android.view.KeyEvent.KEYCODE_DEL
+    ' ' -> android.view.KeyEvent.KEYCODE_SPACE
+    in 'a'..'z' -> android.view.KeyEvent.KEYCODE_A + (char - 'a')
+    in 'A'..'Z' -> android.view.KeyEvent.KEYCODE_A + (char.uppercaseChar() - 'A')
+    in '0'..'9' -> android.view.KeyEvent.KEYCODE_0 + (char - '0')
+    else -> android.view.KeyEvent.KEYCODE_UNKNOWN
+}
+
 internal actual fun performGlobalShutdown() {}

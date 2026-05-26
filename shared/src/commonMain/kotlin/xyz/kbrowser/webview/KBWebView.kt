@@ -82,3 +82,19 @@ internal expect suspend fun performDragByCoordinates(
     endX: Int,
     endY: Int
 )
+
+internal expect suspend fun performKeyPress(
+    webView: KBWebView,
+    key: KeyboardKey
+)
+
+internal expect suspend fun performKeyCombination(
+    webView: KBWebView,
+    modifier: KeyboardKey,
+    key: KeyboardKey
+)
+
+internal expect suspend fun performTypeChar(
+    webView: KBWebView,
+    char: Char
+)

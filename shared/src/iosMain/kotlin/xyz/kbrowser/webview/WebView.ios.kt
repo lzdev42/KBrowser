@@ -334,4 +334,152 @@ internal actual suspend fun performDragByCoordinates(
     webView.evaluateJavascript(js, null)
 }
 
+internal actual suspend fun performKeyPress(
+    webView: KBWebView,
+    key: KeyboardKey
+) {
+    // WKWebView has no native key injection API; use JS KeyboardEvent dispatch
+    val jsKey = keyToJsKey(key)
+    val jsCode = keyToJsKeyCode(key)
+    val js = """
+        (function() {
+            var target = document.activeElement || document.body;
+            target.dispatchEvent(new KeyboardEvent('keydown', {
+                key: '$jsKey', code: '$jsCode', bubbles: true, cancelable: true
+            }));
+            target.dispatchEvent(new KeyboardEvent('keyup', {
+                key: '$jsKey', code: '$jsCode', bubbles: true, cancelable: true
+            }));
+        })()
+    """.trimIndent()
+    webView.evaluateJavascript(js, null)
+}
+
+internal actual suspend fun performKeyCombination(
+    webView: KBWebView,
+    modifier: KeyboardKey,
+    key: KeyboardKey
+) {
+    // WKWebView: dispatch modifier+key via JS KeyboardEvent
+    val modJsKey = keyToJsKey(modifier)
+    val modJsCode = keyToJsKeyCode(modifier)
+    val jsKey = keyToJsKey(key)
+    val jsCode = keyToJsKeyCode(key)
+    val js = """
+        (function() {
+            var target = document.activeElement || document.body;
+            var modMap = { 'Control': 'ctrlKey', 'Shift': 'shiftKey', 'Alt': 'altKey', 'Meta': 'metaKey' };
+            var modProp = modMap['$modJsKey'] || '';
+            var opts = { key: '$jsKey', code: '$jsCode', bubbles: true, cancelable: true };
+            if (modProp) opts[modProp] = true;
+            target.dispatchEvent(new KeyboardEvent('keydown', opts));
+            target.dispatchEvent(new KeyboardEvent('keyup', opts));
+        })()
+    """.trimIndent()
+    webView.evaluateJavascript(js, null)
+}
+
+internal actual suspend fun performTypeChar(
+    webView: KBWebView,
+    char: Char
+) {
+    // WKWebView: dispatch character via JS KeyboardEvent
+    val escapedChar = if (char == '\'') "\\\'" else if (char == '\\') "\\\\" else char.toString()
+    val js = """
+        (function() {
+            var target = document.activeElement || document.body;
+            target.dispatchEvent(new KeyboardEvent('keydown', {
+                key: '$escapedChar', code: 'Key${escapedChar.uppercase()}', bubbles: true, cancelable: true
+            }));
+            target.dispatchEvent(new KeyboardEvent('keypress', {
+                key: '$escapedChar', code: 'Key${escapedChar.uppercase()}', bubbles: true, cancelable: true
+            }));
+            target.dispatchEvent(new KeyboardEvent('keyup', {
+                key: '$escapedChar', code: 'Key${escapedChar.uppercase()}', bubbles: true, cancelable: true
+            }));
+        })()
+    """.trimIndent()
+    webView.evaluateJavascript(js, null)
+}
+
+private fun keyToJsKey(key: KeyboardKey): String = when (key) {
+    KeyboardKey.ENTER -> "Enter"
+    KeyboardKey.TAB -> "Tab"
+    KeyboardKey.ESCAPE -> "Escape"
+    KeyboardKey.BACKSPACE -> "Backspace"
+    KeyboardKey.DELETE -> "Delete"
+    KeyboardKey.ARROW_UP -> "ArrowUp"
+    KeyboardKey.ARROW_DOWN -> "ArrowDown"
+    KeyboardKey.ARROW_LEFT -> "ArrowLeft"
+    KeyboardKey.ARROW_RIGHT -> "ArrowRight"
+    KeyboardKey.SHIFT -> "Shift"
+    KeyboardKey.CONTROL -> "Control"
+    KeyboardKey.ALT -> "Alt"
+    KeyboardKey.META -> "Meta"
+    KeyboardKey.SPACE -> " "
+    KeyboardKey.HOME -> "Home"
+    KeyboardKey.END -> "End"
+    KeyboardKey.PAGE_UP -> "PageUp"
+    KeyboardKey.PAGE_DOWN -> "PageDown"
+    KeyboardKey.INSERT -> "Insert"
+    KeyboardKey.F1 -> "F1"
+    KeyboardKey.F2 -> "F2"
+    KeyboardKey.F3 -> "F3"
+    KeyboardKey.F4 -> "F4"
+    KeyboardKey.F5 -> "F5"
+    KeyboardKey.F6 -> "F6"
+    KeyboardKey.F7 -> "F7"
+    KeyboardKey.F8 -> "F8"
+    KeyboardKey.F9 -> "F9"
+    KeyboardKey.F10 -> "F10"
+    KeyboardKey.F11 -> "F11"
+    KeyboardKey.F12 -> "F12"
+    KeyboardKey.A -> "a"
+    KeyboardKey.C -> "c"
+    KeyboardKey.V -> "v"
+    KeyboardKey.X -> "x"
+    KeyboardKey.S -> "s"
+    KeyboardKey.Z -> "z"
+}
+
+private fun keyToJsKeyCode(key: KeyboardKey): String = when (key) {
+    KeyboardKey.ENTER -> "Enter"
+    KeyboardKey.TAB -> "Tab"
+    KeyboardKey.ESCAPE -> "Escape"
+    KeyboardKey.BACKSPACE -> "Backspace"
+    KeyboardKey.DELETE -> "Delete"
+    KeyboardKey.ARROW_UP -> "ArrowUp"
+    KeyboardKey.ARROW_DOWN -> "ArrowDown"
+    KeyboardKey.ARROW_LEFT -> "ArrowLeft"
+    KeyboardKey.ARROW_RIGHT -> "ArrowRight"
+    KeyboardKey.SHIFT -> "ShiftLeft"
+    KeyboardKey.CONTROL -> "ControlLeft"
+    KeyboardKey.ALT -> "AltLeft"
+    KeyboardKey.META -> "MetaLeft"
+    KeyboardKey.SPACE -> "Space"
+    KeyboardKey.HOME -> "Home"
+    KeyboardKey.END -> "End"
+    KeyboardKey.PAGE_UP -> "PageUp"
+    KeyboardKey.PAGE_DOWN -> "PageDown"
+    KeyboardKey.INSERT -> "Insert"
+    KeyboardKey.F1 -> "F1"
+    KeyboardKey.F2 -> "F2"
+    KeyboardKey.F3 -> "F3"
+    KeyboardKey.F4 -> "F4"
+    KeyboardKey.F5 -> "F5"
+    KeyboardKey.F6 -> "F6"
+    KeyboardKey.F7 -> "F7"
+    KeyboardKey.F8 -> "F8"
+    KeyboardKey.F9 -> "F9"
+    KeyboardKey.F10 -> "F10"
+    KeyboardKey.F11 -> "F11"
+    KeyboardKey.F12 -> "F12"
+    KeyboardKey.A -> "KeyA"
+    KeyboardKey.C -> "KeyC"
+    KeyboardKey.V -> "KeyV"
+    KeyboardKey.X -> "KeyX"
+    KeyboardKey.S -> "KeyS"
+    KeyboardKey.Z -> "KeyZ"
+}
+
 internal actual fun performGlobalShutdown() {}

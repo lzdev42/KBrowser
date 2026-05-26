@@ -323,39 +323,6 @@ object JsScripts {
         })()
     """.trimIndent()
 
-    val TYPE_TEXT: String = """
-        (function() {
-            var selectorType = '__SELECTOR_TYPE__';
-            var selector = '__SELECTOR__';
-            var text = '__TEXT__';
-            
-            $FIND_ELEMENT_JS
-            var el = findElement(selectorType, selector);
-            if (!el) return 'null';
-            
-            var nativeSetter = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, 'value'
-            )?.set || Object.getOwnPropertyDescriptor(
-                window.HTMLTextAreaElement.prototype, 'value'
-            )?.set;
-            
-            if (nativeSetter) {
-                nativeSetter.call(el, '');
-            } else {
-                el.value = '';
-            }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            
-            for (var i = 0; i < text.length; i++) {
-                el.value += text[i];
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            
-            return 'ok';
-        })()
-    """.trimIndent()
-
     val FIND_OPTION_AND_CLICK: String = """
         (function() {
             var selector = '__SELECTOR__';

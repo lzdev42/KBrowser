@@ -4,6 +4,8 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -399,7 +401,8 @@ fun BrowserExampleScreen(
                 Box(modifier = Modifier.weight(0.6f).fillMaxWidth()) {
                     when (state.selectedTab) {
                         0 -> {
-                            Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            val scrollState = rememberScrollState()
+                            Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                 Button(
                                     onClick = { viewModel.dispatch(BrowserIntent.RunAutoFlow) },
                                     modifier = Modifier.fillMaxWidth(),
@@ -456,6 +459,33 @@ fun BrowserExampleScreen(
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Button(onClick = { viewModel.dispatch(BrowserIntent.ClickCoordinates(state.coordX.toIntOrNull() ?: 0, state.coordY.toIntOrNull() ?: 0)) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5))) { Text("点击", fontSize = 12.sp, color = Color.White) }
                                         Button(onClick = { viewModel.dispatch(BrowserIntent.HoverCoordinates(state.coordX.toIntOrNull() ?: 0, state.coordY.toIntOrNull() ?: 0)) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00ACC1))) { Text("悬停", fontSize = 12.sp, color = Color.White) }
+                                    }
+                                }
+                                HorizontalDivider(color = Color(0xFF23232A))
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("物理键盘模拟", color = Color(0xFF888894), fontSize = 12.sp)
+                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        OutlinedTextField(
+                                            value = state.keyboardInputText,
+                                            onValueChange = { viewModel.dispatch(BrowserIntent.ChangeKeyboardInput(it)) },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true,
+                                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color(0xFF2E2E36)),
+                                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
+                                            placeholder = { Text("输入测试字符...", fontSize = 12.sp) }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Button(
+                                            onClick = { viewModel.dispatch(BrowserIntent.SimulateTypeString) },
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("打字输入", fontSize = 12.sp)
+                                        }
+                                    }
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { viewModel.dispatch(BrowserIntent.SimulateCtrlA) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E2E36))) { Text("Ctrl+A", fontSize = 11.sp, color = Color.White) }
+                                        Button(onClick = { viewModel.dispatch(BrowserIntent.SimulateCmdA) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E2E36))) { Text("Cmd+A", fontSize = 11.sp, color = Color.White) }
+                                        Button(onClick = { viewModel.dispatch(BrowserIntent.SimulateBackspace) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935))) { Text("退格", fontSize = 11.sp, color = Color.White) }
                                     }
                                 }
                             }
