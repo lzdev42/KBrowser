@@ -616,6 +616,25 @@ fun BrowserExampleScreen(
                                 }
                                 HorizontalDivider(color = Color(0xFF23232A))
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Aria RefId 交互", color = Color(0xFF888894), fontSize = 12.sp)
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        OutlinedTextField(
+                                            value = state.customRefId,
+                                            onValueChange = { viewModel.dispatch(BrowserIntent.ChangeRefId(it)) },
+                                            label = { Text("RefId", fontSize = 10.sp) },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true,
+                                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color(0xFF2E2E36)),
+                                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
+                                        )
+                                    }
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { viewModel.dispatch(BrowserIntent.ClickRefId) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5))) { Text("点击", fontSize = 12.sp, color = Color.White) }
+                                        Button(onClick = { viewModel.dispatch(BrowserIntent.HoverRefId) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00ACC1))) { Text("悬停", fontSize = 12.sp, color = Color.White) }
+                                    }
+                                }
+                                HorizontalDivider(color = Color(0xFF23232A))
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text("坐标交互", color = Color(0xFF888894), fontSize = 12.sp)
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                         OutlinedTextField(

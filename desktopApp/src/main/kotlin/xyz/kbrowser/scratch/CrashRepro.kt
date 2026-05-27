@@ -5,6 +5,8 @@ import xyz.kbrowser.webview.initializeKBrowser
 import org.cef.browser.CefRendering
 
 fun main() {
+    val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
+    xyz.kbrowser.webview.KBrowser.configure(xyz.kbrowser.webview.BrowserConfig(storageDir = storageDir))
     initializeKBrowser()
     println("Initializing KBCefApp...")
     val app = KBCefApp.getInstance()

@@ -29,7 +29,8 @@ data class BrowserViewState(
     val locatorSelector: String = "",
     val locatorSelectorType: String = "CSS",
     val locatorRoleName: String = "",
-    val locatorValue: String = ""
+    val locatorValue: String = "",
+    val customRefId: String = ""
 )
 
 sealed interface BrowserIntent {
@@ -58,6 +59,9 @@ sealed interface BrowserIntent {
     // KBLocator 测试意图
     data class ChangeLocatorSelector(val selector: String) : BrowserIntent
     data class ChangeLocatorSelectorType(val type: String) : BrowserIntent
+    data class ChangeRefId(val refId: String) : BrowserIntent
+    object ClickRefId : BrowserIntent
+    object HoverRefId : BrowserIntent
     data class ChangeLocatorRoleName(val name: String) : BrowserIntent
     data class ChangeLocatorValue(val value: String) : BrowserIntent
     object LocatorClick : BrowserIntent
@@ -82,7 +86,7 @@ class BrowserViewModel : ViewModel() {
                 log("正在初始化默认浏览器标签页...")
                 val newPage = KBrowser.newPage(
                     url = _state.value.navigateUrlInput,
-                    profile = KBProfile("default_session")
+                    profile = KBProfile("default_session", "")
                 )
                 println("[DEBUG] BrowserViewModel: KBrowser.newPage 返回成功")
                 _state.update { it.copy(page = newPage) }
@@ -365,6 +369,37 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.ChangeLocatorSelectorType -> {
                 _state.update { it.copy(locatorSelectorType = intent.type) }
+            }
+            is BrowserIntent.ChangeRefId -> {
+                _state.update { it.copy(customRefId = intent.refId) }
+            }
+            BrowserIntent.ClickRefId -> {
+                val page = _state.value.page ?: return
+                val refId = _state.value.customRefId
+                if (refId.isBlank()) return
+                log("执行 Aria RefId 点击: '$refId'")
+                viewModelScope.launch {
+                    try {
+                        page.click(refId)
+                        log("✅ 点击 $refId 成功")
+                    } catch (e: Exception) {
+                        log("❌ 点击失败: ${e.message}")
+                    }
+                }
+            }
+            BrowserIntent.HoverRefId -> {
+                val page = _state.value.page ?: return
+                val refId = _state.value.customRefId
+                if (refId.isBlank()) return
+                log("执行 Aria RefId 悬停: '$refId'")
+                viewModelScope.launch {
+                    try {
+                        page.hover(refId)
+                        log("✅ 悬停 $refId 成功")
+                    } catch (e: Exception) {
+                        log("❌ 悬停失败: ${e.message}")
+                    }
+                }
             }
             is BrowserIntent.ChangeLocatorRoleName -> {
                 _state.update { it.copy(locatorRoleName = intent.name) }

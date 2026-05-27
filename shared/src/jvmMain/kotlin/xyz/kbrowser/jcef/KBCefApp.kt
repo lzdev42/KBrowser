@@ -8,7 +8,7 @@ import org.cef.SystemBootstrap
 import org.cef.handler.CefAppHandlerAdapter
 import java.util.concurrent.atomic.AtomicBoolean
 
-class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
+class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String) : Disposable {
     private val myCefApp: CefApp
     private val myCefSettings: CefSettings
 
@@ -18,7 +18,7 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
 
         @Synchronized
         @Suppress("DEPRECATION")
-        fun getInstance(): KBCefApp {
+        fun getInstance(storageDir: String): KBCefApp {
             if (ourInstance == null) {
                 val config = try {
                     if (System.getProperty("jcef.forceDeviceScaleFactor") == null) {
@@ -34,9 +34,14 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
                         "Please check your JDK configuration.", t
                     )
                 }
-                ourInstance = KBCefApp(config)
+                ourInstance = KBCefApp(config, storageDir)
             }
             return ourInstance!!
+        }
+
+        @Synchronized
+        fun getInstance(): KBCefApp {
+            return ourInstance ?: throw IllegalStateException("KBCefApp is not initialized. Call getInstance(storageDir) first.")
         }
 
         fun isSupported(): Boolean {
@@ -81,9 +86,8 @@ class KBCefApp private constructor(val config: JCefAppConfig) : Disposable {
         // Disable remote debugging port by default
         settings.remote_debugging_port = 0
         
-        // Set explicit cache path to avoid session warning
-        val userHome = System.getProperty("user.home")
-        settings.cache_path = "$userHome/.browserpilot/jcef_cache"
+        // Set explicit cache path using the provided storageDir
+        settings.cache_path = storageDir
         
         val args = config.appArgs.toMutableList()
         println("[KBCefApp] Raw Args from Config: $args")

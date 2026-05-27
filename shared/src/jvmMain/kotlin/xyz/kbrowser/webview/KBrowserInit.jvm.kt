@@ -11,7 +11,7 @@ actual fun initializeKBrowser() {
     try {
         println("[initializeKBrowser] Getting KBCefApp instance...")
         System.out.flush()
-        xyz.kbrowser.jcef.KBCefApp.getInstance()
+        xyz.kbrowser.jcef.KBCefApp.getInstance(xyz.kbrowser.webview.KBrowser.config.storageDir)
         
         println("[initializeKBrowser] Waiting for CefApp initialization to complete...")
         System.out.flush()

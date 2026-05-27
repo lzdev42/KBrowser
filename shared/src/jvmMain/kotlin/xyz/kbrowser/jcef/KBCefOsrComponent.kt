@@ -160,16 +160,18 @@ class KBCefOsrComponent : JPanel() {
         super.processMouseEvent(e)
         if (e.isConsumed) return
 
-        myBrowser?.sendMouseEvent(
-            MouseEvent(
-                e.component, e.id, e.`when`, e.modifiersEx,
-                (e.x / myScale).roundToInt(),
-                (e.y / myScale).roundToInt(),
-                (e.xOnScreen / myScale).roundToInt(),
-                (e.yOnScreen / myScale).roundToInt(),
-                e.clickCount, e.isPopupTrigger, e.button
-            )
+        val cefEvent = MouseEvent(
+            e.component, e.id, e.`when`, e.modifiersEx,
+            (e.x / myScale).roundToInt(),
+            (e.y / myScale).roundToInt(),
+            (e.xOnScreen / myScale).roundToInt(),
+            (e.yOnScreen / myScale).roundToInt(),
+            e.clickCount, e.isPopupTrigger, e.button
         )
+        
+        println("[DEBUG-KBCefOsr] processMouseEvent 收到事件: id=${e.id}, awtX=${e.x}, awtY=${e.y}, myScale=$myScale -> 转换后发送给 CEF: x=${cefEvent.x}, y=${cefEvent.y}")
+
+        myBrowser?.sendMouseEvent(cefEvent)
 
         if (e.id == MouseEvent.MOUSE_PRESSED) {
             requestFocusInWindow()

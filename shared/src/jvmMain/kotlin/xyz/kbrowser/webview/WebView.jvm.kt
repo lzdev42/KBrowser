@@ -197,11 +197,6 @@ class JvmWebView(
                         """.trimIndent()
                         b.executeJavaScript(script, b.url ?: "", 0)
                     }
-
-                    // 页面加载完成后重新适配屏幕大小以恢复 zoom 状态
-                    SwingUtilities.invokeLater {
-                        applyResponsiveScaling(b)
-                    }
                 }
             }
 
@@ -225,13 +220,6 @@ class JvmWebView(
             }
         }
         browser.myCefClient.addLoadHandler(myLoadHandlerInstance, cefBrowser)
-
-        // 动态监听组件大小变化，让网页自动缩放到适合当前视口的尺寸 (Desktop Responsive Scaling)
-        cefBrowser.uiComponent?.addComponentListener(object : java.awt.event.ComponentAdapter() {
-            override fun componentResized(e: java.awt.event.ComponentEvent) {
-                applyResponsiveScaling(cefBrowser)
-            }
-        })
 
         if (isHeadless) {
             SwingUtilities.invokeLater {
@@ -293,14 +281,36 @@ class JvmWebView(
         if (callback == null) {
             cefBrowser.executeJavaScript(script, "", 0)
         } else {
-            val jsQuery = KBCefJSQuery.create(browser)
+            val jsQuery = xyz.kbrowser.jcef.KBCefJSQuery.create(browser)
             jsQuery.addHandler { response ->
                 callback(response)
-                // 用完即丢，自动触发 dispose 归还槽位
                 jsQuery.dispose()
-                KBCefJSQuery.Response("OK")
+                xyz.kbrowser.jcef.KBCefJSQuery.Response("OK")
             }
-            cefBrowser.executeJavaScript(jsQuery.inject(script), "", 0)
+            
+            val base64Script = java.util.Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_8))
+            val funcName = jsQuery.myFunc.myFuncName
+            val jsCode = """
+                (function() {
+                    try {
+                        var scriptText = decodeURIComponent(escape(atob("$base64Script")));
+                        var result = window.eval(scriptText);
+                        var responseText = (typeof result === 'string' ? result : JSON.stringify(result));
+                        window["$funcName"]({
+                            request: responseText,
+                            onSuccess: function(r){},
+                            onFailure: function(e,m){}
+                        });
+                    } catch(err) {
+                        window["$funcName"]({
+                            request: "KB_JS_ERROR:" + err.message,
+                            onSuccess: function(r){},
+                            onFailure: function(e,m){}
+                        });
+                    }
+                })();
+            """.trimIndent()
+            cefBrowser.executeJavaScript(jsCode, "", 0)
         }
     }
 
@@ -417,21 +427,18 @@ class JvmWebView(
     // clickBySelector removed
 
     fun clickByCoordinates(x: Int, y: Int) {
-        println("[DEBUG-clickByCoordinates] 入口: 文档坐标=($x, $y), isDestroyed=${isDestroyed.get()}")
         resolveAwtCoordinates(x, y) { awtX, awtY, comp ->
-            val modifiers = InputEvent.BUTTON1_DOWN_MASK
-            println("[DEBUG-clickByCoordinates] ✅ 正在发送 AWT 鼠标事件: MOVED→PRESSED→RELEASED→CLICKED at ($awtX, $awtY)")
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, MouseEvent.NOBUTTON))
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, MouseEvent.BUTTON1))
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, MouseEvent.BUTTON1))
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, MouseEvent.BUTTON1))
-            println("[DEBUG-clickByCoordinates] ✅ 4个鼠标事件已全部发送完毕")
+            val modifiers = java.awt.event.InputEvent.BUTTON1_DOWN_MASK
+            cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, java.awt.event.MouseEvent.NOBUTTON))
+            cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, java.awt.event.MouseEvent.BUTTON1))
+            cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, java.awt.event.MouseEvent.BUTTON1))
+            cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), modifiers, awtX, awtY, 1, false, java.awt.event.MouseEvent.BUTTON1))
         }
     }
 
     fun hoverByCoordinates(x: Int, y: Int) {
         resolveAwtCoordinates(x, y) { awtX, awtY, comp ->
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, MouseEvent.NOBUTTON))
+            cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, awtX, awtY, 0, false, java.awt.event.MouseEvent.NOBUTTON))
         }
     }
 
@@ -564,7 +571,6 @@ class JvmWebView(
         resolveAwtCoordinates(x, y) { awtX, awtY, comp ->
             val wheelRotation = if (deltaY > 0) 1 else if (deltaY < 0) -1 else 0
             val scrollAmount = kotlin.math.abs(deltaY)
-            
             if (scrollAmount != 0) {
                 val wheelEvent = java.awt.event.MouseWheelEvent(
                     comp, java.awt.event.MouseWheelEvent.MOUSE_WHEEL, System.currentTimeMillis(),
@@ -582,52 +588,38 @@ class JvmWebView(
     }
 
     fun dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int) {
-        if (isDestroyed.get()) return
-        val jsCode = """
-            (function() {
-                var vw = window.innerWidth;
-                var vh = window.innerHeight;
-                var scrollX = window.scrollX || window.pageXOffset;
-                var scrollY = window.scrollY || window.pageYOffset;
+        var startAwtX = -1
+        var startAwtY = -1
+        var endAwtX = -1
+        var endAwtY = -1
+        var resolveCount = 0
+        var targetComp: java.awt.Component? = null
+
+        val onResolved = {
+            if (resolveCount == 2 && targetComp != null) {
+                val comp = targetComp!!
+                val modifiers = java.awt.event.InputEvent.BUTTON1_DOWN_MASK
+                cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, startAwtX, startAwtY, 0, false, java.awt.event.MouseEvent.NOBUTTON))
+                cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), modifiers, startAwtX, startAwtY, 1, false, java.awt.event.MouseEvent.BUTTON1))
                 
-                var startCX = $startX - scrollX;
-                var startCY = $startY - scrollY;
-                var endCX = $endX - scrollX;
-                var endCY = $endY - scrollY;
+                val steps = 5
+                for (i in 1..steps) {
+                    val ratio = i.toDouble() / steps
+                    val currX = (startAwtX + (endAwtX - startAwtX) * ratio).toInt()
+                    val currY = (startAwtY + (endAwtY - startAwtY) * ratio).toInt()
+                    cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_DRAGGED, System.currentTimeMillis(), modifiers, currX, currY, 0, false, java.awt.event.MouseEvent.NOBUTTON))
+                    try { Thread.sleep(20) } catch(e: Exception) {}
+                }
                 
-                return startCX + ',' + startCY + ',' + endCX + ',' + endCY + ',' + vw + ',' + vh;
-            })()
-        """.trimIndent()
-        
-        evaluateJavascript(jsCode) { result ->
-            val parts = result.trim('"').split(',')
-            if (parts.size < 6) return@evaluateJavascript
-            val startCX = parts[0].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val startCY = parts[1].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val endCX = parts[2].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val endCY = parts[3].toDoubleOrNull()?.toInt() ?: return@evaluateJavascript
-            val innerWidth = parts[4].toDoubleOrNull() ?: return@evaluateJavascript
-            val innerHeight = parts[5].toDoubleOrNull() ?: return@evaluateJavascript
-            
-            val comp = cefBrowser.uiComponent ?: return@evaluateJavascript
-            val (startAwtX, startAwtY) = convertToAwtCoordinates(startCX, startCY, innerWidth, innerHeight, comp)
-            val (endAwtX, endAwtY) = convertToAwtCoordinates(endCX, endCY, innerWidth, innerHeight, comp)
-            
-            val modifiers = java.awt.event.InputEvent.BUTTON1_DOWN_MASK
-            
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, startAwtX, startAwtY, 0, false, MouseEvent.NOBUTTON))
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), modifiers, startAwtX, startAwtY, 1, false, MouseEvent.BUTTON1))
-            
-            val steps = 5
-            for (i in 1..steps) {
-                val ratio = i.toDouble() / steps
-                val currX = (startAwtX + (endAwtX - startAwtX) * ratio).toInt()
-                val currY = (startAwtY + (endAwtY - startAwtY) * ratio).toInt()
-                cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_DRAGGED, System.currentTimeMillis(), modifiers, currX, currY, 0, false, MouseEvent.NOBUTTON))
-                try { Thread.sleep(20) } catch(e: Exception) {}
+                cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, endAwtX, endAwtY, 1, false, java.awt.event.MouseEvent.BUTTON1))
             }
-            
-            cefBrowser.sendMouseEvent(MouseEvent(comp, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, endAwtX, endAwtY, 1, false, MouseEvent.BUTTON1))
+        }
+
+        resolveAwtCoordinates(startX, startY) { awtX, awtY, comp ->
+            startAwtX = awtX; startAwtY = awtY; targetComp = comp; resolveCount++; onResolved()
+        }
+        resolveAwtCoordinates(endX, endY) { awtX, awtY, comp ->
+            endAwtX = awtX; endAwtY = awtY; targetComp = comp; resolveCount++; onResolved()
         }
     }
 

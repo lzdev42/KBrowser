@@ -12,18 +12,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class KBCefJSQuery private constructor(
     private val myBrowser: KBCefBrowserBase,
-    private val myFunc: JSQueryFunc
+    val myFunc: JSQueryFunc
 ) : KBCefDisposable {
     private val myDisposeHelper = AtomicBoolean(false)
     private val myHandlerMap = Collections.synchronizedMap(HashMap<((String) -> Response), CefMessageRouterHandler>())
 
     class JSQueryFunc(client: KBCefClient, index: Int) {
-        val myFuncName = "cefQuery_${client.hashCode()}_slot_$index"
+        val myFuncName = "cefQuery_${client.hashCode().toString().replace("-", "_")}_slot_$index"
         val myRouter: CefMessageRouter
         init {
             val config = CefMessageRouter.CefMessageRouterConfig()
             config.jsQueryFunction = myFuncName
-            config.jsCancelFunction = "cefQuery_cancel_${client.hashCode()}_slot_$index"
+            config.jsCancelFunction = "cefQuery_cancel_${client.hashCode().toString().replace("-", "_")}_slot_$index"
             myRouter = CefMessageRouter.create(config)
             client.cefClient.addMessageRouter(myRouter)
         }
@@ -34,7 +34,12 @@ class KBCefJSQuery private constructor(
     }
 
     fun inject(script: String): String = """
-        window.${myFunc.myFuncName}({ request: '' + ($script), onSuccess: function(r){}, onFailure: function(c,m){} });
+        try {
+            var _kb_res = String($script);
+            window.${myFunc.myFuncName}({ request: _kb_res, onSuccess: function(r){}, onFailure: function(c,m){} });
+        } catch (e) {
+            window.${myFunc.myFuncName}({ request: 'KB_JS_ERROR: ' + (e.stack || e.message || e), onSuccess: function(r){}, onFailure: function(c,m){} });
+        }
     """.trimIndent()
 
     fun addHandler(handler: (String) -> Response) {

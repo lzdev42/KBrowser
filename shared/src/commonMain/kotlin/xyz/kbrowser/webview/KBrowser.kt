@@ -10,7 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 object KBrowser {
-    var config: BrowserConfig = BrowserConfig()
+    lateinit var config: BrowserConfig
         private set
 
     private val _pages = MutableStateFlow<List<KBPage>>(emptyList())
@@ -21,8 +21,12 @@ object KBrowser {
     }
 
     suspend fun newPage(url: String? = null, profile: KBProfile? = null): KBPage {
+        if (!::config.isInitialized) {
+            throw IllegalStateException("KBrowser must be configured with BrowserConfig before use")
+        }
+        val actualProfile = profile ?: KBProfile("default", config.storageDir)
         val webView = withContext(Dispatchers.Main) {
-            createHeadlessWebView(null, profile)
+            createHeadlessWebView(null, actualProfile)
         }
         val page = KBPage(webView)
         _pages.update { it + page }

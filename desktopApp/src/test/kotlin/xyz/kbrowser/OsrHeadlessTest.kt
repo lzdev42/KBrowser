@@ -12,6 +12,8 @@ fun main() {
     System.setProperty("jcef.chrome.runtime.enabled", "false")
     println("====== OSR 无头渲染测试 ======")
 
+    val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
+    xyz.kbrowser.webview.KBrowser.configure(xyz.kbrowser.webview.BrowserConfig(storageDir = storageDir))
     initializeKBrowser()
 
     SwingUtilities.invokeLater {

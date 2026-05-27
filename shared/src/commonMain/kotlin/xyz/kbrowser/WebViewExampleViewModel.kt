@@ -90,7 +90,7 @@ class WebViewExampleViewModel : ViewModel() {
                 // 创建一个用于示例的独立 session 标签页
                 val newPage = KBrowser.newPage(
                     url = null, // 稍后手动加载
-                    profile = KBProfile("webview_example_session")
+                    profile = KBProfile("webview_example_session", KBrowser.config.storageDir)
                 )
                 _state.update { it.copy(page = newPage) }
                 
