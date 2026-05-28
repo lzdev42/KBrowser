@@ -71,6 +71,17 @@ internal expect suspend fun performClickByCoordinates(
     y: Int
 )
 
+/**
+ * 直接操作 DOM 节点触发点击，完全绕过坐标和遮挡问题。
+ * Android/iOS 通过 window.__kb_element_map 查找节点并调用 .click()；
+ * JVM 通过 CDP DOM.resolveNode + Runtime.callFunctionOn 实现。
+ * 返回 true 表示成功，false 表示节点未找到或操作失败。
+ */
+internal expect suspend fun performClickDomByRefId(
+    webView: KBWebView,
+    refid: String
+): Boolean
+
 internal expect suspend fun performHoverByCoordinates(
     webView: KBWebView,
     x: Int,

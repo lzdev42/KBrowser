@@ -143,11 +143,15 @@ These two extension functions are pure Kotlin computations. They execute in the 
 
 Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNotFoundException` if the refid does not exist.
 
+The same `refid` from `AxNode` supports two click strategies — developers choose based on their needs:
+
 | Method | Description |
 |------|------|
-| `suspend click(refid: String)` | Resolves coordinates from the cache and dispatches physical click via CDP. |
+| `suspend click(refid: String)` | **Coordinate click**: resolves `centerX`/`centerY` from cache and dispatches a physical click via CDP. May fail if the element is covered by an overlay. |
+| `suspend clickDom(refid: String)` | **DOM-direct click**: operates on the DOM node directly, bypassing coordinate hit-testing entirely. On JVM: CDP `DOM.resolveNode` + `Runtime.callFunctionOn` (no JS injection, CSP-safe). On Android/iOS: `__kb_element_map.get(refid).click()` via privileged JS context. Falls back to coordinate click if the DOM operation fails. |
 | `suspend hover(refid: String)` | Resolves coordinates from the cache and dispatches hover event via CDP. |
 | `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | Resolves coordinates from the cache and dispatches wheel event via CDP. |
+| `suspend fill(refid: String, text: String)` | `clickDom(refid)` → 100ms delay → `type(text)`. Focuses the element via DOM-direct click, then types using native key events. |
 
 ### Interaction (Coordinates-based, CSS document pixels)
 
@@ -165,7 +169,7 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 | `suspend press(key: KeyboardKey)` | Presses and releases a single key. |
 | `suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)` | Key combination, e.g. `Ctrl+A`. |
 | `suspend typeChar(char: Char)` | Types a single character. |
-| `suspend type(text: String)` | Types text character-by-character with a random delay of 30~150ms to simulate human typing. |
+| `suspend type(text: String)` | Types text character-by-character with a random delay of 30~150ms to simulate human typing. No focus management — caller is responsible for focusing the target element first. |
 
 ### Locator Factory
 
@@ -194,9 +198,11 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 
 ### Interaction Methods
 
+On JVM, all click-based methods automatically prefer DOM-direct click (via `backendNodeId` from CDP) over coordinate click when the element is found. Android/iOS fall back to coordinate click.
+
 | Method | Description |
 |------|------|
-| `suspend click()` | Locates the element and sends physical click to its center coordinates. |
+| `suspend click()` | Locates the element and clicks it. Uses DOM-direct click on JVM (bypasses occlusion); coordinate click on Android/iOS. |
 | `suspend hover()` | Locates the element and dispatches a hover event. |
 | `suspend scroll(deltaX, deltaY)` | Locates the element and dispatches a wheel scroll event. |
 | `suspend fill(value: String)` | Focuses and sets the input value via JS (fast fill). |
@@ -453,7 +459,17 @@ suspend fun runAutomation() {
         // Find the first link and click it
         val firstLink = viewportTree.nodes.firstOrNull { it.role == "link" }
         if (firstLink != null) {
+            // Option A: coordinate click (may fail if covered by overlay)
             page.click(firstLink.refid)
+
+            // Option B: DOM-direct click (bypasses occlusion, recommended)
+            // page.clickDom(firstLink.refid)
+        }
+
+        // Find an input and fill it in one call (DOM-direct click + native typing)
+        val searchInput = viewportTree.nodes.firstOrNull { it.role == "textbox" }
+        if (searchInput != null) {
+            page.fill(searchInput.refid, "search terms")
         }
 
         // Take a screenshot (CSS pixels, aligned with coordinate system)

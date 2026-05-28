@@ -89,7 +89,6 @@ object KBCefAxTreeFetcher {
 
         // ── 4. 批量获取坐标 + 元数据 (DOM.getBoxModel + DOM.describeNode, 纯 CDP 无 JS) ──
         val resultNodes = mutableListOf<AxNode>()
-        var refCounter = 0
 
         for (batch in semNodes.chunked(BATCH_SIZE)) {
             // 并发发送本批所有 DOM.getBoxModel 和 DOM.describeNode 请求
@@ -137,7 +136,7 @@ object KBCefAxTreeFetcher {
 
                 resultNodes.add(
                     AxNode(
-                        refid     = "r${refCounter++}",
+                        refid     = "r${sem.backendNodeId}",
                         tagName   = meta.tagName,
                         role      = sem.role,
                         id        = meta.id,

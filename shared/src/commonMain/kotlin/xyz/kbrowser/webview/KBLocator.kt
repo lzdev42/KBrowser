@@ -96,9 +96,23 @@ data class KBLocator(
 
     // ===== Interaction Operations =====
 
+    /**
+     * 根据 LocateResult 是否携带 backendNodeId 选择点击方式：
+     * - 有 backendNodeId：DOM 直接点击（绕过遮挡）
+     * - 无：坐标点击（fallback）
+     */
+    private suspend fun clickNode(node: LocateResult) {
+        val id = node.backendNodeId
+        if (id != null) {
+            page.clickDomByBackendNodeId(id, node.centerX, node.centerY)
+        } else {
+            page.clickByCoordinates(node.centerX, node.centerY)
+        }
+    }
+
     suspend fun click() {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.clickByCoordinates(node.centerX, node.centerY)
+        clickNode(node)
     }
 
     suspend fun hover() {
@@ -113,8 +127,8 @@ data class KBLocator(
 
     suspend fun fill(value: String) {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        // 1. Click to focus
-        page.clickByCoordinates(node.centerX, node.centerY)
+        // 1. Click to focus (DOM-direct if possible)
+        clickNode(node)
         // 2. Wait briefly
         delay(100)
         // 3. Set value using native event emulation
@@ -133,14 +147,14 @@ data class KBLocator(
      * This is the highest anti-detection input method — no JS injection, no DOM modification.
      *
      * Steps:
-     * 1. Click to focus the element (physical coordinate click)
+     * 1. Click to focus the element (DOM-direct if possible, otherwise coordinate click)
      * 2. Clear existing value: Ctrl+A → Delete (native key events)
      * 3. Type each character via native key event API with random delay
      */
     suspend fun type(text: String) {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         // 1. Click to focus
-        page.clickByCoordinates(node.centerX, node.centerY)
+        clickNode(node)
         delay(100)
         // 2. Clear existing value: Ctrl+A → Delete
         page.pressKeyCombination(KeyboardKey.CONTROL, KeyboardKey.A)
@@ -156,18 +170,18 @@ data class KBLocator(
 
     suspend fun focus() {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.clickByCoordinates(node.centerX, node.centerY)
+        clickNode(node)
     }
 
     suspend fun check() {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.clickByCoordinates(node.centerX, node.centerY)
+        clickNode(node)
     }
 
     suspend fun selectOption(value: String) {
         // 1. Click to open dropdown
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.clickByCoordinates(node.centerX, node.centerY)
+        clickNode(node)
         delay(200)
         // 2. Locate and click option by coordinates
         val escapedValue = escapeJs(value)
@@ -195,7 +209,7 @@ data class KBLocator(
      */
     suspend fun press(key: KeyboardKey) {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.clickByCoordinates(node.centerX, node.centerY)
+        clickNode(node)
         delay(50)
         page.press(key)
     }
@@ -207,7 +221,7 @@ data class KBLocator(
      */
     suspend fun pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey) {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.clickByCoordinates(node.centerX, node.centerY)
+        clickNode(node)
         delay(50)
         page.pressKeyCombination(modifier, key)
     }

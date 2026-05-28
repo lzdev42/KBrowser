@@ -348,7 +348,8 @@ object KBCefLocatorImpl {
                 boxJson,
                 tagName = "",
                 role = node.role,
-                text = node.name
+                text = node.name,
+                backendNodeId = node.backendNodeId
             ) ?: continue
 
             results.add(locateResult)
@@ -359,19 +360,38 @@ object KBCefLocatorImpl {
     /**
      * 通过 nodeId 获取 DOM.getBoxModel 并构建 LocateResult。
      * 注意：CSS/XPath 查询返回的是 nodeId，不是 backendNodeId。
+     * 额外调用 DOM.describeNode 拿到 backendNodeId，用于后续 DOM 直接操作。
      */
     private fun getBoxModelByNodeId(
         devTools: org.cef.browser.CefDevToolsClient,
         nodeId: Int
     ): LocateResult? {
+        val boxFuture = devTools.executeDevToolsMethod(
+            "DOM.getBoxModel",
+            """{"nodeId":$nodeId}"""
+        )
+        val describeFuture = devTools.executeDevToolsMethod(
+            "DOM.describeNode",
+            """{"nodeId":$nodeId}"""
+        )
+
         val boxJson = try {
-            devTools.executeDevToolsMethod(
-                "DOM.getBoxModel",
-                """{"nodeId":$nodeId}"""
-            ).get(CDP_CALL_TIMEOUT_SEC, TimeUnit.SECONDS)
+            boxFuture.get(CDP_CALL_TIMEOUT_SEC, TimeUnit.SECONDS)
         } catch (_: Exception) { return null } ?: return null
 
-        return parseBoxModelToLocateResult(boxJson)
+        // 从 DOM.describeNode 提取 backendNodeId
+        val backendNodeId: Int? = try {
+            val descJson = describeFuture.get(CDP_CALL_TIMEOUT_SEC, TimeUnit.SECONDS)
+            if (descJson != null) {
+                val root = Json.parseToJsonElement(descJson).jsonObject
+                val nodeObj = root["node"]?.jsonObject
+                    ?: root["result"]?.jsonObject?.get("node")?.jsonObject
+                    ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("node")?.jsonObject
+                nodeObj?.get("backendNodeId")?.jsonPrimitive?.intOrNull
+            } else null
+        } catch (_: Exception) { null }
+
+        return parseBoxModelToLocateResult(boxJson, backendNodeId = backendNodeId)
     }
 
     /**
@@ -382,7 +402,8 @@ object KBCefLocatorImpl {
         boxJson: String,
         tagName: String = "",
         role: String = "",
-        text: String = ""
+        text: String = "",
+        backendNodeId: Int? = null
     ): LocateResult? {
         return try {
             val boxRoot = Json.parseToJsonElement(boxJson).jsonObject
@@ -416,7 +437,8 @@ object KBCefLocatorImpl {
                 role = role,
                 text = text,
                 isVisible = isVisible,
-                attributes = emptyMap()
+                attributes = emptyMap(),
+                backendNodeId = backendNodeId
             )
         } catch (_: Exception) {
             null

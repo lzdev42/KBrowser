@@ -103,6 +103,31 @@ class KBPage internal constructor(val webView: KBWebView) {
     }
 
     /**
+     * Clicks the element with the specified [refid] by directly operating on the DOM node,
+     * bypassing coordinate-based hit-testing entirely. This avoids failures caused by
+     * overlapping elements or invisible covers.
+     *
+     * On JVM: uses CDP DOM.resolveNode + Runtime.callFunctionOn (no JS injection, CSP-safe).
+     * On Android/iOS: uses window.__kb_element_map to retrieve the node and calls .click()
+     * via evaluateJavascript (privileged context, not affected by page CSP).
+     *
+     * Falls back to coordinate-based click if the DOM operation fails or the node map
+     * is unavailable (e.g. getRawAxTree has not been called yet on Android/iOS).
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun clickDom(refid: String) {
+        // Ensure the node exists in cache (throws if not)
+        val node = nodeCacheLock.withLock { nodeCache[refid] }
+            ?: throw ElementNotFoundException(refid)
+        val success = performClickDomByRefId(webView, refid)
+        if (!success) {
+            // Fallback: coordinate-based click
+            clickByCoordinates(node.centerX, node.centerY)
+        }
+    }
+
+    /**
      * Hovers over the element with the specified [refid] using coordinate-based interaction.
      *
      * @throws ElementNotFoundException if [refid] is not found in the cache
@@ -126,6 +151,19 @@ class KBPage internal constructor(val webView: KBWebView) {
 
     suspend fun clickByCoordinates(x: Int, y: Int) {
         performClickByCoordinates(webView, x, y)
+    }
+
+    /**
+     * Clicks a DOM node directly using its [backendNodeId] (JVM/CDP) or falls back to
+     * coordinates on Android/iOS. Used internally by [KBLocator] when a [LocateResult]
+     * carries a backendNodeId from the CDP path.
+     */
+    internal suspend fun clickDomByBackendNodeId(backendNodeId: Int, fallbackX: Int, fallbackY: Int) {
+        val refid = "r$backendNodeId"
+        val success = performClickDomByRefId(webView, refid)
+        if (!success) {
+            clickByCoordinates(fallbackX, fallbackY)
+        }
     }
 
     suspend fun hoverByCoordinates(x: Int, y: Int) {
@@ -159,6 +197,18 @@ class KBPage internal constructor(val webView: KBWebView) {
             typeChar(char)
             kotlinx.coroutines.delay(Random.nextLong(30, 150))
         }
+    }
+
+    /**
+     * Clicks the element identified by [refid] to focus it, then types [text] using
+     * native key events. Uses [clickDom] to avoid occlusion issues.
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun fill(refid: String, text: String) {
+        clickDom(refid)
+        kotlinx.coroutines.delay(100)
+        type(text)
     }
 
     // ===== KBLocator Factory Methods =====
