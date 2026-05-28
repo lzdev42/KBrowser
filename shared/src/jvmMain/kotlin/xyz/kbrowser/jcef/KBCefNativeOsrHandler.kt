@@ -251,6 +251,43 @@ class KBCefNativeOsrHandler(
         }
     }
 
+    /**
+     * Returns the current frame as a [BufferedImage] at physical pixel resolution.
+     *
+     * For the NativeRasterLoader path the frame lives in SharedMemory and is never
+     * copied into [myImage], so we materialise it here on demand.  For the CPU-
+     * fallback path [myImage] is already populated by [drawVolatileImage], so we
+     * delegate to the parent.
+     */
+    override fun getRenderedImage(): BufferedImage? {
+        val frame = myCurrentFrame
+        if (frame == null || !useNativeRasterLoader()) {
+            // CPU-fallback path: myImage is kept up-to-date by drawVolatileImage
+            return super.getRenderedImage()
+        }
+
+        return try {
+            val frameClass = frame.javaClass
+            frameClass.getMethod("lock").apply { isAccessible = true }.invoke(frame)
+
+            val width  = frameClass.getMethod("getWidth").apply  { isAccessible = true }.invoke(frame) as Int
+            val height = frameClass.getMethod("getHeight").apply { isAccessible = true }.invoke(frame) as Int
+            if (width <= 0 || height <= 0) return super.getRenderedImage()
+
+            val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE)
+            loadBuffered(image, frame)
+            image
+        } catch (e: Exception) {
+            e.printStackTrace()
+            super.getRenderedImage()
+        } finally {
+            try {
+                val frameClass = frame.javaClass
+                frameClass.getMethod("unlock").apply { isAccessible = true }.invoke(frame)
+            } catch (_: Exception) {}
+        }
+    }
+
     override fun getColorAt(x: Int, y: Int): Color? {
         val frame = myCurrentFrame
         if (frame == null || !useNativeRasterLoader()) {

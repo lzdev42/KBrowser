@@ -35,6 +35,9 @@ interface KBWebView {
 
     // 释放资源
     fun destroy()
+
+    // 网页截图
+    suspend fun takeScreenshot(): ByteArray?
 }
 
 @Composable

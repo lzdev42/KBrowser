@@ -164,6 +164,48 @@ class AndroidWebView(
         webView?.destroy()
         webView = null
     }
+
+    override suspend fun takeScreenshot(): ByteArray? {
+        val w = webView ?: return null
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            val width = w.width
+            val height = w.height
+            if (width <= 0 || height <= 0) return@withContext null
+
+            val density = w.context.resources.displayMetrics.density
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            w.draw(canvas)
+
+            val targetBitmap = if (density > 1.0f) {
+                val targetW = (width / density).toInt()
+                val targetH = (height / density).toInt()
+                if (targetW > 0 && targetH > 0) {
+                    val scaled = android.graphics.Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+                    if (scaled != bitmap) {
+                        bitmap.recycle()
+                    }
+                    scaled
+                } else {
+                    bitmap
+                }
+            } else {
+                bitmap
+            }
+
+            val baos = java.io.ByteArrayOutputStream()
+            try {
+                targetBitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+                if (targetBitmap != bitmap) {
+                    targetBitmap.recycle()
+                }
+                baos.toByteArray()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                null
+            }
+        }
+    }
 }
 
 @Composable
@@ -419,3 +461,13 @@ private fun charToAndroidKeyCode(char: Char): Int = when (char) {
 }
 
 internal actual fun performGlobalShutdown() {}
+
+internal actual suspend fun fetchAxTreeNative(webView: KBWebView): AxTreeData? = null
+
+internal actual suspend fun findElementsNative(
+    webView: KBWebView,
+    selector: String,
+    selectorType: KBSelectorType,
+    name: String?,
+    exact: Boolean
+): List<LocateResult>? = null  // Android uses JS fallback

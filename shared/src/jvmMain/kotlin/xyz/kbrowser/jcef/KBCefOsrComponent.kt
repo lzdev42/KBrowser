@@ -74,6 +74,8 @@ class KBCefOsrComponent : JPanel() {
         }
     }
 
+    fun getRenderHandler(): KBCefOsrHandler? = myRenderHandler
+
     fun setBrowser(browser: CefBrowser) {
         myBrowser = browser
     }
@@ -109,7 +111,27 @@ class KBCefOsrComponent : JPanel() {
             handler.startResizePusher(browser, true)
         }.also { it.isRepeats = false }
 
+        // 在 createImmediately() 之前主动读取当前屏幕的 pixelDensity，
+        // 避免 JCEF 以默认 density=1.0 渲染导致首次截图尺寸不完整。
+        // （正常情况下 graphicsConfiguration 事件会在组件显示后触发，但时序上晚于 createImmediately）
+        try {
+            val gc = graphicsConfiguration
+            if (gc != null && !myScaleInitialized.get()) {
+                val density = gc.defaultTransform.scaleX
+                myRenderHandler?.setScreenInfo(density, 1.0)
+                myScaleInitialized.set(true)
+            }
+        } catch (_: Exception) {}
+
         myBrowser?.createImmediately()
+
+        // createImmediately 后延迟触发一次 wasResized，确保 JCEF 以正确的组件尺寸渲染首帧
+        SwingUtilities.invokeLater {
+            val browser = myBrowser ?: return@invokeLater
+            val handler = myRenderHandler ?: return@invokeLater
+            browser.wasResized(0, 0)
+            handler.startResizePusher(browser, true)
+        }
     }
 
     override fun removeNotify() {

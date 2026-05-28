@@ -11,12 +11,14 @@ import kotlinx.coroutines.launch
 import xyz.kbrowser.webview.KBPage
 import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.KBProfile
+import xyz.kbrowser.webview.AxTreeData
 import xyz.kbrowser.webview.getCleanedAxTree
 
 data class BrowserViewState(
     val page: KBPage? = null,
     val logs: List<String> = listOf("自动化工具初始化完成"),
     val snapshotText: String = "",
+    val snapshotSearchQuery: String = "",
     val selectorsText: String = "",
     val htmlPreview: String = "",
     val navigateUrlInput: String = "https://www.bing.com/",
@@ -30,12 +32,15 @@ data class BrowserViewState(
     val locatorSelectorType: String = "CSS",
     val locatorRoleName: String = "",
     val locatorValue: String = "",
-    val customRefId: String = ""
+    val customRefId: String = "",
+    val screenshotBytes: ByteArray? = null,
+    val screenshotAxTree: AxTreeData? = null   // 截图时同步抓的 AXTree，用于叠加框框
 )
 
 sealed interface BrowserIntent {
     data class ChangeNavigateUrl(val url: String) : BrowserIntent
     data class ChangeCustomSelector(val selector: String) : BrowserIntent
+    data class ChangeSnapshotSearch(val query: String) : BrowserIntent
     data class ChangeCoordX(val x: String) : BrowserIntent
     data class ChangeCoordY(val y: String) : BrowserIntent
     data class ChangeTab(val tab: Int) : BrowserIntent
@@ -69,9 +74,13 @@ sealed interface BrowserIntent {
     object LocatorFocus : BrowserIntent
     object LocatorCheck : BrowserIntent
     object LocatorFill : BrowserIntent
+    object OverlayRawAxTree : BrowserIntent      // 画原始 AXTree 所有节点的框
+    object OverlayCleanedAxTree : BrowserIntent  // 画清洗后 AXTree 节点的框
+    object ClearOverlay : BrowserIntent          // 清除所有框
     object LocatorType : BrowserIntent
     object LocatorGetText : BrowserIntent
     object LocatorIsVisible : BrowserIntent
+    object TakeScreenshot : BrowserIntent
 }
 
 class BrowserViewModel : ViewModel() {
@@ -106,6 +115,9 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.ChangeCustomSelector -> {
                 _state.update { it.copy(customSelector = intent.selector) }
+            }
+            is BrowserIntent.ChangeSnapshotSearch -> {
+                _state.update { it.copy(snapshotSearchQuery = intent.query) }
             }
             is BrowserIntent.ChangeCoordX -> {
                 _state.update { it.copy(coordX = intent.x) }
@@ -158,19 +170,26 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.FetchSemanticSnapshot -> {
                 val page = _state.value.page ?: return
-                log("开始抓取 Aria 语义树（全量DOM）...")
+                log("开始抓取 Aria 语义树（原始，不清洗）...")
                 viewModelScope.launch {
                     try {
                         val rawAxTree = page.getRawAxTree()
-                        val cleanedTree = rawAxTree.getCleanedAxTree()
                         log("诊断: URL=${rawAxTree.url}, 总元素=${rawAxTree.totalElements}, 可见=${rawAxTree.visibleElements}")
-                        
+
+                        // ── 诊断 print：清洗后完整 JSON（给 AI 看的格式）──────
+                        val cleaned = rawAxTree.getCleanedAxTree()
                         val jsonParser = kotlinx.serialization.json.Json { prettyPrint = true }
-                        val jsonStr = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), cleanedTree)
+                        val cleanedJson = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), cleaned)
+                        println("========== CLEANED AXTREE JSON (${cleaned.nodes.size} nodes) ==========")
+                        println(cleanedJson)
+                        println("========== END ==========")
+                        // ─────────────────────────────────────────────────────
+                        
+                        val jsonStr = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), cleaned)
                         val formattedYaml = formatJsonLikeYaml(jsonStr)
                         
                         _state.update { it.copy(snapshotText = formattedYaml) }
-                        log("抓取 Aria 语义树成功！保留节点数: ${cleanedTree.nodes.size}")
+                        log("抓取完成！原始:${rawAxTree.nodes.size} 清洗后:${cleaned.nodes.size}")
                     } catch (e: Exception) {
                         log("抓取 Aria 语义树失败: ${e.message}")
                     }
@@ -236,12 +255,17 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.ClickCoordinates -> {
                 val page = _state.value.page ?: return
+                println("[CHAIN-01] VM.ClickCoordinates received x=${intent.x} y=${intent.y} page=$page")
                 log("执行原生坐标虚拟点击: (${intent.x}, ${intent.y})")
                 viewModelScope.launch {
                     try {
+                        println("[CHAIN-02] VM about to call page.clickByCoordinates")
                         page.clickByCoordinates(intent.x, intent.y)
+                        println("[CHAIN-03] VM page.clickByCoordinates returned")
                         log("坐标虚拟点击指令发送成功！")
                     } catch (e: Exception) {
+                        println("[CHAIN-ERR] VM exception: ${e.message}")
+                        e.printStackTrace()
                         log("坐标虚拟点击失败: ${e.message}")
                     }
                 }
@@ -265,12 +289,11 @@ class BrowserViewModel : ViewModel() {
                     try {
                         log("[步骤 1] 正在提取 Aria 语义快照树...")
                         val rawAxTree = page.getRawAxTree()
-                        val cleanedTree = rawAxTree.getCleanedAxTree()
                         val jsonParser = kotlinx.serialization.json.Json { prettyPrint = true }
-                        val jsonStr = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), cleanedTree)
+                        val jsonStr = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), rawAxTree)
                         val snapshot = formatJsonLikeYaml(jsonStr)
                         
-                        log("[步骤 1] 语义树提取成功")
+                        log("[步骤 1] 语义树提取成功（原始节点数: ${rawAxTree.nodes.size}）")
 
                         log("[步骤 2] 正在抓取 CSS 选择器...")
                         val nodesWithSelector = rawAxTree.nodes.filter { it.id.isNotEmpty() || it.className.isNotEmpty() }
@@ -569,7 +592,102 @@ class BrowserViewModel : ViewModel() {
                     }
                 }
             }
+            BrowserIntent.TakeScreenshot -> {
+                val page = _state.value.page ?: return
+                log("正在捕获网页截图（同步抓取 AXTree 用于叠加框框）...")
+                viewModelScope.launch {
+                    try {
+                        // 并行抓截图和 AXTree
+                        val bytes = page.screenshot()
+                        val axTree = try { page.getRawAxTree() } catch (e: Exception) { null }
+                        if (bytes != null) {
+                            _state.update { it.copy(screenshotBytes = bytes, screenshotAxTree = axTree) }
+                            log("截图成功！大小: ${bytes.size} 字节，AXTree 节点数: ${axTree?.nodes?.size ?: 0}")
+                            xyz.kbrowser.webview.showScreenshotPreview(bytes)
+                        } else {
+                            log("截图失败：未获取到图像字节")
+                        }
+                    } catch (e: Exception) {
+                        log("截图失败，发生异常: ${e.message}")
+                    }
+                }
+            }
+            BrowserIntent.OverlayRawAxTree -> {
+                val page = _state.value.page ?: return
+                log("正在抓取原始 AXTree 并画框...")
+                viewModelScope.launch {
+                    try {
+                        val axTree = page.getRawAxTree()
+                        log("原始节点数: ${axTree.nodes.size}，注入画框 JS...")
+                        page.evaluateJavascript(buildOverlayJs(axTree.nodes, cleaned = false))
+                        log("✅ 原始 AXTree 框框已画出（蓝色=可见，灰色=不可见）")
+                    } catch (e: Exception) {
+                        log("画框失败: ${e.message}")
+                    }
+                }
+            }
+            BrowserIntent.OverlayCleanedAxTree -> {
+                val page = _state.value.page ?: return
+                log("正在抓取清洗后 AXTree 并画框...")
+                viewModelScope.launch {
+                    try {
+                        val axTree = page.getRawAxTree().getCleanedAxTree()
+                        log("清洗后节点数: ${axTree.nodes.size}，注入画框 JS...")
+                        page.evaluateJavascript(buildOverlayJs(axTree.nodes, cleaned = true))
+                        log("✅ 清洗后 AXTree 框框已画出（绿色=可见，灰色=不可见）")
+                    } catch (e: Exception) {
+                        log("画框失败: ${e.message}")
+                    }
+                }
+            }
+            BrowserIntent.ClearOverlay -> {
+                val page = _state.value.page ?: return
+                viewModelScope.launch {
+                    try {
+                        page.evaluateJavascript("""
+                            (function(){
+                                var el = document.getElementById('__kb_overlay__');
+                                if (el) el.remove();
+                            })()
+                        """.trimIndent())
+                        log("框框已清除")
+                    } catch (e: Exception) {
+                        log("清除失败: ${e.message}")
+                    }
+                }
+            }
         }
+    }
+
+    private fun buildOverlayJs(nodes: List<xyz.kbrowser.webview.AxNode>, cleaned: Boolean): String {
+        // 每个节点生成一个绝对定位的 div 框
+        val color = if (cleaned) "rgba(0,200,80,0.5)" else "rgba(0,120,255,0.5)"
+        val labelBg = if (cleaned) "rgba(0,160,60,0.85)" else "rgba(0,80,200,0.85)"
+        val rects = nodes.filter { it.isVisible && it.width > 0 && it.height > 0 }
+            .joinToString("\n") { n ->
+                val label = "${n.refid} ${n.role} ${n.text.take(12).replace("'", "\\'")}".trim()
+                """  addBox(${n.x},${n.y},${n.width},${n.height},'${label}');"""
+            }
+        return """
+(function(){
+  var old = document.getElementById('__kb_overlay__');
+  if (old) old.remove();
+  var layer = document.createElement('div');
+  layer.id = '__kb_overlay__';
+  layer.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483647;';
+  document.documentElement.appendChild(layer);
+  function addBox(x,y,w,h,label){
+    var d = document.createElement('div');
+    d.style.cssText = 'position:absolute;left:'+x+'px;top:'+y+'px;width:'+w+'px;height:'+h+'px;outline:1.5px solid ${color};box-sizing:border-box;';
+    var t = document.createElement('span');
+    t.textContent = label;
+    t.style.cssText = 'position:absolute;top:0;left:0;font-size:9px;line-height:1.2;background:${labelBg};color:#fff;padding:0 2px;max-width:'+w+'px;overflow:hidden;white-space:nowrap;pointer-events:none;';
+    d.appendChild(t);
+    layer.appendChild(d);
+  }
+$rects
+})()
+        """.trimIndent()
     }
 
     private fun createLocator(page: KBPage, selector: String, typeStr: String, roleName: String): xyz.kbrowser.webview.KBLocator {

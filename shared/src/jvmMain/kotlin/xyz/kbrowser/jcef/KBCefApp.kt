@@ -60,10 +60,13 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
                 val method = config.javaClass.getMethod("isRemoteEnabled")
                 method.invoke(config) as Boolean
             } catch (e: Exception) {
-                System.getProperty("jcef.remote.enabled") == "true"
+                // JCefAppConfig 没有 isRemoteEnabled 方法时，默认开启 remote
+                // Remote 模式是零拷贝 OSR 的前提条件（SharedMemory + NativeRasterLoader）
+                true
             }
-            CefApp.setIsRemoteEnabled(isRemote)
-            println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: $isRemote")
+            // 强制启用 Remote 模式：零拷贝 OSR 必须走 cef_server 进程
+            CefApp.setIsRemoteEnabled(true)
+            println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: true (config reported: $isRemote)")
         } catch (e: Throwable) {
             println("[KBCefApp] Failed to set remote mode: ${e.message}")
         }

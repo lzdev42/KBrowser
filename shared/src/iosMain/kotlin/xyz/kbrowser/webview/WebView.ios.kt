@@ -13,6 +13,8 @@ import platform.Foundation.*
 import platform.darwin.NSObject
 import kotlinx.cinterop.readValue
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.*
+import kotlin.coroutines.resume
 
 class IosWebView(
     private val initialUrl: String?,
@@ -197,6 +199,48 @@ class IosWebView(
 
     override fun destroy() {
         webView = null
+    }
+
+    @OptIn(ExperimentalForeignApi::class)
+    override suspend fun takeScreenshot(): ByteArray? {
+        val w = webView ?: return null
+        return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            val config = platform.WebKit.WKSnapshotConfiguration()
+            w.takeSnapshotWithConfiguration(config) { image, error ->
+                if (error != null || image == null) {
+                    if (continuation.isActive) {
+                        continuation.resume(null)
+                    }
+                    return@takeSnapshotWithConfiguration
+                }
+                
+                val targetImage = if (image.scale > 1.0) {
+                    val size = image.size
+                    platform.UIKit.UIGraphicsBeginImageContextWithOptions(size, false, 1.0)
+                    image.drawInRect(platform.CoreGraphics.CGRectMake(0.0, 0.0, size.useContents { width }, size.useContents { height }))
+                    val scaled = platform.UIKit.UIGraphicsGetImageFromCurrentImageContext()
+                    platform.UIKit.UIGraphicsEndImageContext()
+                    scaled ?: image
+                } else {
+                    image
+                }
+
+                val nsData = platform.UIKit.UIImagePNGRepresentation(targetImage)
+                if (nsData != null) {
+                    val bytes = ByteArray(nsData.length.toInt())
+                    bytes.usePinned { pinned ->
+                        platform.posix.memcpy(pinned.addressOf(0), nsData.bytes, nsData.length)
+                    }
+                    if (continuation.isActive) {
+                        continuation.resume(bytes)
+                    }
+                } else {
+                    if (continuation.isActive) {
+                        continuation.resume(null)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -482,3 +526,13 @@ private fun keyToJsKeyCode(key: KeyboardKey): String = when (key) {
 }
 
 internal actual fun performGlobalShutdown() {}
+
+internal actual suspend fun fetchAxTreeNative(webView: KBWebView): AxTreeData? = null
+
+internal actual suspend fun findElementsNative(
+    webView: KBWebView,
+    selector: String,
+    selectorType: KBSelectorType,
+    name: String?,
+    exact: Boolean
+): List<LocateResult>? = null  // iOS uses JS fallback

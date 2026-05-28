@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -411,10 +412,11 @@ fun BrowserExampleScreen(
 
                 // Tab Row
                 PrimaryTabRow(selectedTabIndex = state.selectedTab, containerColor = Color(0xFF16161A), contentColor = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth()) {
-                    Tab(selected = state.selectedTab == 0, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(0)) }, text = { Text("控制", fontSize = 13.sp) })
-                    Tab(selected = state.selectedTab == 1, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(1)) }, text = { Text("Aria", fontSize = 13.sp) })
-                    Tab(selected = state.selectedTab == 2, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(2)) }, text = { Text("选择器", fontSize = 13.sp) })
-                    Tab(selected = state.selectedTab == 3, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(3)) }, text = { Text("HTML", fontSize = 13.sp) })
+                    Tab(selected = state.selectedTab == 0, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(0)) }, text = { Text("控制", fontSize = 12.sp) })
+                    Tab(selected = state.selectedTab == 1, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(1)) }, text = { Text("Aria", fontSize = 12.sp) })
+                    Tab(selected = state.selectedTab == 2, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(2)) }, text = { Text("选择器", fontSize = 12.sp) })
+                    Tab(selected = state.selectedTab == 3, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(3)) }, text = { Text("HTML", fontSize = 12.sp) })
+                    Tab(selected = state.selectedTab == 4, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(4)) }, text = { Text("截图", fontSize = 12.sp) })
                 }
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -431,6 +433,36 @@ fun BrowserExampleScreen(
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Text("一键测试自动化链", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                                Button(
+                                    onClick = { viewModel.dispatch(BrowserIntent.TakeScreenshot) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9C27B0)),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("测试网页截图", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                                // AXTree 画框调试工具
+                                Text("AXTree 画框调试", color = Color(0xFF888894), fontSize = 11.sp)
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Button(
+                                        onClick = { viewModel.dispatch(BrowserIntent.OverlayRawAxTree) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+                                    ) { Text("原始框", fontSize = 11.sp, color = Color.White) }
+                                    Button(
+                                        onClick = { viewModel.dispatch(BrowserIntent.OverlayCleanedAxTree) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                                    ) { Text("清洗框", fontSize = 11.sp, color = Color.White) }
+                                    Button(
+                                        onClick = { viewModel.dispatch(BrowserIntent.ClearOverlay) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4A55))
+                                    ) { Text("清除", fontSize = 11.sp, color = Color.White) }
                                 }
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(onClick = { viewModel.dispatch(BrowserIntent.FetchHtml) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E2E36))) { Text("HTML", fontSize = 12.sp, color = Color.White) }
@@ -690,9 +722,10 @@ fun BrowserExampleScreen(
                                 }
                             }
                         }
-                        1 -> { DataView(state.snapshotText, "暂无Aria数据") }
+                        1 -> { SearchableDataView(state.snapshotText, state.snapshotSearchQuery, "暂无Aria数据", onQueryChange = { viewModel.dispatch(BrowserIntent.ChangeSnapshotSearch(it)) }) }
                         2 -> { DataView(state.selectorsText, "暂无选择器数据") }
                         3 -> { DataView(state.htmlPreview, "暂无HTML数据") }
+                        4 -> { ScreenshotPreview(state.screenshotBytes, state.screenshotAxTree) }
                     }
                 }
             }
@@ -1223,6 +1256,82 @@ private fun Modifier.fillPanel(): Modifier = this.then(
 )
 
 @Composable
+fun SearchableDataView(text: String, query: String, emptyMessage: String, onQueryChange: (String) -> Unit) {
+    val lines = remember(text) { if (text.isBlank()) emptyList() else text.lines() }
+    val q = query.lowercase().trim()
+    val matchIndices = remember(lines, q) {
+        if (q.isBlank()) emptyList()
+        else lines.indices.filter { lines[it].lowercase().contains(q) }
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(q) {
+        if (matchIndices.isNotEmpty()) listState.animateScrollToItem(matchIndices.first())
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                placeholder = { Text("搜索节点（role / text / refid / class...）", fontSize = 11.sp, color = Color(0xFF666672)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f).height(44.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = Color(0xFFE0E0E0), fontFamily = FontFamily.Monospace),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF6C63FF),
+                    unfocusedBorderColor = Color(0xFF3A3A4A),
+                    cursorColor = Color(0xFF6C63FF),
+                    focusedContainerColor = Color(0xFF1A1A22),
+                    unfocusedContainerColor = Color(0xFF1A1A22)
+                ),
+                shape = RoundedCornerShape(6.dp),
+                leadingIcon = { Text("🔍", fontSize = 14.sp) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(28.dp)) {
+                            Text("✕", fontSize = 12.sp, color = Color(0xFF888894))
+                        }
+                    }
+                }
+            )
+            if (q.isNotBlank()) {
+                Text(
+                    "${matchIndices.size}处",
+                    fontSize = 11.sp,
+                    color = if (matchIndices.isEmpty()) Color(0xFFE57373) else Color(0xFF81C784),
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+            }
+        }
+        Box(modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(Color(0xFF0F0F12)).padding(8.dp)) {
+            if (lines.isEmpty()) {
+                Text(emptyMessage, color = Color(0xFF888894), fontSize = 12.sp)
+            } else {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                    items(lines.size) { idx ->
+                        val line = lines[idx]
+                        val isMatch = q.isNotBlank() && line.lowercase().contains(q)
+                        Text(
+                            text = line,
+                            color = if (isMatch) Color(0xFFFFFFFF) else Color(0xFF81C784),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = if (isMatch)
+                                Modifier.fillMaxWidth().background(Color(0x336C63FF)).padding(horizontal = 2.dp)
+                            else
+                                Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun DataView(text: String, emptyMessage: String) {
     Box(modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(Color(0xFF0F0F12)).padding(8.dp)) {
         if (text.isBlank()) {
@@ -1230,6 +1339,119 @@ fun DataView(text: String, emptyMessage: String) {
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item { Text(text, color = Color(0xFF81C784), fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+            }
+        }
+    }
+}
+
+@Composable
+fun ScreenshotPreview(bytes: ByteArray?, axTree: xyz.kbrowser.webview.AxTreeData? = null) {
+    val bitmap = remember(bytes) {
+        if (bytes == null) null else {
+            try { makeImageBitmap(bytes) } catch (e: Exception) { null }
+        }
+    }
+
+    var showOverlay by remember { mutableStateOf(true) }
+    var onlyVisible by remember { mutableStateOf(true) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0F0F12))
+            .padding(8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            ) {
+                // 工具栏
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("截图: ${bitmap.width}×${bitmap.height}", color = Color(0xFF81C784), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    if (axTree != null) {
+                        val nodeCount = if (onlyVisible) axTree.nodes.count { it.isVisible } else axTree.nodes.size
+                        Text("节点: $nodeCount", color = Color(0xFF64B5F6), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = showOverlay, onCheckedChange = { showOverlay = it },
+                            colors = CheckboxDefaults.colors(checkedColor = Color(0xFF6C63FF)))
+                        Text("显示框框", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = onlyVisible, onCheckedChange = { onlyVisible = it },
+                            colors = CheckboxDefaults.colors(checkedColor = Color(0xFF6C63FF)))
+                        Text("仅可见", color = Color(0xFFCCCCCC), fontSize = 11.sp)
+                    }
+                }
+
+                // 截图 + 叠加框
+                Box(modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF2E2E36))) {
+                    androidx.compose.foundation.Image(
+                        bitmap = bitmap,
+                        contentDescription = "screenshot",
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (showOverlay && axTree != null) {
+                        androidx.compose.foundation.Canvas(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(bitmap.width.toFloat() / bitmap.height.toFloat())
+                        ) {
+                            val scaleX = size.width / bitmap.width
+                            val scaleY = size.height / bitmap.height
+                            val nodes = if (onlyVisible) axTree.nodes.filter { it.isVisible } else axTree.nodes
+                            nodes.forEach { node ->
+                                if (node.width <= 0 || node.height <= 0) return@forEach
+                                val color = when (node.role.lowercase()) {
+                                    "button" -> androidx.compose.ui.graphics.Color(0xFFFF5252)
+                                    "link" -> androidx.compose.ui.graphics.Color(0xFFFF8A65)
+                                    "textbox", "combobox", "searchbox" -> androidx.compose.ui.graphics.Color(0xFF40C4FF)
+                                    "heading" -> androidx.compose.ui.graphics.Color(0xFFFFD740)
+                                    "img" -> androidx.compose.ui.graphics.Color(0xFF69F0AE)
+                                    "listitem", "menuitem" -> androidx.compose.ui.graphics.Color(0xFFE040FB)
+                                    "statictext" -> androidx.compose.ui.graphics.Color(0x88FFFFFF)
+                                    else -> androidx.compose.ui.graphics.Color(0x6600BCD4)
+                                }
+                                drawRect(
+                                    color = color,
+                                    topLeft = androidx.compose.ui.geometry.Offset(node.x * scaleX, node.y * scaleY),
+                                    size = androidx.compose.ui.geometry.Size(node.width * scaleX, node.height * scaleY),
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 图例
+                if (showOverlay) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        listOf(
+                            "button" to Color(0xFFFF5252), "link" to Color(0xFFFF8A65),
+                            "input" to Color(0xFF40C4FF), "heading" to Color(0xFFFFD740),
+                            "img" to Color(0xFF69F0AE), "listitem" to Color(0xFFE040FB),
+                            "text" to Color(0x88FFFFFF), "其他" to Color(0xFF00BCD4)
+                        ).forEach { (label, color) ->
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Box(Modifier.size(9.dp).background(color))
+                                Text(label, color = Color(0xFFAAAAAA), fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("暂无截图数据，请在 [控制] Tab 中点击 [测试网页截图]", color = Color(0xFF888894), fontSize = 12.sp)
             }
         }
     }

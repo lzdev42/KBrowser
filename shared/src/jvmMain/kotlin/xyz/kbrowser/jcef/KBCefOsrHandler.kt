@@ -174,6 +174,12 @@ open class KBCefOsrHandler(
         return Point(Math.round(pt.x * scale).toInt(), Math.round(pt.y * scale).toInt())
     }
 
+    /**
+     * Returns a snapshot of the current rendered frame as a [BufferedImage] at physical pixel resolution.
+     * Subclasses that use an alternative backing store (e.g. SharedMemory) should override this.
+     */
+    open fun getRenderedImage(): BufferedImage? = myImage
+
     protected open fun getCurrentFrameSize(): Dimension? {
         val image = myImage ?: return null
         return Dimension(image.width, image.height)

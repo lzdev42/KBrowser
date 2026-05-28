@@ -52,6 +52,11 @@ data class KBLocator(
     }
 
     private suspend fun findAllElements(): List<LocateResult> {
+        // JVM 平台优先走 CDP 原生路线（不注入 JS，不受 CSP 限制）
+        val nativeResults = findElementsNative(page.webView, selector, selectorType, name, exact)
+        if (nativeResults != null) return nativeResults
+
+        // fallback: JS 注入路线 (Android / iOS)
         val jsScript = buildFindAllJs()
         val resultJson = page.evaluateJavascript(jsScript)
         

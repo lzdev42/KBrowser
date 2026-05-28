@@ -75,14 +75,19 @@ class KBPage internal constructor(val webView: KBWebView) {
     }
 
     suspend fun getRawAxTree(): AxTreeData {
+        // JVM 平台优先走 CDP 原生路线（不注入 JS，不受 CSP 限制）
+        val nativeTree = fetchAxTreeNative(webView)
+        if (nativeTree != null) {
+            val newCache = nativeTree.nodes.associateBy { it.refid }
+            nodeCacheLock.withLock { nodeCache = newCache }
+            return nativeTree
+        }
+        // fallback：JS 注入路线（Android / iOS）
         val json = evaluateJavascript(JsScripts.EXTRACT_SNAPSHOT)
         val jsonParser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
         val treeData = jsonParser.decodeFromString<AxTreeData>(json)
-        // Update node coordinates cache
         val newCache = treeData.nodes.associateBy { it.refid }
-        nodeCacheLock.withLock {
-            nodeCache = newCache
-        }
+        nodeCacheLock.withLock { nodeCache = newCache }
         return treeData
     }
 
@@ -196,6 +201,10 @@ class KBPage internal constructor(val webView: KBWebView) {
 
     fun getByTestId(testId: String): KBLocator {
         return KBLocator(this, testId, KBSelectorType.TEST_ID)
+    }
+
+    suspend fun screenshot(): ByteArray? {
+        return webView.takeScreenshot()
     }
 
     fun close() {

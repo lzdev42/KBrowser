@@ -64,3 +64,23 @@ object KBrowser {
 }
 
 internal expect fun performGlobalShutdown()
+
+/**
+ * 平台原生 AX 树获取。
+ * JVM 平台通过 CDP Accessibility.getFullAXTree 实现，不注入 JS，不受 CSP 限制。
+ * Android/iOS 返回 null，由调用方 fallback 到 JS 注入路线。
+ */
+internal expect suspend fun fetchAxTreeNative(webView: KBWebView): AxTreeData?
+
+/**
+ * 平台原生元素定位。
+ * JVM 平台通过 CDP DOM.querySelectorAll / Accessibility.getFullAXTree 实现，不注入 JS，不受 CSP 限制。
+ * Android/iOS 返回 null，由调用方 fallback 到 JS 注入路线。
+ */
+internal expect suspend fun findElementsNative(
+    webView: KBWebView,
+    selector: String,
+    selectorType: KBSelectorType,
+    name: String?,
+    exact: Boolean
+): List<LocateResult>?

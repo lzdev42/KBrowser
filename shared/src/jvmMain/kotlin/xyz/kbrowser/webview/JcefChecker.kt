@@ -51,4 +51,6 @@ class FallbackWebView(initialUrl: String) : KBWebView {
     override fun setWebChromeClient(client: KBWebChromeClient?) {}
 
     override fun destroy() {}
+
+    override suspend fun takeScreenshot(): ByteArray? = null
 }
