@@ -99,6 +99,11 @@ class BrowserViewModel : ViewModel() {
                 )
                 println("[DEBUG] BrowserViewModel: KBrowser.newPage 返回成功")
                 _state.update { it.copy(page = newPage) }
+                // 监听新窗口请求，print URL
+                newPage.onNewPage = { url ->
+                    println("[NEW_WINDOW] 页面请求打开新窗口: $url")
+                    log("🔗 新窗口请求: $url")
+                }
                 log("默认标签页加载完成")
             } catch (e: Exception) {
                 println("[DEBUG] BrowserViewModel: 初始化标签页失败: ${e.message}")

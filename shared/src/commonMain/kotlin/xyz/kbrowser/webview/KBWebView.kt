@@ -38,6 +38,14 @@ interface KBWebView {
 
     // 网页截图
     suspend fun takeScreenshot(): ByteArray?
+
+    /**
+     * 新窗口/新标签页请求回调。
+     * 当页面通过 target="_blank"、window.open() 等方式请求打开新窗口时触发。
+     * 设置此回调后，默认的弹窗行为会被阻止，URL 交由调用方处理。
+     * 不设置时，新窗口请求会被静默丢弃（不会打开任何东西）。
+     */
+    var onNewWindowRequest: ((url: String) -> Unit)?
 }
 
 @Composable

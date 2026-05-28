@@ -173,6 +173,18 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
                 override fun onBeforeClose(b: CefBrowser) {
                     myLifeSpanHandler.handleAll(b) { it.onBeforeClose(b) }
                 }
+                override fun onBeforePopup(
+                    b: CefBrowser,
+                    frame: CefFrame,
+                    targetUrl: String,
+                    targetFrameName: String
+                ): Boolean {
+                    var cancel = false
+                    myLifeSpanHandler.get(b)?.forEach {
+                        if (it.onBeforePopup(b, frame, targetUrl, targetFrameName)) cancel = true
+                    }
+                    return cancel
+                }
             })
         }
     }

@@ -224,6 +224,26 @@ class JvmWebView(
         }
         browser.myCefClient.addLoadHandler(myLoadHandlerInstance, cefBrowser)
 
+        // 拦截新窗口请求（target="_blank"、window.open() 等）
+        browser.myCefClient.addLifeSpanHandler(object : org.cef.handler.CefLifeSpanHandlerAdapter() {
+            override fun onBeforePopup(
+                b: org.cef.browser.CefBrowser,
+                frame: org.cef.browser.CefFrame,
+                targetUrl: String,
+                targetFrameName: String
+            ): Boolean {
+                val handler = onNewWindowRequest
+                return if (handler != null) {
+                    // 有监听者：通知并阻止默认弹窗
+                    handler(targetUrl)
+                    true  // true = cancel popup
+                } else {
+                    // 无监听者：静默阻止（不打开任何东西）
+                    true
+                }
+            }
+        }, cefBrowser)
+
         if (isHeadless) {
             SwingUtilities.invokeLater {
                 val frame = javax.swing.JFrame()
@@ -349,6 +369,8 @@ class JvmWebView(
         query?.dispose() // 回收到池
         cefBrowser.executeJavaScript("delete window.$name;", "", 0)
     }
+
+    override var onNewWindowRequest: ((url: String) -> Unit)? = null
 
     override fun clearCacheAndCookies() {
         try {
@@ -764,7 +786,9 @@ class JvmWebView(
             val pngBytes = java.util.Base64.getDecoder().decode(base64)
             println("[SCREENSHOT] raw PNG size: ${pngBytes.size} bytes")
 
-            // Step 2: get DPR from Page.getLayoutMetrics → cssVisualViewport.scale
+            // Step 2: get DPR from Page.getLayoutMetrics
+            // DPR = layoutViewport.clientWidth / cssLayoutViewport.clientWidth
+            // (scale field is page zoom, not device pixel ratio)
             val dpr = withContext(Dispatchers.IO) {
                 try {
                     val metricsJson = devTools.executeDevToolsMethod(
@@ -772,13 +796,19 @@ class JvmWebView(
                         "{}"
                     ).get(5, java.util.concurrent.TimeUnit.SECONDS)
                     if (metricsJson != null) {
-                        println("[SCREENSHOT] Page.getLayoutMetrics raw: ${metricsJson.take(500)}")
                         val metricsRoot = Json.parseToJsonElement(metricsJson).jsonObject
-                        val scale = metricsRoot["cssVisualViewport"]?.jsonObject?.get("scale")?.jsonPrimitive?.content?.toDoubleOrNull()
-                            ?: metricsRoot["result"]?.jsonObject?.get("cssVisualViewport")?.jsonObject?.get("scale")?.jsonPrimitive?.content?.toDoubleOrNull()
-                            ?: metricsRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("cssVisualViewport")?.jsonObject?.get("scale")?.jsonPrimitive?.content?.toDoubleOrNull()
-                        println("[SCREENSHOT] parsed scale=$scale, using dpr=${scale ?: 1.0}")
-                        scale ?: 1.0
+
+                        fun resolveObj(key: String) =
+                            metricsRoot[key]?.jsonObject
+                                ?: metricsRoot["result"]?.jsonObject?.get(key)?.jsonObject
+                                ?: metricsRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get(key)?.jsonObject
+
+                        val physW = resolveObj("layoutViewport")?.get("clientWidth")?.jsonPrimitive?.content?.toDoubleOrNull()
+                        val cssW  = resolveObj("cssLayoutViewport")?.get("clientWidth")?.jsonPrimitive?.content?.toDoubleOrNull()
+
+                        val computed = if (physW != null && cssW != null && cssW > 0) physW / cssW else 1.0
+                        println("[SCREENSHOT] layoutVp.clientWidth=$physW cssLayoutVp.clientWidth=$cssW → DPR=$computed")
+                        computed
                     } else 1.0
                 } catch (e: Exception) {
                     println("[SCREENSHOT] getLayoutMetrics failed: ${e.message}")

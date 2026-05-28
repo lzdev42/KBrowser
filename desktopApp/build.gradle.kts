@@ -18,9 +18,10 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "xyz.kbrowser.MainKt"
-
         jvmArgs += listOf(
-            "--enable-native-access=jcef"
+            "--enable-native-access=jcef",
+            "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+            "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
         )
 
         nativeDistributions {

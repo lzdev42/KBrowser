@@ -310,12 +310,15 @@ object KBCefAxTreeFetcher {
             ?: root["result"]?.jsonObject?.get("cssContentSize")?.jsonObject
             ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("cssContentSize")?.jsonObject
 
-        val cssVisualViewport = root["cssVisualViewport"]?.jsonObject
-            ?: root["result"]?.jsonObject?.get("cssVisualViewport")?.jsonObject
-            ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("cssVisualViewport")?.jsonObject
+        // DPR = layoutViewport.clientWidth / cssLayoutViewport.clientWidth
+        // (scale 字段是页面缩放比，不是设备像素比)
+        val layoutViewport = root["layoutViewport"]?.jsonObject
+            ?: root["result"]?.jsonObject?.get("layoutViewport")?.jsonObject
+            ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("layoutViewport")?.jsonObject
 
-        // 从 cssVisualViewport.scale 提取 DPR，缺失时默认 1.0
-        val dpr = cssVisualViewport?.get("scale")?.jsonPrimitive?.double ?: 1.0
+        val physW = layoutViewport?.get("clientWidth")?.jsonPrimitive?.double
+        val cssW  = cssLayoutViewport["clientWidth"]?.jsonPrimitive?.double
+        val dpr = if (physW != null && cssW != null && cssW > 0) physW / cssW else 1.0
 
         // URL 从 browser.url 获取（Page.getLayoutMetrics 不返回 URL）
         val url = try { browser?.url ?: "" } catch (_: Exception) { "" }

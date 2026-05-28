@@ -207,6 +207,20 @@ class KBPage internal constructor(val webView: KBWebView) {
         return webView.takeScreenshot()
     }
 
+    /**
+     * 新标签页/新窗口请求回调。
+     * 当页面通过 target="_blank"、window.open() 等方式请求打开新窗口时触发。
+     * 直接代理到底层 [KBWebView.onNewWindowRequest]。
+     *
+     * 示例：
+     * ```kotlin
+     * page.onNewPage = { url -> println("需要打开新页面: $url") }
+     * ```
+     */
+    var onNewPage: ((url: String) -> Unit)?
+        get() = webView.onNewWindowRequest
+        set(value) { webView.onNewWindowRequest = value }
+
     fun close() {
         webView.destroy()
     }

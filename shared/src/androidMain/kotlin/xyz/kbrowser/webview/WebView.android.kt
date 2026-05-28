@@ -160,6 +160,8 @@ class AndroidWebView(
         this.webChromeClient = client
     }
 
+    override var onNewWindowRequest: ((url: String) -> Unit)? = null
+
     override fun destroy() {
         webView?.destroy()
         webView = null
