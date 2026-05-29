@@ -20,12 +20,13 @@ data class AxNode(
     val childCount: Int = 0,
     val attributes: Map<String, String> = emptyMap(),
     val iframeSrc: String? = null,
+    val selector: String = "",
     /**
-     * 动态生成的 CSS 选择器，与当前快照的 DOM 状态绑定。
-     * 优先使用稳定标识（#id、[data-testid] 等），兜底使用结构路径（tag:nth-of-type）。
-     * 每次 getRawAxTree() 重新生成，不会过期。
+     * 遮挡该节点中心点的元素的 refid。
+     * 非 null 表示坐标点击会打到遮挡物而非该节点本身。
+     * AI 应先处理遮挡物（关闭弹窗/广告），或改用 locator(selector).fill() 绕过坐标。
      */
-    val selector: String = ""
+    val occludedBy: String? = null
 )
 
 @Serializable

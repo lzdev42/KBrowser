@@ -490,14 +490,18 @@ object JsScripts {
                 return '';
             }
             
+            // 第一遍：为所有节点分配 refid，确保遮挡检测时遮挡物已有 refid
             allNodes.forEach(function(el) {
-                var refid = el.__kb_refid;
-                if (!refid) {
-                    refid = 'r' + (window.__kb_ref_counter++);
+                if (!el.__kb_refid) {
+                    var refid = 'r' + (window.__kb_ref_counter++);
                     el.__kb_refid = refid;
                     window.__kb_element_map.set(refid, el);
                 }
-                
+            });
+
+            // 第二遍：收集节点信息 + 遮挡检测
+            allNodes.forEach(function(el) {
+                var refid = el.__kb_refid;
                 var rect = el.getBoundingClientRect();
                 var isVisible = rect.width > 0 && rect.height > 0;
                 
@@ -515,6 +519,19 @@ object JsScripts {
                 
                 var role = inferRole(el, attrs);
                 
+                // 遮挡检测：elementFromPoint 用视口坐标，找到遮挡元素的 refid
+                var clientX = rect.left + rect.width / 2;
+                var clientY = rect.top + rect.height / 2;
+                var occludedBy = null;
+                if (isVisible) {
+                    try {
+                        var topEl = document.elementFromPoint(clientX, clientY);
+                        if (topEl && topEl !== el && !el.contains(topEl)) {
+                            occludedBy = topEl.__kb_refid || null;
+                        }
+                    } catch(e) {}
+                }
+                
                 elements.push({
                     refid: refid,
                     tagName: el.tagName.toLowerCase(),
@@ -523,6 +540,7 @@ object JsScripts {
                     className: (el.className && typeof el.className === 'string') ? el.className : '',
                     text: textContent,
                     isVisible: isVisible,
+                    occludedBy: occludedBy,
                     x: Math.round(rect.left + window.scrollX),
                     y: Math.round(rect.top + window.scrollY),
                     width: Math.round(rect.width),

@@ -87,12 +87,14 @@ object KBCefAxTreeFetcher {
             innerHeight = pageInfo.innerHeight
         )
 
-        // ── 4. 批量获取坐标 + 元数据 + 选择器 (DOM.getBoxModel + DOM.describeNode + selector, 纯 CDP) ──
+        // ── 4. 批量获取坐标 + 元数据 + 选择器 + 遮挡检测 (纯 CDP) ──
         val resultNodes = mutableListOf<AxNode>()
 
         // 选择器生成函数（Runtime.callFunctionOn，不注入持久化 JS）
-        // 逻辑与 JsScripts.BUILD_SELECTOR_CALL_FN 完全一致，修改算法时同步修改 JsScripts
         val selectorFn = xyz.kbrowser.webview.JsScripts.BUILD_SELECTOR_CALL_FN
+
+        // backendNodeId → refid 映射，用于遮挡检测时把 backendNodeId 转成 refid
+        val backendIdToRefid = semNodes.associate { it.backendNodeId to "r${it.backendNodeId}" }
 
         for (batch in semNodes.chunked(BATCH_SIZE)) {
             val boxFutures = batch.map { sem ->
@@ -107,7 +109,6 @@ object KBCefAxTreeFetcher {
                     """{"backendNodeId":${sem.backendNodeId}}"""
                 )
             }
-            // 并发 resolveNode，拿 objectId 用于选择器生成
             val resolveFutures = batch.map { sem ->
                 sem to devTools.executeDevToolsMethod(
                     "DOM.resolveNode",
@@ -137,10 +138,11 @@ object KBCefAxTreeFetcher {
                 val y = content[1].jsonPrimitive.double.toInt()
                 val w = (content[4].jsonPrimitive.double - content[0].jsonPrimitive.double).toInt()
                 val h = (content[5].jsonPrimitive.double - content[1].jsonPrimitive.double).toInt()
+                val isVisible = w > 0 && h > 0
 
                 val meta = parseDescribeNodeResponse(describeFuture)
 
-                // 从 resolveNode 结果拿 objectId，再 callFunctionOn 生成选择器
+                // 选择器生成
                 val selector: String = try {
                     val resolveJson = resolveFuture.get(BOX_TIMEOUT_SEC, TimeUnit.SECONDS)
                     val objectId = if (resolveJson != null) {
@@ -165,6 +167,28 @@ object KBCefAxTreeFetcher {
                     } else ""
                 } catch (_: Exception) { "" }
 
+                // 遮挡检测：DOM.getNodeForLocation 用视口坐标
+                val occludedBy: String? = if (isVisible) {
+                    val viewportCx = x + w / 2 - pageInfo.scrollX
+                    val viewportCy = y + h / 2 - pageInfo.scrollY
+                    try {
+                        val locJson = devTools.executeDevToolsMethod(
+                            "DOM.getNodeForLocation",
+                            """{"x":$viewportCx,"y":$viewportCy,"includeUserAgentShadowDOM":false}"""
+                        ).get(BOX_TIMEOUT_SEC, TimeUnit.SECONDS)
+                        if (locJson != null) {
+                            val locRoot = Json.parseToJsonElement(locJson).jsonObject
+                            val topBackendId = locRoot["backendNodeId"]?.jsonPrimitive?.intOrNull
+                                ?: locRoot["result"]?.jsonObject?.get("backendNodeId")?.jsonPrimitive?.intOrNull
+                                ?: locRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("backendNodeId")?.jsonPrimitive?.intOrNull
+                            // 顶层节点不是自己 → 被遮挡，返回遮挡物的 refid
+                            if (topBackendId != null && topBackendId != sem.backendNodeId) {
+                                backendIdToRefid[topBackendId] ?: "r$topBackendId"
+                            } else null
+                        } else null
+                    } catch (_: Exception) { null }
+                } else null
+
                 resultNodes.add(
                     AxNode(
                         refid      = "r${sem.backendNodeId}",
@@ -173,7 +197,7 @@ object KBCefAxTreeFetcher {
                         id         = meta.id,
                         className  = meta.className,
                         text       = sem.name,
-                        isVisible  = w > 0 && h > 0,
+                        isVisible  = isVisible,
                         x          = x,
                         y          = y,
                         width      = w,
@@ -182,7 +206,8 @@ object KBCefAxTreeFetcher {
                         centerY    = y + h / 2,
                         childCount = 0,
                         attributes = meta.attributes,
-                        selector   = selector
+                        selector   = selector,
+                        occludedBy = occludedBy
                     )
                 )
             }

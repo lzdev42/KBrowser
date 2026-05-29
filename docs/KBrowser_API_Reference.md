@@ -265,7 +265,8 @@ data class AxNode(
     val childCount: Int,        // Number of children nodes
     val attributes: Map<String, String>, // Node attributes map
     val iframeSrc: String?,     // Source URL if node is an iframe
-    val selector: String        // Dynamically generated, unique CSS selector bound to this snapshot's DOM. Pass directly to page.locator(selector). Regenerated on every getRawAxTree() so it never goes stale. Resistant to anti-bot class-name obfuscation (falls back to structural nth-of-type path).
+    val selector: String,       // Dynamically generated, unique CSS selector bound to this snapshot's DOM. Pass directly to page.locator(selector). Regenerated on every getRawAxTree() so it never goes stale. Resistant to anti-bot class-name obfuscation (falls back to structural nth-of-type path).
+    val occludedBy: String?     // refid of the element covering this node's center point, or null if unobstructed. When non-null, a coordinate click will hit the covering element instead. The AI agent should dismiss the covering element first (e.g. close an ad/modal), or use locator(selector).fill() to bypass coordinate hit-testing entirely.
 )
 ```
 

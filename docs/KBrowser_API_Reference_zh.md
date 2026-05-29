@@ -265,7 +265,8 @@ data class AxNode(
     val childCount: Int,        // 子节点数量
     val attributes: Map<String, String>, // 节点属性字典
     val iframeSrc: String?,     // 若为 iframe，则为其 src URL
-    val selector: String        // 动态生成的唯一 CSS 选择器，与本次快照 DOM 绑定。可直接传给 page.locator(selector)。每次 getRawAxTree() 重新生成，不会过期。抗 anti-bot class 名混淆（兜底使用结构化 nth-of-type 路径）。
+    val selector: String,       // 动态生成的唯一 CSS 选择器，与本次快照 DOM 绑定。可直接传给 page.locator(selector)。每次 getRawAxTree() 重新生成，不会过期。抗 anti-bot class 名混淆（兜底使用结构化 nth-of-type 路径）。
+    val occludedBy: String?     // 遮挡该节点中心点的元素的 refid，无遮挡时为 null。非 null 表示坐标点击会打到遮挡物而非该节点。AI 应先处理遮挡物（关闭弹窗/广告），或改用 locator(selector).fill() 绕过坐标 hit-test。
 )
 ```
 
