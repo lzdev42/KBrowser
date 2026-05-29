@@ -39,7 +39,7 @@ fun AxTreeData.getCleanedAxTree(): AxTreeData {
     )
 
     // 交互标签（无论 role 是什么都保留）
-    val interactiveTags = setOf("input", "button", "select", "textarea", "a", "option", "label", "summary")
+    val interactiveTags = setOf("input", "button", "select", "textarea", "a", "option", "label", "summary", "details")
 
     val cleanedNodes = nodes.filter { node ->
         // 1. 不可见的删掉
@@ -56,6 +56,29 @@ fun AxTreeData.getCleanedAxTree(): AxTreeData {
 
         // 3. 交互标签无条件保留
         if (tag in interactiveTags) return@filter true
+
+        // 3.5 有交互属性的保留（onclick、tabindex、role=button 等暗示可点击）
+        if (node.attributes.containsKey("onclick") ||
+            node.attributes.containsKey("tabindex") ||
+            node.attributes.containsKey("data-click") ||
+            node.attributes.containsKey("data-action")) {
+            return@filter true
+        }
+
+        // 3.6 className 包含交互暗示关键词的保留（btn、switch、toggle、close、menu、tab、nav、click）
+        val classLower = node.className.lowercase()
+        if (classLower.contains("btn") ||
+            classLower.contains("switch") ||
+            classLower.contains("toggle") ||
+            classLower.contains("close") ||
+            classLower.contains("menu") ||
+            classLower.contains("tab") ||
+            classLower.contains("nav") ||
+            classLower.contains("click") ||
+            classLower.contains("icon") ||
+            classLower.contains("action")) {
+            return@filter true
+        }
 
         // 4. 有 text 的保留
         if (node.text.isNotBlank()) return@filter true
@@ -74,7 +97,10 @@ fun AxTreeData.getCleanedAxTree(): AxTreeData {
             return@filter true
         }
 
-        // 7. 其余 generic/none 空节点删掉（纯布局容器）
+        // 7. 有 id 的保留（可能是交互目标或锚点）
+        if (node.id.isNotBlank()) return@filter true
+
+        // 8. 其余 generic/none 空节点删掉（纯布局容器）
         false
     }
 

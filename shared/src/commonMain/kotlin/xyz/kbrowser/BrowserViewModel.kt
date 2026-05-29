@@ -216,9 +216,15 @@ class BrowserViewModel : ViewModel() {
                         val rawAxTree = page.getRawAxTree()
                         log("诊断: URL=${rawAxTree.url}, 总元素=${rawAxTree.totalElements}, 可见=${rawAxTree.visibleElements}")
 
+                        // ── 诊断 print：原始完整 JSON ──────
+                        val jsonParser = kotlinx.serialization.json.Json { prettyPrint = true }
+                        val rawJson = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), rawAxTree)
+                        println("========== RAW AXTREE JSON (${rawAxTree.nodes.size} nodes) ==========")
+                        println(rawJson)
+                        println("========== END RAW ==========")
+
                         // ── 诊断 print：清洗后完整 JSON（给 AI 看的格式）──────
                         val cleaned = rawAxTree.getCleanedAxTree()
-                        val jsonParser = kotlinx.serialization.json.Json { prettyPrint = true }
                         val cleanedJson = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), cleaned)
                         println("========== CLEANED AXTREE JSON (${cleaned.nodes.size} nodes) ==========")
                         println(cleanedJson)
