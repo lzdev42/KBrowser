@@ -7,6 +7,7 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 import kotlin.random.Random
 
 class KBPage internal constructor(val webView: KBWebView) {
