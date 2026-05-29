@@ -491,7 +491,10 @@ object JsScripts {
             }
             
             // 第一遍：为所有节点分配 refid，确保遮挡检测时遮挡物已有 refid
+            // 跳过 __kb_overlay__ 及其子节点（调试画框，不应进入快照）
+            var overlayEl = document.getElementById('__kb_overlay__');
             allNodes.forEach(function(el) {
+                if (overlayEl && (el === overlayEl || overlayEl.contains(el))) return;
                 if (!el.__kb_refid) {
                     var refid = 'r' + (window.__kb_ref_counter++);
                     el.__kb_refid = refid;
@@ -501,6 +504,7 @@ object JsScripts {
 
             // 第二遍：收集节点信息 + 遮挡检测
             allNodes.forEach(function(el) {
+                if (overlayEl && (el === overlayEl || overlayEl.contains(el))) return;
                 var refid = el.__kb_refid;
                 var rect = el.getBoundingClientRect();
                 var isVisible = rect.width > 0 && rect.height > 0;
@@ -508,6 +512,17 @@ object JsScripts {
                 var textContent = '';
                 try { textContent = getDirectText(el); } catch(e) {}
                 if (textContent.length > 200) textContent = textContent.substring(0, 200);
+                // 没有直接文本时，尝试 title / aria-label / alt 作为补充描述
+                if (!textContent && el.title) textContent = el.title;
+                if (!textContent && el.getAttribute('aria-label')) textContent = el.getAttribute('aria-label');
+                if (!textContent && el.tagName === 'IMG' && el.alt) textContent = el.alt;
+                // 仍然没有文本时，尝试 innerText（包含子节点文本，限制长度避免噪音）
+                if (!textContent) {
+                    try {
+                        var inner = (el.innerText || '').trim();
+                        if (inner.length > 0 && inner.length <= 50) textContent = inner;
+                    } catch(e) {}
+                }
                 
                 var attrs = {};
                 for (var i = 0; i < el.attributes.length; i++) {
@@ -519,11 +534,19 @@ object JsScripts {
                 
                 var role = inferRole(el, attrs);
                 
-                // 遮挡检测：elementFromPoint 用视口坐标，找到遮挡元素的 refid
+                // 遮挡检测：只对可交互节点和有语义的叶子节点检测，容器节点跳过
+                // 容器节点中心点被子元素覆盖是正常的 DOM 层级，不是真正的遮挡
                 var clientX = rect.left + rect.width / 2;
                 var clientY = rect.top + rect.height / 2;
                 var occludedBy = null;
-                if (isVisible) {
+                var tag = el.tagName.toLowerCase();
+                var isInteractive = (tag === 'a' || tag === 'button' || tag === 'input' ||
+                    tag === 'select' || tag === 'textarea' || tag === 'label' ||
+                    role === 'button' || role === 'link' || role === 'checkbox' ||
+                    role === 'radio' || role === 'textbox' || role === 'combobox' ||
+                    role === 'menuitem' || role === 'tab' || role === 'option' ||
+                    attrs['onclick'] !== undefined || attrs['tabindex'] !== undefined);
+                if (isVisible && isInteractive) {
                     try {
                         var topEl = document.elementFromPoint(clientX, clientY);
                         if (topEl && topEl !== el && !el.contains(topEl)) {

@@ -167,8 +167,15 @@ object KBCefAxTreeFetcher {
                     } else ""
                 } catch (_: Exception) { "" }
 
-                // 遮挡检测：DOM.getNodeForLocation 用视口坐标
-                val occludedBy: String? = if (isVisible) {
+                // 遮挡检测：只对可交互节点检测，容器节点跳过（中心点被子元素覆盖是正常的）
+                val interactiveRoles = setOf("button", "link", "checkbox", "radio", "textbox",
+                    "combobox", "menuitem", "tab", "option", "slider", "spinbutton")
+                val interactiveTags = setOf("a", "button", "input", "select", "textarea", "label")
+                val isInteractive = sem.role.lowercase() in interactiveRoles ||
+                    meta.tagName.lowercase() in interactiveTags ||
+                    meta.attributes.containsKey("onclick") ||
+                    meta.attributes.containsKey("tabindex")
+                val occludedBy: String? = if (isVisible && isInteractive) {
                     val viewportCx = x + w / 2 - pageInfo.scrollX
                     val viewportCy = y + h / 2 - pageInfo.scrollY
                     try {
