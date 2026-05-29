@@ -19,7 +19,13 @@ data class AxNode(
     val centerY: Int = 0,
     val childCount: Int = 0,
     val attributes: Map<String, String> = emptyMap(),
-    val iframeSrc: String? = null
+    val iframeSrc: String? = null,
+    /**
+     * 动态生成的 CSS 选择器，与当前快照的 DOM 状态绑定。
+     * 优先使用稳定标识（#id、[data-testid] 等），兜底使用结构路径（tag:nth-of-type）。
+     * 每次 getRawAxTree() 重新生成，不会过期。
+     */
+    val selector: String = ""
 )
 
 @Serializable

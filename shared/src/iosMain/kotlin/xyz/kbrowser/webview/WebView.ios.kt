@@ -301,27 +301,6 @@ internal actual suspend fun performClickByCoordinates(
     webView.evaluateJavascript(js, null)
 }
 
-internal actual suspend fun performClickDomByRefId(
-    webView: KBWebView,
-    refid: String
-): Boolean {
-    // 通过 __kb_element_map 直接操作 DOM 节点，绕过坐标和遮挡
-    val escapedRefid = refid.replace("\"", "\\\"")
-    val js = """
-        (function() {
-            var map = window.__kb_element_map;
-            if (!map) return 'NO_MAP';
-            var el = map.get("$escapedRefid");
-            if (!el) return 'NOT_FOUND';
-            el.click();
-            return 'OK';
-        })()
-    """.trimIndent()
-    var result = ""
-    webView.evaluateJavascript(js) { result = it }
-    return result.contains("OK")
-}
-
 internal actual suspend fun performHoverByCoordinates(
     webView: KBWebView,
     x: Int,

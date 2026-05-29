@@ -26,6 +26,10 @@ data class BrowserViewState(
     val selectedTab: Int = 0,
     val coordX: String = "250",
     val coordY: String = "450",
+    val coordDeltaX: String = "0",
+    val coordDeltaY: String = "300",
+    val dragEndX: String = "400",
+    val dragEndY: String = "450",
     val isLoading: Boolean = false,
     val keyboardInputText: String = "Hello KBrowser",
     val locatorSelector: String = "",
@@ -34,7 +38,7 @@ data class BrowserViewState(
     val locatorValue: String = "",
     val customRefId: String = "",
     val screenshotBytes: ByteArray? = null,
-    val screenshotAxTree: AxTreeData? = null   // 截图时同步抓的 AXTree，用于叠加框框
+    val screenshotAxTree: AxTreeData? = null
 )
 
 sealed interface BrowserIntent {
@@ -43,6 +47,10 @@ sealed interface BrowserIntent {
     data class ChangeSnapshotSearch(val query: String) : BrowserIntent
     data class ChangeCoordX(val x: String) : BrowserIntent
     data class ChangeCoordY(val y: String) : BrowserIntent
+    data class ChangeCoordDeltaX(val v: String) : BrowserIntent
+    data class ChangeCoordDeltaY(val v: String) : BrowserIntent
+    data class ChangeDragEndX(val v: String) : BrowserIntent
+    data class ChangeDragEndY(val v: String) : BrowserIntent
     data class ChangeTab(val tab: Int) : BrowserIntent
     object Navigate : BrowserIntent
     object ClearLogs : BrowserIntent
@@ -52,14 +60,19 @@ sealed interface BrowserIntent {
     data class ClickSelector(val selector: String) : BrowserIntent
     data class ClickCoordinates(val x: Int, val y: Int) : BrowserIntent
     data class HoverCoordinates(val x: Int, val y: Int) : BrowserIntent
+    data class ScrollCoordinates(val x: Int, val y: Int, val deltaX: Int, val deltaY: Int) : BrowserIntent
+    data class DragCoordinates(val startX: Int, val startY: Int, val endX: Int, val endY: Int) : BrowserIntent
     object RunAutoFlow : BrowserIntent
-    
+
     // 键盘按键与输入测试
     data class ChangeKeyboardInput(val text: String) : BrowserIntent
     object SimulateTypeString : BrowserIntent
     object SimulateCtrlA : BrowserIntent
     object SimulateCmdA : BrowserIntent
     object SimulateBackspace : BrowserIntent
+    object SimulateEnter : BrowserIntent
+    object SimulateEscape : BrowserIntent
+    object SimulateTab : BrowserIntent
 
     // KBLocator 测试意图
     data class ChangeLocatorSelector(val selector: String) : BrowserIntent
@@ -67,6 +80,7 @@ sealed interface BrowserIntent {
     data class ChangeRefId(val refId: String) : BrowserIntent
     object ClickRefId : BrowserIntent
     object HoverRefId : BrowserIntent
+    object ScrollRefId : BrowserIntent
     data class ChangeLocatorRoleName(val name: String) : BrowserIntent
     data class ChangeLocatorValue(val value: String) : BrowserIntent
     object LocatorClick : BrowserIntent
@@ -74,13 +88,22 @@ sealed interface BrowserIntent {
     object LocatorFocus : BrowserIntent
     object LocatorCheck : BrowserIntent
     object LocatorFill : BrowserIntent
-    object OverlayRawAxTree : BrowserIntent      // 画原始 AXTree 所有节点的框
-    object OverlayCleanedAxTree : BrowserIntent  // 画清洗后 AXTree 节点的框
-    object ClearOverlay : BrowserIntent          // 清除所有框
     object LocatorType : BrowserIntent
+    object LocatorScroll : BrowserIntent
+    object LocatorSelectOption : BrowserIntent
+    object LocatorPress : BrowserIntent
     object LocatorGetText : BrowserIntent
     object LocatorIsVisible : BrowserIntent
+    object LocatorCount : BrowserIntent
+    object LocatorBoundingBox : BrowserIntent
+    object LocatorGetAttribute : BrowserIntent
+    object OverlayRawAxTree : BrowserIntent
+    object OverlayCleanedAxTree : BrowserIntent
+    object ClearOverlay : BrowserIntent
     object TakeScreenshot : BrowserIntent
+
+    // 会话管理
+    object ClearCacheAndCookies : BrowserIntent
 }
 
 class BrowserViewModel : ViewModel() {
@@ -129,6 +152,18 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.ChangeCoordY -> {
                 _state.update { it.copy(coordY = intent.y) }
+            }
+            is BrowserIntent.ChangeCoordDeltaX -> {
+                _state.update { it.copy(coordDeltaX = intent.v) }
+            }
+            is BrowserIntent.ChangeCoordDeltaY -> {
+                _state.update { it.copy(coordDeltaY = intent.v) }
+            }
+            is BrowserIntent.ChangeDragEndX -> {
+                _state.update { it.copy(dragEndX = intent.v) }
+            }
+            is BrowserIntent.ChangeDragEndY -> {
+                _state.update { it.copy(dragEndY = intent.v) }
             }
             is BrowserIntent.ChangeTab -> {
                 _state.update { it.copy(selectedTab = intent.tab) }
@@ -287,6 +322,30 @@ class BrowserViewModel : ViewModel() {
                     }
                 }
             }
+            is BrowserIntent.ScrollCoordinates -> {
+                val page = _state.value.page ?: return
+                log("执行坐标滚动: (${intent.x}, ${intent.y}) delta=(${intent.deltaX}, ${intent.deltaY})")
+                viewModelScope.launch {
+                    try {
+                        page.scrollByCoordinates(intent.x, intent.y, intent.deltaX, intent.deltaY)
+                        log("✅ 坐标滚动成功")
+                    } catch (e: Exception) {
+                        log("❌ 坐标滚动失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.DragCoordinates -> {
+                val page = _state.value.page ?: return
+                log("执行坐标拖拽: (${intent.startX}, ${intent.startY}) → (${intent.endX}, ${intent.endY})")
+                viewModelScope.launch {
+                    try {
+                        page.dragByCoordinates(intent.startX, intent.startY, intent.endX, intent.endY)
+                        log("✅ 坐标拖拽成功")
+                    } catch (e: Exception) {
+                        log("❌ 坐标拖拽失败: ${e.message}")
+                    }
+                }
+            }
             is BrowserIntent.RunAutoFlow -> {
                 val page = _state.value.page ?: return
                 viewModelScope.launch {
@@ -392,6 +451,39 @@ class BrowserViewModel : ViewModel() {
                     }
                 }
             }
+            is BrowserIntent.SimulateEnter -> {
+                val page = _state.value.page ?: return
+                viewModelScope.launch {
+                    try {
+                        page.press(xyz.kbrowser.webview.KeyboardKey.ENTER)
+                        log("按键 Enter 发送完毕")
+                    } catch (e: Exception) {
+                        log("按键 Enter 发送失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.SimulateEscape -> {
+                val page = _state.value.page ?: return
+                viewModelScope.launch {
+                    try {
+                        page.press(xyz.kbrowser.webview.KeyboardKey.ESCAPE)
+                        log("按键 Escape 发送完毕")
+                    } catch (e: Exception) {
+                        log("按键 Escape 发送失败: ${e.message}")
+                    }
+                }
+            }
+            is BrowserIntent.SimulateTab -> {
+                val page = _state.value.page ?: return
+                viewModelScope.launch {
+                    try {
+                        page.press(xyz.kbrowser.webview.KeyboardKey.TAB)
+                        log("按键 Tab 发送完毕")
+                    } catch (e: Exception) {
+                        log("按键 Tab 发送失败: ${e.message}")
+                    }
+                }
+            }
             is BrowserIntent.ChangeLocatorSelector -> {
                 _state.update { it.copy(locatorSelector = intent.selector) }
             }
@@ -426,6 +518,22 @@ class BrowserViewModel : ViewModel() {
                         log("✅ 悬停 $refId 成功")
                     } catch (e: Exception) {
                         log("❌ 悬停失败: ${e.message}")
+                    }
+                }
+            }
+            BrowserIntent.ScrollRefId -> {
+                val page = _state.value.page ?: return
+                val refId = _state.value.customRefId
+                val deltaX = _state.value.coordDeltaX.toIntOrNull() ?: 0
+                val deltaY = _state.value.coordDeltaY.toIntOrNull() ?: 300
+                if (refId.isBlank()) return
+                log("执行 RefId 滚动: '$refId' delta=($deltaX, $deltaY)")
+                viewModelScope.launch {
+                    try {
+                        page.scroll(refId, deltaX, deltaY)
+                        log("✅ 滚动 $refId 成功")
+                    } catch (e: Exception) {
+                        log("❌ 滚动失败: ${e.message}")
                     }
                 }
             }
@@ -595,6 +703,106 @@ class BrowserViewModel : ViewModel() {
                     } catch (e: Exception) {
                         log("Locator 可见性验证失败: ${e.message}")
                     }
+                }
+            }
+            is BrowserIntent.LocatorScroll -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                val deltaX = _state.value.coordDeltaX.toIntOrNull() ?: 0
+                val deltaY = _state.value.coordDeltaY.toIntOrNull() ?: 300
+                if (selector.isBlank()) { log("错误: 选择器不能为空"); return }
+                log("执行 Locator($typeStr='$selector').scroll(deltaX=$deltaX, deltaY=$deltaY)")
+                viewModelScope.launch {
+                    try {
+                        createLocator(page, selector, typeStr, roleName).scroll(deltaX, deltaY)
+                        log("✅ Locator 滚动成功")
+                    } catch (e: Exception) { log("❌ Locator 滚动失败: ${e.message}") }
+                }
+            }
+            is BrowserIntent.LocatorSelectOption -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                val value = _state.value.locatorValue
+                if (selector.isBlank()) { log("错误: 选择器不能为空"); return }
+                log("执行 Locator($typeStr='$selector').selectOption(\"$value\")")
+                viewModelScope.launch {
+                    try {
+                        createLocator(page, selector, typeStr, roleName).selectOption(value)
+                        log("✅ Locator 选项选择成功")
+                    } catch (e: Exception) { log("❌ Locator 选项选择失败: ${e.message}") }
+                }
+            }
+            is BrowserIntent.LocatorPress -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                val value = _state.value.locatorValue
+                if (selector.isBlank()) { log("错误: 选择器不能为空"); return }
+                log("执行 Locator($typeStr='$selector').press(Enter)")
+                viewModelScope.launch {
+                    try {
+                        createLocator(page, selector, typeStr, roleName).press(xyz.kbrowser.webview.KeyboardKey.ENTER)
+                        log("✅ Locator 按键成功")
+                    } catch (e: Exception) { log("❌ Locator 按键失败: ${e.message}") }
+                }
+            }
+            is BrowserIntent.LocatorCount -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) { log("错误: 选择器不能为空"); return }
+                log("执行 Locator($typeStr='$selector').count()")
+                viewModelScope.launch {
+                    try {
+                        val count = createLocator(page, selector, typeStr, roleName).count()
+                        log("✅ Locator 匹配数量: $count")
+                    } catch (e: Exception) { log("❌ Locator count 失败: ${e.message}") }
+                }
+            }
+            is BrowserIntent.LocatorBoundingBox -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                if (selector.isBlank()) { log("错误: 选择器不能为空"); return }
+                log("执行 Locator($typeStr='$selector').boundingBox()")
+                viewModelScope.launch {
+                    try {
+                        val box = createLocator(page, selector, typeStr, roleName).boundingBox()
+                        if (box != null) log("✅ BoundingBox: x=${box.x} y=${box.y} w=${box.width} h=${box.height}")
+                        else log("⚠️ BoundingBox: 元素未找到")
+                    } catch (e: Exception) { log("❌ Locator boundingBox 失败: ${e.message}") }
+                }
+            }
+            is BrowserIntent.LocatorGetAttribute -> {
+                val page = _state.value.page ?: return
+                val selector = _state.value.locatorSelector
+                val typeStr = _state.value.locatorSelectorType
+                val roleName = _state.value.locatorRoleName
+                val attrName = _state.value.locatorValue.ifBlank { "href" }
+                if (selector.isBlank()) { log("错误: 选择器不能为空"); return }
+                log("执行 Locator($typeStr='$selector').getAttribute(\"$attrName\")")
+                viewModelScope.launch {
+                    try {
+                        val v = createLocator(page, selector, typeStr, roleName).getAttribute(attrName)
+                        log("✅ getAttribute($attrName) = \"$v\"")
+                    } catch (e: Exception) { log("❌ Locator getAttribute 失败: ${e.message}") }
+                }
+            }
+            BrowserIntent.ClearCacheAndCookies -> {
+                val page = _state.value.page ?: return
+                log("正在清除缓存和 Cookie...")
+                viewModelScope.launch {
+                    try {
+                        page.clearCacheAndCookies()
+                        log("✅ 缓存和 Cookie 已清除")
+                    } catch (e: Exception) { log("❌ 清除失败: ${e.message}") }
                 }
             }
             BrowserIntent.TakeScreenshot -> {

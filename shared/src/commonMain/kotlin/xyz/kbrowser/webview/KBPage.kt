@@ -19,9 +19,19 @@ class KBPage internal constructor(val webView: KBWebView) {
 
     /**
      * Cache of node coordinates, refreshed on [getRawAxTree].
+     *
+     * @Volatile 保证读操作对所有线程立即可见，无需加锁，
+     * 因此 click 等读操作永远不会因为 getRawAxTree 写入时持锁而死锁。
+     * 写操作通过 nodeCacheWriteLock 串行化，防止并发写入导致数据竞争。
      */
-    private val nodeCacheLock = Mutex()
-    private var nodeCache: Map<String, AxNode> = emptyMap()
+    private val nodeCacheWriteLock = Mutex()
+    @Volatile private var nodeCache: Map<String, AxNode> = emptyMap()
+
+    private suspend fun updateNodeCache(newCache: Map<String, AxNode>) {
+        nodeCacheWriteLock.withLock {
+            nodeCache = newCache
+        }
+    }
 
     suspend fun loadUrl(url: String) {
         withContext(Dispatchers.Main) {
@@ -78,16 +88,14 @@ class KBPage internal constructor(val webView: KBWebView) {
         // JVM 平台优先走 CDP 原生路线（不注入 JS，不受 CSP 限制）
         val nativeTree = fetchAxTreeNative(webView)
         if (nativeTree != null) {
-            val newCache = nativeTree.nodes.associateBy { it.refid }
-            nodeCacheLock.withLock { nodeCache = newCache }
+            updateNodeCache(nativeTree.nodes.associateBy { it.refid })
             return nativeTree
         }
         // fallback：JS 注入路线（Android / iOS）
         val json = evaluateJavascript(JsScripts.EXTRACT_SNAPSHOT)
         val jsonParser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
         val treeData = jsonParser.decodeFromString<AxTreeData>(json)
-        val newCache = treeData.nodes.associateBy { it.refid }
-        nodeCacheLock.withLock { nodeCache = newCache }
+        updateNodeCache(treeData.nodes.associateBy { it.refid })
         return treeData
     }
 
@@ -97,34 +105,8 @@ class KBPage internal constructor(val webView: KBWebView) {
      * @throws ElementNotFoundException if [refid] is not found in the cache
      */
     suspend fun click(refid: String) {
-        val node = nodeCacheLock.withLock { nodeCache[refid] }
-            ?: throw ElementNotFoundException(refid)
+        val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
         clickByCoordinates(node.centerX, node.centerY)
-    }
-
-    /**
-     * Clicks the element with the specified [refid] by directly operating on the DOM node,
-     * bypassing coordinate-based hit-testing entirely. This avoids failures caused by
-     * overlapping elements or invisible covers.
-     *
-     * On JVM: uses CDP DOM.resolveNode + Runtime.callFunctionOn (no JS injection, CSP-safe).
-     * On Android/iOS: uses window.__kb_element_map to retrieve the node and calls .click()
-     * via evaluateJavascript (privileged context, not affected by page CSP).
-     *
-     * Falls back to coordinate-based click if the DOM operation fails or the node map
-     * is unavailable (e.g. getRawAxTree has not been called yet on Android/iOS).
-     *
-     * @throws ElementNotFoundException if [refid] is not found in the cache
-     */
-    suspend fun clickDom(refid: String) {
-        // Ensure the node exists in cache (throws if not)
-        val node = nodeCacheLock.withLock { nodeCache[refid] }
-            ?: throw ElementNotFoundException(refid)
-        val success = performClickDomByRefId(webView, refid)
-        if (!success) {
-            // Fallback: coordinate-based click
-            clickByCoordinates(node.centerX, node.centerY)
-        }
     }
 
     /**
@@ -133,8 +115,7 @@ class KBPage internal constructor(val webView: KBWebView) {
      * @throws ElementNotFoundException if [refid] is not found in the cache
      */
     suspend fun hover(refid: String) {
-        val node = nodeCacheLock.withLock { nodeCache[refid] }
-            ?: throw ElementNotFoundException(refid)
+        val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
         hoverByCoordinates(node.centerX, node.centerY)
     }
 
@@ -144,26 +125,12 @@ class KBPage internal constructor(val webView: KBWebView) {
      * @throws ElementNotFoundException if [refid] is not found in the cache
      */
     suspend fun scroll(refid: String, deltaX: Int, deltaY: Int) {
-        val node = nodeCacheLock.withLock { nodeCache[refid] }
-            ?: throw ElementNotFoundException(refid)
+        val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
         scrollByCoordinates(node.centerX, node.centerY, deltaX, deltaY)
     }
 
     suspend fun clickByCoordinates(x: Int, y: Int) {
         performClickByCoordinates(webView, x, y)
-    }
-
-    /**
-     * Clicks a DOM node directly using its [backendNodeId] (JVM/CDP) or falls back to
-     * coordinates on Android/iOS. Used internally by [KBLocator] when a [LocateResult]
-     * carries a backendNodeId from the CDP path.
-     */
-    internal suspend fun clickDomByBackendNodeId(backendNodeId: Int, fallbackX: Int, fallbackY: Int) {
-        val refid = "r$backendNodeId"
-        val success = performClickDomByRefId(webView, refid)
-        if (!success) {
-            clickByCoordinates(fallbackX, fallbackY)
-        }
     }
 
     suspend fun hoverByCoordinates(x: Int, y: Int) {
@@ -197,18 +164,6 @@ class KBPage internal constructor(val webView: KBWebView) {
             typeChar(char)
             kotlinx.coroutines.delay(Random.nextLong(30, 150))
         }
-    }
-
-    /**
-     * Clicks the element identified by [refid] to focus it, then types [text] using
-     * native key events. Uses [clickDom] to avoid occlusion issues.
-     *
-     * @throws ElementNotFoundException if [refid] is not found in the cache
-     */
-    suspend fun fill(refid: String, text: String) {
-        clickDom(refid)
-        kotlinx.coroutines.delay(100)
-        type(text)
     }
 
     // ===== KBLocator Factory Methods =====

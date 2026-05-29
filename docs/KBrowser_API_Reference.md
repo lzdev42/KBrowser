@@ -143,15 +143,11 @@ These two extension functions are pure Kotlin computations. They execute in the 
 
 Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNotFoundException` if the refid does not exist.
 
-The same `refid` from `AxNode` supports two click strategies — developers choose based on their needs:
-
 | Method | Description |
 |------|------|
-| `suspend click(refid: String)` | **Coordinate click**: resolves `centerX`/`centerY` from cache and dispatches a physical click via CDP. May fail if the element is covered by an overlay. |
-| `suspend clickDom(refid: String)` | **DOM-direct click**: operates on the DOM node directly, bypassing coordinate hit-testing entirely. On JVM: CDP `DOM.resolveNode` + `Runtime.callFunctionOn` (no JS injection, CSP-safe). On Android/iOS: `__kb_element_map.get(refid).click()` via privileged JS context. Falls back to coordinate click if the DOM operation fails. |
+| `suspend click(refid: String)` | Resolves `centerX`/`centerY` from cache and dispatches a physical click via CDP. May fail if the element is covered by an overlay. |
 | `suspend hover(refid: String)` | Resolves coordinates from the cache and dispatches hover event via CDP. |
 | `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | Resolves coordinates from the cache and dispatches wheel event via CDP. |
-| `suspend fill(refid: String, text: String)` | `clickDom(refid)` → 100ms delay → `type(text)`. Focuses the element via DOM-direct click, then types using native key events. |
 
 ### Interaction (Coordinates-based, CSS document pixels)
 
@@ -198,11 +194,9 @@ The same `refid` from `AxNode` supports two click strategies — developers choo
 
 ### Interaction Methods
 
-On JVM, all click-based methods automatically prefer DOM-direct click (via `backendNodeId` from CDP) over coordinate click when the element is found. Android/iOS fall back to coordinate click.
-
 | Method | Description |
 |------|------|
-| `suspend click()` | Locates the element and clicks it. Uses DOM-direct click on JVM (bypasses occlusion); coordinate click on Android/iOS. |
+| `suspend click()` | Locates the element and clicks it using coordinate-based click. |
 | `suspend hover()` | Locates the element and dispatches a hover event. |
 | `suspend scroll(deltaX, deltaY)` | Locates the element and dispatches a wheel scroll event. |
 | `suspend fill(value: String)` | Focuses and sets the input value via JS (fast fill). |
@@ -270,7 +264,8 @@ data class AxNode(
     val centerY: Int,           // Center Y (CSS document pixels)
     val childCount: Int,        // Number of children nodes
     val attributes: Map<String, String>, // Node attributes map
-    val iframeSrc: String?      // Source URL if node is an iframe
+    val iframeSrc: String?,     // Source URL if node is an iframe
+    val selector: String        // Dynamically generated, unique CSS selector bound to this snapshot's DOM. Pass directly to page.locator(selector). Regenerated on every getRawAxTree() so it never goes stale. Resistant to anti-bot class-name obfuscation (falls back to structural nth-of-type path).
 )
 ```
 
@@ -459,17 +454,17 @@ suspend fun runAutomation() {
         // Find the first link and click it
         val firstLink = viewportTree.nodes.firstOrNull { it.role == "link" }
         if (firstLink != null) {
-            // Option A: coordinate click (may fail if covered by overlay)
+            // Option A: refid coordinate click
             page.click(firstLink.refid)
 
-            // Option B: DOM-direct click (bypasses occlusion, recommended)
-            // page.clickDom(firstLink.refid)
+            // Option B: use the node's dynamically-generated selector (anti-bot resistant)
+            // page.locator(firstLink.selector).click()
         }
 
-        // Find an input and fill it in one call (DOM-direct click + native typing)
+        // Find an input and fill it via its selector
         val searchInput = viewportTree.nodes.firstOrNull { it.role == "textbox" }
         if (searchInput != null) {
-            page.fill(searchInput.refid, "search terms")
+            page.locator(searchInput.selector).type("search terms")
         }
 
         // Take a screenshot (CSS pixels, aligned with coordinate system)

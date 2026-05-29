@@ -87,11 +87,14 @@ object KBCefAxTreeFetcher {
             innerHeight = pageInfo.innerHeight
         )
 
-        // ── 4. 批量获取坐标 + 元数据 (DOM.getBoxModel + DOM.describeNode, 纯 CDP 无 JS) ──
+        // ── 4. 批量获取坐标 + 元数据 + 选择器 (DOM.getBoxModel + DOM.describeNode + selector, 纯 CDP) ──
         val resultNodes = mutableListOf<AxNode>()
 
+        // 选择器生成函数（Runtime.callFunctionOn，不注入持久化 JS）
+        // 逻辑与 JsScripts.BUILD_SELECTOR_CALL_FN 完全一致，修改算法时同步修改 JsScripts
+        val selectorFn = xyz.kbrowser.webview.JsScripts.BUILD_SELECTOR_CALL_FN
+
         for (batch in semNodes.chunked(BATCH_SIZE)) {
-            // 并发发送本批所有 DOM.getBoxModel 和 DOM.describeNode 请求
             val boxFutures = batch.map { sem ->
                 sem to devTools.executeDevToolsMethod(
                     "DOM.getBoxModel",
@@ -104,25 +107,29 @@ object KBCefAxTreeFetcher {
                     """{"backendNodeId":${sem.backendNodeId}}"""
                 )
             }
+            // 并发 resolveNode，拿 objectId 用于选择器生成
+            val resolveFutures = batch.map { sem ->
+                sem to devTools.executeDevToolsMethod(
+                    "DOM.resolveNode",
+                    """{"backendNodeId":${sem.backendNodeId}}"""
+                )
+            }
 
-            // 逐个等待结果，合并坐标和元数据
             for (i in batch.indices) {
                 val (sem, boxFuture) = boxFutures[i]
                 val (_, describeFuture) = describeFutures[i]
+                val (_, resolveFuture) = resolveFutures[i]
 
-                // 获取坐标（必须成功，否则跳过节点）
                 val boxJson = try {
                     boxFuture.get(BOX_TIMEOUT_SEC, TimeUnit.SECONDS)
                 } catch (e: Exception) { continue } ?: continue
 
                 val boxRoot = Json.parseToJsonElement(boxJson).jsonObject
-                // 三层 fallback 解析
                 val model = boxRoot["model"]?.jsonObject
                     ?: boxRoot["result"]?.jsonObject?.get("model")?.jsonObject
                     ?: boxRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("model")?.jsonObject
                     ?: continue
 
-                // content quad: [x1,y1, x2,y2, x3,y3, x4,y4]
                 val content = model["content"]?.jsonArray ?: continue
                 if (content.size < 8) continue
 
@@ -131,26 +138,51 @@ object KBCefAxTreeFetcher {
                 val w = (content[4].jsonPrimitive.double - content[0].jsonPrimitive.double).toInt()
                 val h = (content[5].jsonPrimitive.double - content[1].jsonPrimitive.double).toInt()
 
-                // 获取元数据（失败时使用空元数据，不跳过节点）
                 val meta = parseDescribeNodeResponse(describeFuture)
+
+                // 从 resolveNode 结果拿 objectId，再 callFunctionOn 生成选择器
+                val selector: String = try {
+                    val resolveJson = resolveFuture.get(BOX_TIMEOUT_SEC, TimeUnit.SECONDS)
+                    val objectId = if (resolveJson != null) {
+                        val r = Json.parseToJsonElement(resolveJson).jsonObject
+                        r["object"]?.jsonObject?.get("objectId")?.jsonPrimitive?.content
+                            ?: r["result"]?.jsonObject?.get("object")?.jsonObject?.get("objectId")?.jsonPrimitive?.content
+                            ?: r["result"]?.jsonObject?.get("result")?.jsonObject?.get("object")?.jsonObject?.get("objectId")?.jsonPrimitive?.content
+                    } else null
+
+                    if (objectId != null) {
+                        val escapedObjId = Json.encodeToString(JsonPrimitive(objectId))
+                        val callJson = devTools.executeDevToolsMethod(
+                            "Runtime.callFunctionOn",
+                            """{"objectId":$escapedObjId,"functionDeclaration":${Json.encodeToString(JsonPrimitive(selectorFn))},"returnByValue":true}"""
+                        ).get(BOX_TIMEOUT_SEC, TimeUnit.SECONDS)
+                        if (callJson != null) {
+                            val cr = Json.parseToJsonElement(callJson).jsonObject
+                            cr["result"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull
+                                ?: cr["result"]?.jsonObject?.get("result")?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull
+                                ?: ""
+                        } else ""
+                    } else ""
+                } catch (_: Exception) { "" }
 
                 resultNodes.add(
                     AxNode(
-                        refid     = "r${sem.backendNodeId}",
-                        tagName   = meta.tagName,
-                        role      = sem.role,
-                        id        = meta.id,
-                        className = meta.className,
-                        text      = sem.name,
-                        isVisible = w > 0 && h > 0,
-                        x         = x,
-                        y         = y,
-                        width     = w,
-                        height    = h,
-                        centerX   = x + w / 2,
-                        centerY   = y + h / 2,
+                        refid      = "r${sem.backendNodeId}",
+                        tagName    = meta.tagName,
+                        role       = sem.role,
+                        id         = meta.id,
+                        className  = meta.className,
+                        text       = sem.name,
+                        isVisible  = w > 0 && h > 0,
+                        x          = x,
+                        y          = y,
+                        width      = w,
+                        height     = h,
+                        centerX    = x + w / 2,
+                        centerY    = y + h / 2,
                         childCount = 0,
-                        attributes = meta.attributes
+                        attributes = meta.attributes,
+                        selector   = selector
                     )
                 )
             }

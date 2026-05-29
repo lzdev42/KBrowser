@@ -589,55 +589,6 @@ class JvmWebView(
     }
 
     /**
-     * 直接通过 CDP 操作 DOM 节点触发点击，完全绕过坐标和遮挡。
-     * refid 格式为 "r{backendNodeId}"（由 KBCefAxTreeFetcher 生成）。
-     * 步骤：
-     * 1. 解析 backendNodeId
-     * 2. DOM.resolveNode → 拿到 objectId
-     * 3. Runtime.callFunctionOn → 调用 el.click()
-     * 返回 true 表示成功。
-     */
-    suspend fun clickDomByRefId(refid: String): Boolean {
-        if (isDestroyed.get()) return false
-        val devTools = cefBrowser.devToolsClient ?: return false
-        if (devTools.isClosed) return false
-
-        // 解析 backendNodeId（格式：r123）
-        val backendNodeId = refid.removePrefix("r").toIntOrNull() ?: return false
-
-        return withContext(Dispatchers.IO) {
-            try {
-                // Step 1: DOM.resolveNode → objectId
-                val resolveJson = devTools.executeDevToolsMethod(
-                    "DOM.resolveNode",
-                    """{"backendNodeId":$backendNodeId}"""
-                ).get(5, java.util.concurrent.TimeUnit.SECONDS) ?: return@withContext false
-
-                val resolveRoot = Json.parseToJsonElement(resolveJson).jsonObject
-                val objectId = resolveRoot["object"]?.jsonObject?.get("objectId")?.jsonPrimitive?.content
-                    ?: resolveRoot["result"]?.jsonObject?.get("object")?.jsonObject?.get("objectId")?.jsonPrimitive?.content
-                    ?: resolveRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("object")?.jsonObject?.get("objectId")?.jsonPrimitive?.content
-                    ?: return@withContext false
-
-                val escapedObjectId = kotlinx.serialization.json.Json.encodeToString(
-                    kotlinx.serialization.json.JsonPrimitive(objectId)
-                )
-
-                // Step 2: Runtime.callFunctionOn → el.click()
-                devTools.executeDevToolsMethod(
-                    "Runtime.callFunctionOn",
-                    """{"objectId":$escapedObjectId,"functionDeclaration":"function(){this.click()}","returnByValue":true}"""
-                ).get(5, java.util.concurrent.TimeUnit.SECONDS)
-
-                true
-            } catch (e: Exception) {
-                logCoord("clickDomByRefId: failed for refid=$refid: ${e.message}")
-                false
-            }
-        }
-    }
-
-    /**
      * Pure CDP hover implementation using Input.dispatchMouseEvent with type mouseMoved.
      * Coordinates are CSS viewport pixels (same system as clickByCoordinates).
      */
@@ -1061,16 +1012,6 @@ internal actual suspend fun performClickByCoordinates(
     if (webView is JvmWebView) {
         webView.clickByCoordinates(x, y)
     }
-}
-
-internal actual suspend fun performClickDomByRefId(
-    webView: KBWebView,
-    refid: String
-): Boolean {
-    if (webView is JvmWebView) {
-        return webView.clickDomByRefId(refid)
-    }
-    return false
 }
 
 internal actual suspend fun performHoverByCoordinates(

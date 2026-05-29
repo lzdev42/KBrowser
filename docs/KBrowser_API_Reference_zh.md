@@ -143,15 +143,11 @@ fun BrowserScreen() {
 
 调用前需先执行 `getRawAxTree()` 刷新缓存。若 refid 不存在则抛出 `ElementNotFoundException`。
 
-`AxNode` 中的同一个 `refid` 支持两种点击策略，开发者按需选择：
-
 | 方法 | 说明 |
 |------|------|
-| `suspend click(refid: String)` | **坐标点击**：从缓存取 `centerX`/`centerY`，通过 CDP 发送物理点击。若元素被遮挡可能失败。 |
-| `suspend clickDom(refid: String)` | **DOM 直接点击**：直接操作 DOM 节点，完全绕过坐标 hit-test，不受遮挡影响。JVM：CDP `DOM.resolveNode` + `Runtime.callFunctionOn`（无 JS 注入，CSP 安全）；Android/iOS：通过特权 JS 上下文调用 `__kb_element_map.get(refid).click()`。DOM 操作失败时自动回退到坐标点击。 |
+| `suspend click(refid: String)` | 从缓存取 `centerX`/`centerY`，通过 CDP 发送物理点击。若元素被遮挡可能失败。 |
 | `suspend hover(refid: String)` | 从缓存取坐标，CDP 发送悬停事件 |
 | `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | 从缓存取坐标，CDP 发送滚轮事件 |
-| `suspend fill(refid: String, text: String)` | `clickDom(refid)` → 等待 100ms → `type(text)`。通过 DOM 直接点击聚焦，再用原生键盘事件输入文字。 |
 
 ### 交互（基于坐标，CSS 文档像素）
 
@@ -198,11 +194,9 @@ fun BrowserScreen() {
 
 ### 交互方法
 
-JVM 平台：当 CDP 定位到元素时会携带 `backendNodeId`，所有点击类方法自动优先走 DOM 直接点击（绕过遮挡），Android/iOS 回退到坐标点击。
-
 | 方法 | 说明 |
 |------|------|
-| `suspend click()` | 定位元素并点击。JVM 优先 DOM 直接点击（绕过遮挡）；Android/iOS 坐标点击。 |
+| `suspend click()` | 定位元素并通过坐标点击。 |
 | `suspend hover()` | 定位元素，发送悬停事件 |
 | `suspend scroll(deltaX, deltaY)` | 定位元素，发送滚轮事件 |
 | `suspend fill(value: String)` | 点击聚焦后通过 JS 设置输入框值（快速填充） |
@@ -270,7 +264,8 @@ data class AxNode(
     val centerY: Int,           // 中心点 Y（CSS 文档像素）
     val childCount: Int,        // 子节点数量
     val attributes: Map<String, String>, // 节点属性字典
-    val iframeSrc: String?      // 若为 iframe，则为其 src URL
+    val iframeSrc: String?,     // 若为 iframe，则为其 src URL
+    val selector: String        // 动态生成的唯一 CSS 选择器，与本次快照 DOM 绑定。可直接传给 page.locator(selector)。每次 getRawAxTree() 重新生成，不会过期。抗 anti-bot class 名混淆（兜底使用结构化 nth-of-type 路径）。
 )
 ```
 
@@ -459,17 +454,17 @@ suspend fun runAutomation() {
         // 找到第一个链接并点击
         val firstLink = viewportTree.nodes.firstOrNull { it.role == "link" }
         if (firstLink != null) {
-            // 方式 A：坐标点击（若元素被遮挡可能失败）
+            // 方式 A：refid 坐标点击
             page.click(firstLink.refid)
 
-            // 方式 B：DOM 直接点击（绕过遮挡，推荐）
-            // page.clickDom(firstLink.refid)
+            // 方式 B：用节点动态生成的选择器（抗 anti-bot 混淆）
+            // page.locator(firstLink.selector).click()
         }
 
-        // 找到输入框，一步完成聚焦+输入（DOM 直接点击 + 原生键盘事件）
+        // 找到输入框，用其选择器输入
         val searchInput = viewportTree.nodes.firstOrNull { it.role == "textbox" }
         if (searchInput != null) {
-            page.fill(searchInput.refid, "搜索词")
+            page.locator(searchInput.selector).type("搜索词")
         }
 
         // 截图（CSS 像素，与坐标系一致）

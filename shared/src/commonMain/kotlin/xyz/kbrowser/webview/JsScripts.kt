@@ -1,6 +1,86 @@
 package xyz.kbrowser.webview
 
 object JsScripts {
+
+    /**
+     * 为 DOM 节点生成唯一 CSS 选择器的 JS 函数，供 EXTRACT_SNAPSHOT 内联使用。
+     * 函数签名：buildSelector(el) → String
+     *
+     * 策略（优先级从高到低）：
+     * 1. #id —— 存在且在文档中唯一时使用
+     * 2. 稳定属性 —— data-testid / data-id / data-key / name / aria-label，唯一时使用
+     * 3. 结构路径兜底 —— tag:nth-of-type(n) > ... 绝对唯一，不依赖 class 名
+     *
+     * ⚠️ 修改选择器算法时，同步修改 BUILD_SELECTOR_CALL_FN（CDP 路径使用）。
+     */
+    const val BUILD_SELECTOR_FN: String = """
+        function buildSelector(el) {
+            function cssEsc(s) {
+                return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, '\\${'$'}&');
+            }
+            if (el.id && el.id.trim()) {
+                var esc = '#' + cssEsc(el.id);
+                try { if (document.querySelectorAll(esc).length === 1) return esc; } catch(e) {}
+            }
+            var sa = ['data-testid', 'data-id', 'data-key', 'name', 'aria-label'];
+            for (var i = 0; i < sa.length; i++) {
+                var v = el.getAttribute(sa[i]);
+                if (v && v.trim()) {
+                    var s = el.tagName.toLowerCase() + '[' + sa[i] + '="' + v.replace(/"/g, '\\"') + '"]';
+                    try { if (document.querySelectorAll(s).length === 1) return s; } catch(e) {}
+                }
+            }
+            var parts = [], cur = el;
+            while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
+                var tag = cur.tagName.toLowerCase(), par = cur.parentElement;
+                if (!par) { parts.unshift(tag); break; }
+                var sibs = par.children, st = 0, idx = 0;
+                for (var j = 0; j < sibs.length; j++) {
+                    if (sibs[j].tagName === cur.tagName) { st++; if (sibs[j] === cur) idx = st; }
+                }
+                parts.unshift(st > 1 ? tag + ':nth-of-type(' + idx + ')' : tag);
+                cur = par;
+            }
+            return parts.join(' > ');
+        }
+    """
+
+    /**
+     * CDP 路径专用：Runtime.callFunctionOn 的 functionDeclaration。
+     * 在目标节点的 this 上下文执行，返回该节点的 CSS 选择器字符串。
+     *
+     * ⚠️ 与 BUILD_SELECTOR_FN 逻辑完全一致，修改选择器算法时两处同步修改。
+     */
+    const val BUILD_SELECTOR_CALL_FN: String = """function() {
+        var el = this;
+        function cssEsc(s) {
+            return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, '\\${'$'}&');
+        }
+        if (el.id && el.id.trim()) {
+            var esc = '#' + cssEsc(el.id);
+            try { if (document.querySelectorAll(esc).length === 1) return esc; } catch(e) {}
+        }
+        var sa = ['data-testid', 'data-id', 'data-key', 'name', 'aria-label'];
+        for (var i = 0; i < sa.length; i++) {
+            var v = el.getAttribute(sa[i]);
+            if (v && v.trim()) {
+                var s = el.tagName.toLowerCase() + '[' + sa[i] + '="' + v.replace(/"/g, '\\"') + '"]';
+                try { if (document.querySelectorAll(s).length === 1) return s; } catch(e) {}
+            }
+        }
+        var parts = [], cur = el;
+        while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
+            var tag = cur.tagName.toLowerCase(), par = cur.parentElement;
+            if (!par) { parts.unshift(tag); break; }
+            var sibs = par.children, st = 0, idx = 0;
+            for (var j = 0; j < sibs.length; j++) {
+                if (sibs[j].tagName === cur.tagName) { st++; if (sibs[j] === cur) idx = st; }
+            }
+            parts.unshift(st > 1 ? tag + ':nth-of-type(' + idx + ')' : tag);
+            cur = par;
+        }
+        return parts.join(' > ');
+    }"""
     private const val BUILD_RESULT_JS = """
         function buildResult(el) {
             var rect = el.getBoundingClientRect();
@@ -368,6 +448,8 @@ object JsScripts {
             
             $GET_DIRECT_TEXT_JS
             
+            $BUILD_SELECTOR_FN
+
             function inferRole(el, attrs) {
                 var role = attrs['role'] || '';
                 if (role) return role;
@@ -448,7 +530,8 @@ object JsScripts {
                     centerX: Math.round(rect.left + window.scrollX + rect.width / 2),
                     centerY: Math.round(rect.top + window.scrollY + rect.height / 2),
                     childCount: el.children.length,
-                    attributes: attrs
+                    attributes: attrs,
+                    selector: buildSelector(el)
                 });
             });
             
