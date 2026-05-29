@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import xyz.kbrowser.webview.KBPage
 import xyz.kbrowser.webview.KBrowser
-import xyz.kbrowser.webview.KBProfile
 import xyz.kbrowser.webview.LoadingState
 
 // MVI State
@@ -89,8 +88,7 @@ class WebViewExampleViewModel : ViewModel() {
                 log("正在初始化示例 Web 页面...")
                 // 创建一个用于示例的独立 session 标签页
                 val newPage = KBrowser.newPage(
-                    url = null, // 稍后手动加载
-                    profile = KBProfile("webview_example_session", KBrowser.config.storageDir)
+                    url = null // 稍后手动加载
                 )
                 _state.update { it.copy(page = newPage) }
                 

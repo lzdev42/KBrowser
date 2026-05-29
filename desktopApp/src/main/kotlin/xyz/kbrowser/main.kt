@@ -11,7 +11,7 @@ fun main() {
     System.setProperty("compose.swing.render.on.graphics", "true")
     System.setProperty("jcef.remote.enabled", "true")
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-    xyz.kbrowser.webview.KBrowser.configure(xyz.kbrowser.webview.BrowserConfig(storageDir = storageDir))
+    xyz.kbrowser.webview.KBrowser.setConfigPath(storageDir)
     initializeKBrowser()
     application {
         Window(

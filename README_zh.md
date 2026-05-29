@@ -73,7 +73,7 @@ Package: JDK + JCEF
 
 ```kotlin
 fun main() {
-    KBrowser.configure(BrowserConfig(storageDir = "/path/to/cache"))
+    KBrowser.setConfigPath("/path/to/cache")
     initializeKBrowser()  // 必须在任何 UI 启动前调用
  
     application {
@@ -111,10 +111,7 @@ fun BrowserScreen() {
 
 ```kotlin
 // 无头模式运行，无需 UI 界面
-val page = KBrowser.newPage(
-    url = "https://example.com",
-    profile = KBProfile("session_001", "/path/to/cache/session_001")
-)
+val page = KBrowser.newPage(url = "https://example.com")
 
 // 拦截新窗口请求
 page.onNewPage = { url -> println("新窗口请求: $url") }

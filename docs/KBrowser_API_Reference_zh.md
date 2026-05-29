@@ -16,7 +16,7 @@ JVM 平台必须在 `application {}` 之前完成初始化：
 // main.kt
 fun main() {
     // 1. 配置存储路径
-    KBrowser.configure(BrowserConfig(storageDir = "/path/to/cache"))
+    KBrowser.setConfigPath("/path/to/cache")
     // 2. 初始化 JCEF 引擎（必须在任何 UI 初始化之前调用）
     initializeKBrowser()
 
@@ -28,6 +28,13 @@ fun main() {
     }
 }
 ```
+
+### KBrowser 对象
+
+| 方法 | 说明 |
+|------|------|
+| `KBrowser.setConfigPath(path: String)` | 设置 KBrowser 数据的根目录。KBrowser 会在该目录下自动创建 `kbrowser_profile` 子目录，用于存储自身数据（Cookie、缓存）。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。 |
+| `KBrowser.newPage(url: String? = null): KBPage` | 创建一个新的无头浏览器页面，可选在创建时导航到 `url`。KBrowser 内部自动管理 Profile，无需传入 Profile 参数。 |
 
 ---
 
@@ -134,8 +141,10 @@ fun BrowserScreen() {
 | 方法 | 说明 |
 |------|------|
 | `suspend getRawAxTree(): AxTreeData` | 获取完整语义树，同时刷新内部坐标缓存 `nodeCache` |
-| `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展函数，过滤噪音节点（不可见、纯布局容器等） |
+| `suspend snapshot(): String` | 返回当前页面的 KBrowser YAML Snapshot 字符串。获取 AXTree，进行最小化清理，转换为树形结构 YAML，包含文本上浮、坐标、选择器和遮挡信息内联。推荐给 AI Agent 使用。 |
+| `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展函数，过滤技术噪音（不可见节点、script/style 标签、调试 overlay） |
 | `AxTreeData.getViewportAxTree(): AxTreeData` | 扩展函数，裁剪到当前视口范围内的节点 |
+| `AxTreeData.toYamlSnapshot(): String` | 转换为 KBrowser YAML Snapshot 格式——树形结构、文本上浮、refid/选择器/坐标/遮挡信息内联。推荐给 AI Agent 使用。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
 
 两个扩展函数是纯 Kotlin 计算，不切线程，在调用方协程上下文执行。
 
@@ -319,9 +328,13 @@ data class Diagnostics(
     val description: String,
     val failingUrl: String
 )
+```
 
-data class BrowserConfig(val storageDir: String)
+### KBProfile
 
+`KBProfile` 用于 `KBWebView`，当你需要为每个 WebView 实例隔离浏览器数据（独立的 Cookie/缓存）时使用。`KBBrowser` 内部自动管理自己的 Profile，无需向 `newPage()` 传入 `KBProfile`。
+
+```kotlin
 data class KBProfile(val profileId: String, val storageDir: String)
 ```
 
@@ -419,13 +432,10 @@ fun BrowserApp() {
 ```kotlin
 suspend fun runAutomation() {
     // 初始化（main.kt 中已完成，此处仅示意）
-    // KBrowser.configure(BrowserConfig(storageDir = "/tmp/kbrowser"))
+    // KBrowser.setConfigPath("/tmp/kbrowser")
     // initializeKBrowser()
 
-    val page = KBrowser.newPage(
-        url = "https://example.com/login",
-        profile = KBProfile("session_001", "/tmp/kbrowser/session_001")
-    )
+    val page = KBrowser.newPage(url = "https://example.com/login")
 
     try {
         // 拦截新窗口请求

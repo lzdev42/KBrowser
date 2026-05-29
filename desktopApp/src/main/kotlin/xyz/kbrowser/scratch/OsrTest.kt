@@ -14,7 +14,7 @@ fun main() {
     println("====== 正在初始化 KBrowser 离屏渲染 (OSR) 模式 ======")
     
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-    xyz.kbrowser.webview.KBrowser.configure(xyz.kbrowser.webview.BrowserConfig(storageDir = storageDir))
+    xyz.kbrowser.webview.KBrowser.setConfigPath(storageDir)
     initializeKBrowser()
     
     SwingUtilities.invokeLater {

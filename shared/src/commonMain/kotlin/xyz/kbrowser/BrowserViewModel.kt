@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import xyz.kbrowser.webview.KBPage
 import xyz.kbrowser.webview.KBrowser
-import xyz.kbrowser.webview.KBProfile
 import xyz.kbrowser.webview.AxTreeData
 import xyz.kbrowser.webview.getCleanedAxTree
 
@@ -117,8 +116,7 @@ class BrowserViewModel : ViewModel() {
                 println("[DEBUG] BrowserViewModel: 开始初始化默认浏览器标签页")
                 log("正在初始化默认浏览器标签页...")
                 val newPage = KBrowser.newPage(
-                    url = _state.value.navigateUrlInput,
-                    profile = KBProfile("default_session", "")
+                    url = _state.value.navigateUrlInput
                 )
                 println("[DEBUG] BrowserViewModel: KBrowser.newPage 返回成功")
                 _state.update { it.copy(page = newPage) }
@@ -210,34 +208,17 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.FetchSemanticSnapshot -> {
                 val page = _state.value.page ?: return
-                log("开始抓取 Aria 语义树（原始，不清洗）...")
+                log("开始抓取 Snapshot（YAML 格式）...")
                 viewModelScope.launch {
                     try {
-                        val rawAxTree = page.getRawAxTree()
-                        log("诊断: URL=${rawAxTree.url}, 总元素=${rawAxTree.totalElements}, 可见=${rawAxTree.visibleElements}")
-
-                        // ── 诊断 print：原始完整 JSON ──────
-                        val jsonParser = kotlinx.serialization.json.Json { prettyPrint = true }
-                        val rawJson = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), rawAxTree)
-                        println("========== RAW AXTREE JSON (${rawAxTree.nodes.size} nodes) ==========")
-                        println(rawJson)
-                        println("========== END RAW ==========")
-
-                        // ── 诊断 print：清洗后完整 JSON（给 AI 看的格式）──────
-                        val cleaned = rawAxTree.getCleanedAxTree()
-                        val cleanedJson = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), cleaned)
-                        println("========== CLEANED AXTREE JSON (${cleaned.nodes.size} nodes) ==========")
-                        println(cleanedJson)
-                        println("========== END ==========")
-                        // ─────────────────────────────────────────────────────
-                        
-                        val jsonStr = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), cleaned)
-                        val formattedYaml = formatJsonLikeYaml(jsonStr)
-                        
-                        _state.update { it.copy(snapshotText = formattedYaml) }
-                        log("抓取完成！原始:${rawAxTree.nodes.size} 清洗后:${cleaned.nodes.size}")
+                        val yaml = page.snapshot()
+                        println("========== SNAPSHOT ==========")
+                        println(yaml)
+                        println("========== END SNAPSHOT ==========")
+                        _state.update { it.copy(snapshotText = yaml) }
+                        log("Snapshot 抓取完成")
                     } catch (e: Exception) {
-                        log("抓取 Aria 语义树失败: ${e.message}")
+                        log("Snapshot 抓取失败: ${e.message}")
                     }
                 }
             }

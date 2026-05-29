@@ -11,7 +11,10 @@ actual fun initializeKBrowser() {
     try {
         println("[initializeKBrowser] Getting KBCefApp instance...")
         System.out.flush()
-        xyz.kbrowser.jcef.KBCefApp.getInstance(xyz.kbrowser.webview.KBrowser.config.storageDir)
+        xyz.kbrowser.jcef.KBCefApp.getInstance(
+            xyz.kbrowser.webview.KBrowser.getConfigPath()
+                ?: throw IllegalStateException("KBrowser.setConfigPath() must be called before initializeKBrowser()")
+        )
         
         println("[initializeKBrowser] Waiting for CefApp initialization to complete...")
         System.out.flush()

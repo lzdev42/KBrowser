@@ -10,30 +10,41 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 object KBrowser {
-    lateinit var config: BrowserConfig
-        private set
+    private var configPath: String? = null
+
+    internal fun getConfigPath(): String? = configPath
 
     private val _pages = MutableStateFlow<List<KBPage>>(emptyList())
     val pages: StateFlow<List<KBPage>> = _pages.asStateFlow()
 
-    fun configure(config: BrowserConfig) {
-        this.config = config
+    /**
+     * Sets the root directory for KBrowser data storage.
+     * Must be called before [initializeKBrowser] and [newPage].
+     *
+     * KBrowser will create a `kbrowser_profile` subdirectory inside [path]
+     * for its own browser data (cookies, cache, etc.).
+     *
+     * Example:
+     * ```kotlin
+     * KBrowser.setConfigPath("/path/to/myapp/cache")
+     * initializeKBrowser()
+     * ```
+     */
+    fun setConfigPath(path: String) {
+        this.configPath = path
     }
 
-    suspend fun newPage(url: String? = null, profile: KBProfile? = null): KBPage {
-        if (!::config.isInitialized) {
-            throw IllegalStateException("KBrowser must be configured with BrowserConfig before use")
-        }
-        val actualProfile = profile ?: KBProfile("default", config.storageDir)
+    suspend fun newPage(url: String? = null): KBPage {
+        val path = configPath
+            ?: throw IllegalStateException("KBrowser.setConfigPath() must be called before newPage()")
+        val profile = KBProfile("kbrowser_default", "$path/kbrowser_profile")
         val webView = withContext(Dispatchers.Main) {
-            createHeadlessWebView(null, actualProfile)
+            createHeadlessWebView(null, profile)
         }
         val page = KBPage(webView)
         _pages.update { it + page }
         if (url != null) {
-            // 不要在这里挂起等待加载完成，否则会出现死锁：
-            // loadUrl 等待页面加载 -> JCEF 等待组件被挂载到界面上才开始加载 -> 界面等待 newPage 返回才去挂载
-            kotlinx.coroutines.GlobalScope.launch(Dispatchers.Main) {
+            GlobalScope.launch(Dispatchers.Main) {
                 try {
                     page.loadUrl(url)
                 } catch (e: Exception) {
@@ -44,9 +55,7 @@ object KBrowser {
         return page
     }
 
-    fun getPages(): List<KBPage> {
-        return _pages.value
-    }
+    fun getPages(): List<KBPage> = _pages.value
 
     fun registerPage(page: KBPage) {
         _pages.update { if (it.contains(page)) it else it + page }
@@ -65,18 +74,8 @@ object KBrowser {
 
 internal expect fun performGlobalShutdown()
 
-/**
- * 平台原生 AX 树获取。
- * JVM 平台通过 CDP Accessibility.getFullAXTree 实现，不注入 JS，不受 CSP 限制。
- * Android/iOS 返回 null，由调用方 fallback 到 JS 注入路线。
- */
 internal expect suspend fun fetchAxTreeNative(webView: KBWebView): AxTreeData?
 
-/**
- * 平台原生元素定位。
- * JVM 平台通过 CDP DOM.querySelectorAll / Accessibility.getFullAXTree 实现，不注入 JS，不受 CSP 限制。
- * Android/iOS 返回 null，由调用方 fallback 到 JS 注入路线。
- */
 internal expect suspend fun findElementsNative(
     webView: KBWebView,
     selector: String,

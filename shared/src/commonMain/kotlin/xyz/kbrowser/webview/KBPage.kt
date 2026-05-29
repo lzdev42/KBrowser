@@ -214,6 +214,27 @@ class KBPage internal constructor(val webView: KBWebView) {
     }
 
     /**
+     * Returns the current page state as a KBrowser YAML Snapshot string.
+     *
+     * Fetches the AXTree, applies minimal cleaning (removes invisible nodes and
+     * technical noise), then converts to tree-structured YAML with text uplifted,
+     * coordinates, selectors, and occlusion info inline.
+     *
+     * Recommended for AI agents — much lower token count than raw JSON,
+     * and semantically clear (icon buttons show their text, placeholders visible, etc.).
+     *
+     * Example output:
+     * ```
+     * - document "Page Title"
+     *   - textbox [placeholder:手机号] @r29 [center:691,380] [selector:...>input]
+     *   - button "登录/注册" @r117 [center:657,534]
+     * ```
+     */
+    suspend fun snapshot(): String {
+        return getRawAxTree().getCleanedAxTree().toYamlSnapshot()
+    }
+
+    /**
      * 新标签页/新窗口请求回调。
      * 当页面通过 target="_blank"、window.open() 等方式请求打开新窗口时触发。
      * 直接代理到底层 [KBWebView.onNewWindowRequest]。

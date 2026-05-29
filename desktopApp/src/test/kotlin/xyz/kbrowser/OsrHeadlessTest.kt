@@ -13,7 +13,7 @@ fun main() {
     println("====== OSR 无头渲染测试 ======")
 
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-    xyz.kbrowser.webview.KBrowser.configure(xyz.kbrowser.webview.BrowserConfig(storageDir = storageDir))
+    xyz.kbrowser.webview.KBrowser.setConfigPath(storageDir)
     initializeKBrowser()
 
     SwingUtilities.invokeLater {

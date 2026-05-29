@@ -20,7 +20,7 @@ fun main() {
     System.setProperty("jcef.chrome.runtime.enabled", "false")
 
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-    KBrowser.configure(BrowserConfig(storageDir = storageDir))
+    KBrowser.setConfigPath(storageDir)
     initializeKBrowser()
 
     // macOS 上 startupAsync 是异步的，initializeKBrowser 里的 10s 等待可能不够

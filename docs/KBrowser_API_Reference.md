@@ -16,7 +16,7 @@ JVM platform must be initialized before calling `application {}`:
 // main.kt
 fun main() {
     // 1. Configure storage path
-    KBrowser.configure(BrowserConfig(storageDir = "/path/to/cache"))
+    KBrowser.setConfigPath("/path/to/cache")
     // 2. Initialize JCEF engine (must be called before any UI initialization)
     initializeKBrowser()
 
@@ -28,6 +28,13 @@ fun main() {
     }
 }
 ```
+
+### KBrowser Object
+
+| Method | Description |
+|------|------|
+| `KBrowser.setConfigPath(path: String)` | Sets the root directory for KBrowser data. KBrowser creates a `kbrowser_profile` subdirectory inside for its own data (cookies, cache). Must be called before `initializeKBrowser()` and `newPage()`. |
+| `KBrowser.newPage(url: String? = null): KBPage` | Creates a new headless browser page, optionally navigating to `url` on creation. KBrowser manages its own profile internally — no profile parameter needed. |
 
 ---
 
@@ -134,8 +141,10 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 | Method | Description |
 |------|------|
 | `suspend getRawAxTree(): AxTreeData` | Retrieves the full accessibility tree and updates the internal coordinates cache `nodeCache`. |
-| `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension function to filter out noisy nodes (invisible elements, layout-only containers, etc.). |
+| `suspend snapshot(): String` | Returns the current page as a KBrowser YAML Snapshot string. Fetches AXTree, applies minimal cleaning, converts to tree-structured YAML with text uplifted, coordinates, selectors, and occlusion info inline. Recommended for AI agents. |
+| `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension function to filter out technical noise (invisible elements, script/style tags, debug overlay). |
 | `AxTreeData.getViewportAxTree(): AxTreeData` | Extension function to crop nodes to the current viewport area. |
+| `AxTreeData.toYamlSnapshot(): String` | Converts the tree to KBrowser YAML Snapshot format — tree-structured, text-uplifted, with refid/selector/coordinates/occlusion inline. Recommended for AI agents. See [Snapshot Format Guide](KBrowser_Snapshot_Format.md). |
 
 These two extension functions are pure Kotlin computations. They execute in the caller's coroutine context without switching threads.
 
@@ -319,9 +328,13 @@ data class Diagnostics(
     val description: String,
     val failingUrl: String
 )
+```
 
-data class BrowserConfig(val storageDir: String)
+### KBProfile
 
+`KBProfile` is for use with `KBWebView` when you need isolated browser data (separate cookies/cache per WebView instance). `KBBrowser` manages its own profile internally — you don't need to pass `KBProfile` to `newPage()`.
+
+```kotlin
 data class KBProfile(val profileId: String, val storageDir: String)
 ```
 
@@ -419,13 +432,10 @@ fun BrowserApp() {
 ```kotlin
 suspend fun runAutomation() {
     // Initialization (done in main.kt, shown here for illustration)
-    // KBrowser.configure(BrowserConfig(storageDir = "/tmp/kbrowser"))
+    // KBrowser.setConfigPath("/tmp/kbrowser")
     // initializeKBrowser()
 
-    val page = KBrowser.newPage(
-        url = "https://example.com/login",
-        profile = KBProfile("session_001", "/tmp/kbrowser/session_001")
-    )
+    val page = KBrowser.newPage(url = "https://example.com/login")
 
     try {
         // Intercept new window requests

@@ -73,7 +73,7 @@ Must be called **before** `application {}`:
 
 ```kotlin
 fun main() {
-    KBrowser.configure(BrowserConfig(storageDir = "/path/to/cache"))
+    KBrowser.setConfigPath("/path/to/cache")
     initializeKBrowser()  // Must come before any UI initialization
  
     application {
@@ -111,10 +111,7 @@ fun BrowserScreen() {
 
 ```kotlin
 // Runs in headless mode, no UI needed
-val page = KBrowser.newPage(
-    url = "https://example.com",
-    profile = KBProfile("session_001", "/path/to/cache/session_001")
-)
+val page = KBrowser.newPage(url = "https://example.com")
 
 // Intercept new page requests
 page.onNewPage = { url -> println("New page request: $url") }
