@@ -136,6 +136,13 @@ fun BrowserScreen() {
 | `suspend screenshot(): ByteArray?` | CDP 截图，返回 CSS 像素大小的 PNG 字节数组 |
 | `close()` | 销毁底层 WebView |
 
+### 交互锁定与视觉反馈
+
+| 方法 | 说明 |
+|------|------|
+| `setInteractionLocked(locked: Boolean)` | 锁定/解锁用户交互。`true` 时在浏览器上覆盖 AWT 拦截层，阻止用户所有鼠标/键盘输入，自动化操作（CDP）正常工作。遮罩同时渲染鼠标轨迹和点击扩散动画。仅 JVM 有效，Android/iOS 为空实现。 |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | 更新遮罩上的鼠标轨迹位置（视口 CSS 像素）。`clickByCoordinates`、`hoverByCoordinates`、`dragByCoordinates` 会自动调用。 |
+
 ### AXTree 语义树
 
 | 方法 | 说明 |

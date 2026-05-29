@@ -136,6 +136,13 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 | `suspend screenshot(): ByteArray?` | Takes screenshot via CDP, returning PNG bytes in CSS pixel size. |
 | `close()` | Destroys the underlying WebView. |
 
+### Interaction Lock & Visual Feedback
+
+| Method | Description |
+|------|------|
+| `setInteractionLocked(locked: Boolean)` | Locks/unlocks user interaction. When `true`, overlays an AWT intercept layer on the browser that blocks all user mouse/keyboard input while automation (CDP) continues to work normally. The overlay also renders mouse trail and click ripple animations. JVM only; no-op on Android/iOS. |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | Updates the mouse trail position on the overlay (viewport CSS pixels). Called automatically by `clickByCoordinates`, `hoverByCoordinates`, and `dragByCoordinates`. |
+
 ### AXTree (Accessibility Tree)
 
 | Method | Description |

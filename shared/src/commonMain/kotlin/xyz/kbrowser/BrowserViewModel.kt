@@ -103,6 +103,10 @@ sealed interface BrowserIntent {
 
     // 会话管理
     object ClearCacheAndCookies : BrowserIntent
+
+    // 交互锁定
+    object LockInteraction : BrowserIntent
+    object UnlockInteraction : BrowserIntent
 }
 
 class BrowserViewModel : ViewModel() {
@@ -791,6 +795,16 @@ class BrowserViewModel : ViewModel() {
                         log("✅ 缓存和 Cookie 已清除")
                     } catch (e: Exception) { log("❌ 清除失败: ${e.message}") }
                 }
+            }
+            BrowserIntent.LockInteraction -> {
+                val page = _state.value.page ?: return
+                page.setInteractionLocked(true)
+                log("🔒 交互已锁定（用户无法操作，自动化正常）")
+            }
+            BrowserIntent.UnlockInteraction -> {
+                val page = _state.value.page ?: return
+                page.setInteractionLocked(false)
+                log("🔓 交互已解锁")
             }
             BrowserIntent.TakeScreenshot -> {
                 val page = _state.value.page ?: return

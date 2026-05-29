@@ -167,6 +167,9 @@ class AndroidWebView(
         webView = null
     }
 
+    override fun setInteractionLocked(locked: Boolean) { /* Android: not implemented */ }
+    override fun updateMouseTrail(viewportX: Int, viewportY: Int) { /* Android: not implemented */ }
+
     override suspend fun takeScreenshot(): ByteArray? {
         val w = webView ?: return null
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {

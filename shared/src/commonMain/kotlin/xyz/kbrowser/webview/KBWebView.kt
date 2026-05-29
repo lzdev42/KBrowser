@@ -40,6 +40,20 @@ interface KBWebView {
     suspend fun takeScreenshot(): ByteArray?
 
     /**
+     * 锁定/解锁用户交互。
+     * locked=true 时在浏览器组件上覆盖 AWT 拦截层，阻止用户鼠标/键盘输入。
+     * 自动化操作（CDP）不受影响。
+     * 目前仅 JVM 平台有效，Android/iOS 为空实现。
+     */
+    fun setInteractionLocked(locked: Boolean)
+
+    /**
+     * 更新鼠标轨迹位置（在锁定状态下显示自动化操作的光标动画）。
+     * 坐标为视口坐标（CSS 像素）。仅 JVM 平台有效。
+     */
+    fun updateMouseTrail(viewportX: Int, viewportY: Int)
+
+    /**
      * 新窗口/新标签页请求回调。
      * 当页面通过 target="_blank"、window.open() 等方式请求打开新窗口时触发。
      * 设置此回调后，默认的弹窗行为会被阻止，URL 交由调用方处理。

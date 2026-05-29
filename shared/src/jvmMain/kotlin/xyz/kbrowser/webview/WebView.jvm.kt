@@ -274,6 +274,136 @@ class JvmWebView(
         }
     }
 
+    // ── 交互锁定 + 鼠标轨迹 + 点击动画渲染（AWT 层）────────────────────────
+    private var lockPanel: javax.swing.JPanel? = null
+    private val trailPoints = java.util.concurrent.CopyOnWriteArrayList<java.awt.Point>()
+    private val MAX_TRAIL = 30
+
+    // 点击动画：每次点击产生一个扩散圆圈
+    private data class ClickRipple(val x: Int, val y: Int, val startMs: Long)
+    private val clickRipples = java.util.concurrent.CopyOnWriteArrayList<ClickRipple>()
+    private val RIPPLE_DURATION_MS = 500L
+
+    /**
+     * 触发点击动画（圆圈扩散效果）。
+     * 无论是否锁定都会显示，作为自动化操作的视觉反馈。
+     * 坐标为视口坐标（CSS 像素）。
+     */
+    fun triggerClickAnimation(viewportX: Int, viewportY: Int) {
+        val panel = lockPanel ?: return
+        clickRipples.add(ClickRipple(viewportX, viewportY, System.currentTimeMillis()))
+        // 启动动画定时器
+        val timer = javax.swing.Timer(16) { _ ->
+            val now = System.currentTimeMillis()
+            clickRipples.removeAll { now - it.startMs > RIPPLE_DURATION_MS }
+            panel.repaint()
+        }
+        timer.isRepeats = true
+        timer.start()
+        // 动画结束后停止定时器
+        javax.swing.Timer(RIPPLE_DURATION_MS.toInt() + 50) { timer.stop() }.apply {
+            isRepeats = false
+            start()
+        }
+    }
+
+    override fun updateMouseTrail(viewportX: Int, viewportY: Int) {
+        val panel = lockPanel ?: return
+        trailPoints.add(java.awt.Point(viewportX, viewportY))
+        if (trailPoints.size > MAX_TRAIL) trailPoints.removeAt(0)
+        SwingUtilities.invokeLater { panel.repaint() }
+    }
+
+    /**
+     * 锁定/解锁用户交互。
+     * locked=true：在 JCEF 组件上覆盖 AWT 面板，拦截所有用户输入，并渲染鼠标轨迹。
+     * locked=false：移除面板，恢复用户操作。
+     * 自动化操作（CDP）不受影响。
+     */
+    override fun setInteractionLocked(locked: Boolean) {
+        SwingUtilities.invokeLater {
+            val comp = cefBrowser.uiComponent ?: return@invokeLater
+            val parent = comp.parent ?: return@invokeLater
+
+            if (locked) {
+                if (lockPanel != null) return@invokeLater
+                val panel = object : javax.swing.JPanel(null) {
+                    override fun paintComponent(g: java.awt.Graphics) {
+                        super.paintComponent(g)
+                        val g2 = g as java.awt.Graphics2D
+                        g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+
+                        // 半透明遮罩
+                        g2.color = java.awt.Color(0, 0, 0, 60)
+                        g2.fillRect(0, 0, width, height)
+
+                        // 鼠标轨迹
+                        val pts = trailPoints.toList()
+                        if (pts.size >= 2) {
+                            for (i in 1 until pts.size) {
+                                val alpha = (i.toFloat() / pts.size * 200).toInt()
+                                val size = (i.toFloat() / pts.size * 8).toInt().coerceAtLeast(2)
+                                g2.color = java.awt.Color(180, 60, 20, alpha)
+                                g2.stroke = java.awt.BasicStroke(size.toFloat(), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND)
+                                g2.drawLine(pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y)
+                            }
+                        }
+                        // 当前光标圆点
+                        pts.lastOrNull()?.let { p ->
+                            g2.color = java.awt.Color(180, 60, 20, 230)
+                            g2.fillOval(p.x - 14, p.y - 14, 28, 28)
+                            g2.color = java.awt.Color(255, 255, 255, 200)
+                            g2.stroke = java.awt.BasicStroke(2f)
+                            g2.drawOval(p.x - 14, p.y - 14, 28, 28)
+                        }
+
+                        // 点击扩散动画（隐性商标 😎）
+                        val now = System.currentTimeMillis()
+                        for (ripple in clickRipples.toList()) {
+                            val elapsed = now - ripple.startMs
+                            val progress = (elapsed.toFloat() / RIPPLE_DURATION_MS).coerceIn(0f, 1f)
+                            val maxRadius = 60
+                            val radius = (progress * maxRadius).toInt()
+                            val alpha = ((1f - progress) * 255).toInt()
+                            // 外圈扩散
+                            g2.color = java.awt.Color(180, 60, 20, (alpha * 0.7f).toInt())
+                            g2.stroke = java.awt.BasicStroke(2.5f)
+                            g2.drawOval(ripple.x - radius, ripple.y - radius, radius * 2, radius * 2)
+                            // 内圈实心（点击中心）
+                            val innerRadius = ((1f - progress) * 20).toInt().coerceAtLeast(0)
+                            g2.color = java.awt.Color(200, 70, 20, alpha)
+                            g2.fillOval(ripple.x - innerRadius, ripple.y - innerRadius, innerRadius * 2, innerRadius * 2)
+                        }
+                    }
+                }.apply {
+                    isOpaque = false
+                    background = java.awt.Color(0, 0, 0, 0)
+                    bounds = comp.bounds
+                    cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR)
+                    // 消费所有用户输入事件
+                    addMouseListener(object : java.awt.event.MouseAdapter() {})
+                    addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {})
+                    addMouseWheelListener { /* consume */ }
+                    addKeyListener(object : java.awt.event.KeyAdapter() {})
+                    isFocusable = true
+                }
+                lockPanel = panel
+                parent.add(panel)
+                parent.setComponentZOrder(panel, 0)
+                parent.revalidate()
+                parent.repaint()
+            } else {
+                lockPanel?.let { panel ->
+                    parent.remove(panel)
+                    parent.revalidate()
+                    parent.repaint()
+                }
+                lockPanel = null
+                trailPoints.clear()
+            }
+        }
+    }
+
 
     override fun reload() {
         if (!isDestroyed.get()) {
@@ -586,6 +716,10 @@ class JvmWebView(
                 logCoord("clickByCoordinates: dispatchMouseEvent failed: ${e.message}")
             }
         }
+
+        // 触发点击动画（视口坐标）
+        triggerClickAnimation(clientX, clientY)
+        updateMouseTrail(clientX, clientY)
     }
 
     /**
@@ -635,6 +769,9 @@ class JvmWebView(
                 logCoord("hoverByCoordinates: dispatchMouseEvent failed: ${e.message}")
             }
         }
+
+        // 更新鼠标轨迹（悬停移动）
+        updateMouseTrail(clientX, clientY)
     }
 
     // ===== Native Key Event Methods (JCEF DevTools CDP) =====
@@ -923,6 +1060,11 @@ class JvmWebView(
         }
 
         cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, endAwtX, endAwtY, 1, false, java.awt.event.MouseEvent.BUTTON1))
+
+        // 拖拽轨迹：起点→终点，终点触发点击动画（用 CSS 视口坐标）
+        updateMouseTrail(startX, startY)
+        updateMouseTrail(endX, endY)
+        triggerClickAnimation(endX, endY)
     }
 
 }

@@ -203,6 +203,9 @@ class IosWebView(
         webView = null
     }
 
+    override fun setInteractionLocked(locked: Boolean) { /* iOS: not implemented */ }
+    override fun updateMouseTrail(viewportX: Int, viewportY: Int) { /* iOS: not implemented */ }
+
     @OptIn(ExperimentalForeignApi::class)
     override suspend fun takeScreenshot(): ByteArray? {
         val w = webView ?: return null

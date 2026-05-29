@@ -899,6 +899,24 @@ fun BrowserExampleScreen(
                                     ) {
                                         Text("清除缓存和Cookie", color = Color.White, fontWeight = FontWeight.Bold)
                                     }
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = { viewModel.dispatch(BrowserIntent.LockInteraction) },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                                        ) {
+                                            Text("🔒 锁定交互", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        Button(
+                                            onClick = { viewModel.dispatch(BrowserIntent.UnlockInteraction) },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                                        ) {
+                                            Text("🔓 解锁交互", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
                                 }
                             }
                         }

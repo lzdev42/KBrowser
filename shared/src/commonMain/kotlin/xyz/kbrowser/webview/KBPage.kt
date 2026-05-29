@@ -214,6 +214,24 @@ class KBPage internal constructor(val webView: KBWebView) {
     }
 
     /**
+     * 锁定/解锁用户交互。
+     * locked=true：在浏览器上覆盖 AWT 拦截层，阻止用户鼠标/键盘输入，并显示鼠标轨迹。
+     * locked=false：移除拦截层，恢复用户操作。
+     * 自动化操作（CDP）不受影响。JVM 平台有效，Android/iOS 为空实现。
+     */
+    fun setInteractionLocked(locked: Boolean) {
+        webView.setInteractionLocked(locked)
+    }
+
+    /**
+     * 更新鼠标轨迹位置（在锁定状态下显示自动化操作的光标动画）。
+     * 坐标为视口坐标（CSS 像素）。仅 JVM 平台有效。
+     */
+    fun updateMouseTrail(viewportX: Int, viewportY: Int) {
+        webView.updateMouseTrail(viewportX, viewportY)
+    }
+
+    /**
      * Returns the current page state as a KBrowser YAML Snapshot string.
      *
      * Fetches the AXTree, applies minimal cleaning (removes invisible nodes and
