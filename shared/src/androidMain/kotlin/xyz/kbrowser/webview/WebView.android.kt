@@ -145,6 +145,53 @@ class AndroidWebView(
         webView?.removeJavascriptInterface(name)
     }
 
+    /**
+     * Android 实现：通过 JavascriptInterface + evaluateJavascript 模拟 Promise。
+     * 注入一个 __kb_handler_[name] 的 JavascriptInterface，JS 端包装成 Promise。
+     * handler 在 JavascriptInterface 线程执行，结果通过 evaluateJavascript 传回 resolve。
+     */
+    private val jsHandlerCallbacks = mutableMapOf<String, (String) -> String>()
+
+    override fun registerJsHandler(name: String, handler: (String) -> String) {
+        val w = getOrCreateWebView(AndroidContextHolder.context)
+        jsHandlerCallbacks[name] = handler
+        val bridgeName = "__kb_handler_$name"
+        w.addJavascriptInterface(object {
+            @android.webkit.JavascriptInterface
+            fun call(callId: String, message: String): String {
+                return try {
+                    handler(message)
+                } catch (e: Exception) {
+                    "__KB_ERROR__:${e.message}"
+                }
+            }
+        }, bridgeName)
+        // 注入 Promise 包装
+        val script = """
+            window.$name = function(arg) {
+                return new Promise(function(resolve, reject) {
+                    try {
+                        var result = window.$bridgeName.call('', typeof arg === 'string' ? arg : JSON.stringify(arg));
+                        if (result && result.indexOf('__KB_ERROR__:') === 0) {
+                            reject(new Error(result.substring(13)));
+                        } else {
+                            resolve(result);
+                        }
+                    } catch(e) {
+                        reject(e);
+                    }
+                });
+            };
+        """.trimIndent()
+        w.evaluateJavascript(script, null)
+    }
+
+    override fun unregisterJsHandler(name: String) {
+        jsHandlerCallbacks.remove(name)
+        webView?.removeJavascriptInterface("__kb_handler_$name")
+        webView?.evaluateJavascript("delete window.$name;", null)
+    }
+
     override fun clearCacheAndCookies() {
         val w = getOrCreateWebView(AndroidContextHolder.context)
         w.clearCache(true)

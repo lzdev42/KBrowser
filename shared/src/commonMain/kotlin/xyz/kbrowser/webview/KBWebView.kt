@@ -23,8 +23,45 @@ interface KBWebView {
 
     // JS <-> Native 交互与通信
     fun evaluateJavascript(script: String, callback: ((String) -> Unit)? = null)
+
+    /**
+     * 注册单向通知回调（Fire-and-Forget）。
+     * JS 端调用 window.[name](data)，Native 收到 data 字符串，无返回值。
+     *
+     * 适用场景：埋点上报、事件通知、日志等不需要等待结果的场景。
+     *
+     * JS 调用方式：
+     * ```javascript
+     * window.onUserAction("click");
+     * ```
+     */
     fun registerJsCallback(name: String, callback: (String) -> Unit)
     fun unregisterJsCallback(name: String)
+
+    /**
+     * 注册支持 Promise 的双向请求处理器（Request-Response）。
+     * JS 端 await window.[name](data) 可直接拿到 Kotlin handler 的返回值。
+     *
+     * 适用场景：JS 向 Native 请求数据、配置、计算结果等需要等待响应的场景。
+     *
+     * Kotlin 注册：
+     * ```kotlin
+     * webView.registerJsHandler("getConfig") { jsonString ->
+     *     """{"theme":"dark","version":"1.0"}"""
+     * }
+     * ```
+     *
+     * JS 调用（支持 async/await）：
+     * ```javascript
+     * const config = await window.getConfig(JSON.stringify({ key: "theme" }));
+     * console.log(JSON.parse(config).theme); // "dark"
+     * ```
+     *
+     * 注意：handler 在后台线程执行，不要在其中直接操作 UI。
+     * 如需注销，调用 [unregisterJsHandler]。
+     */
+    fun registerJsHandler(name: String, handler: (String) -> String)
+    fun unregisterJsHandler(name: String)
 
     // 会话生命周期与清理
     fun clearCacheAndCookies()

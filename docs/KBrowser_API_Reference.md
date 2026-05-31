@@ -31,16 +31,21 @@ fun main() {
 
 ### KBrowser Object
 
-| Method | Description |
+| Method / Property | Description |
 |------|------|
 | `KBrowser.setConfigPath(path: String)` | Sets the root directory for KBrowser data. KBrowser creates a `kbrowser_profile` subdirectory inside for its own data (cookies, cache). Must be called before `initializeKBrowser()` and `newPage()`. |
 | `KBrowser.newPage(url: String? = null): KBPage` | Creates a new headless browser page, optionally navigating to `url` on creation. KBrowser manages its own profile internally — no profile parameter needed. |
+| `KBrowser.pages: StateFlow<List<KBPage>>` | Reactive stream of all currently open pages. Collect with `collectAsState()` to observe page list changes. |
+| `KBrowser.getPages(): List<KBPage>` | Synchronously returns a snapshot of all currently open pages. |
+| `KBrowser.shutdown()` | Closes all pages and performs global resource cleanup. Call on application exit. |
+| `KBrowser.registerPage(page: KBPage)` | Manually registers a `KBPage` into KBrowser's page list. Normally not needed — `newPage()` registers automatically. |
+| `KBrowser.unregisterPage(page: KBPage)` | Removes a page from KBrowser's page list. Normally not needed — `page.close()` handles this automatically. |
 
 ---
 
 ## 2. KBWebView — UI Component Layer
 
-`KBWebView` is a platform-independent interface representing a web page rendering instance. It is created using `rememberKBWebView` and rendered using the `@Composable KBWebView` component.
+`KBWebView` is a platform-independent interface representing a web page rendering instance. It is created using `rememberKBWebView(initialUrl, profile?)` and rendered using the `@Composable KBWebView` component. The optional `profile` parameter accepts a `KBProfile` to isolate cookies and cache for that WebView instance.
 
 ### StateFlows
 
@@ -48,7 +53,7 @@ fun main() {
 |------|------|------|
 | `currentUrl` | `StateFlow<String?>` | Current page URL |
 | `currentTitle` | `StateFlow<String?>` | Current page title |
-| `loadingState` | `StateFlow<LoadingState>` | Loading state: `IDLE` / `LOADING` / `FINISHED` / `ERROR` |
+| `loadingState` | `StateFlow<LoadingState>` | Loading state — a sealed interface with subtypes: `Initializing` / `Loading` / `Finished` / `Error(errorCode, description, failingUrl)` |
 | `progress` | `StateFlow<Float>` | Loading progress (0.0f to 1.0f) |
 | `canGoBack` | `StateFlow<Boolean>` | Whether backward navigation is available |
 | `canGoForward` | `StateFlow<Boolean>` | Whether forward navigation is available |
@@ -64,13 +69,37 @@ fun main() {
 | `goBack()` | Navigates backward |
 | `goForward()` | Navigates forward |
 
-### JS Interaction
+### JS Interaction (Native <-> Web)
+
+KBrowser provides two ways for Web-to-Native communication: one-way callbacks and two-way handlers with Promise support.
 
 | Method | Description |
 |------|------|
-| `evaluateJavascript(script, callback?)` | Evaluates Javascript, returning the result as a JSON string via callback |
-| `registerJsCallback(name, callback)` | Registers a Native callback, callable from JS via `window.<name>(data)` |
-| `unregisterJsCallback(name)` | Unregisters a JS callback |
+| `evaluateJavascript(script, callback?)` | Evaluates Javascript from Kotlin, optionally returning the result via callback. |
+| `registerJsCallback(name, callback)` | **One-way (Fire-and-Forget)**: Registers a callback in Kotlin. JS calls it via `window.<name>(data)`. Ideal for logging or events where JS doesn't need a response. |
+| `unregisterJsCallback(name)` | Unregisters a JS callback. |
+| `registerJsHandler(name, handler)` | **Two-way (Request-Response)**: Registers a handler that returns a String. KBrowser injects it as a Promise-based function in JS. JS can call `await window.<name>(data)` to get the result from Kotlin. |
+| `unregisterJsHandler(name)` | Unregisters a JS handler. |
+
+**Example: Two-way Promise Handler**
+```kotlin
+// In Kotlin: Register the handler
+webView.registerJsHandler("getConfig") { jsonString ->
+    // Process request and return a string
+    """{"theme":"dark","version":"1.0"}"""
+}
+```
+```javascript
+// In JS: Await the result
+async function fetchConfig() {
+    try {
+        const configStr = await window.getConfig(JSON.stringify({ key: "theme" }));
+        console.log(JSON.parse(configStr).theme); // "dark"
+    } catch (e) {
+        console.error("Handler failed", e);
+    }
+}
+```
 
 ### Lifecycle & Others
 
@@ -82,6 +111,10 @@ fun main() {
 | `setWebChromeClient(client?)` | Sets callback for JS dialogs / permissions |
 | `suspend takeScreenshot(): ByteArray?` | Takes screenshot via CDP, returning PNG in CSS pixel size. Solves black-screen issues |
 | `var onNewWindowRequest: ((url: String) -> Unit)?` | Callback for new tab/window requests; silently discarded if null |
+| `setInteractionLocked(locked: Boolean)` | Locks/unlocks user interaction. When `true`, overlays an AWT intercept layer on the browser component that blocks all user mouse/keyboard input; automation (CDP) is unaffected. The overlay renders a mouse trail and click ripple animations as visual feedback during automation. **JVM only; no-op on Android/iOS.** |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | Updates the mouse trail position on the lock overlay (viewport CSS pixels). Normally no need to call manually — `clickByCoordinates`, `hoverByCoordinates`, and `dragByCoordinates` all call this automatically. **JVM only.** |
+
+> **Click ripple animation**: Regardless of whether `setInteractionLocked` is active, every coordinate-based automation click (`clickByCoordinates`, etc.) triggers a ripple animation at the click position as visual feedback. When locked, the animation renders on the overlay layer; when unlocked, the animation is invisible because the overlay is not mounted. To show the animation without blocking user input, call `setInteractionLocked(true)` first.
 
 ### Composable Usage Example
 
@@ -120,6 +153,12 @@ fun BrowserScreen() {
 ## 3. KBPage — Automation Layer
 
 `KBPage` is a coroutine-based wrapper around `KBWebView`. All its methods are `suspend` functions and can be safely called from any coroutine context. It is created using `KBrowser.newPage()`.
+
+### Properties
+
+| Property | Type | Description |
+|------|------|------|
+| `uuid` | `String` | Unique string ID auto-generated when the `KBPage` instance is created. Useful for identifying and tracking pages in multi-page scenarios. |
 
 ### StateFlows
 
@@ -337,6 +376,68 @@ data class Diagnostics(
 )
 ```
 
+### LoadingState
+
+`loadingState` is a `sealed interface`. Use `is` checks to handle each state:
+
+```kotlin
+sealed interface LoadingState {
+    data object Initializing : LoadingState  // WebView just created, not yet loading
+    data object Loading : LoadingState       // Currently loading
+    data object Finished : LoadingState      // Load complete
+    data class Error(                        // Load failed
+        val errorCode: Int,
+        val description: String,
+        val failingUrl: String
+    ) : LoadingState
+}
+
+// Usage example
+val state by webView.loadingState.collectAsState()
+when (state) {
+    is LoadingState.Loading  -> LinearProgressIndicator()
+    is LoadingState.Finished -> Text("Loaded")
+    is LoadingState.Error    -> Text("Error: ${(state as LoadingState.Error).description}")
+    else -> {}
+}
+```
+
+### KBSelectorType
+
+The selector type enum used internally by `KBLocator`. Set automatically by `KBPage` factory methods — normally no need to use directly:
+
+```kotlin
+enum class KBSelectorType {
+    CSS,         // CSS selector, e.g. ".btn-login"
+    XPATH,       // XPath, e.g. "//button[@id='submit']"
+    TEXT,        // Match by text content
+    ROLE,        // Match by ARIA role
+    LABEL,       // Match by associated label text
+    PLACEHOLDER, // Match by placeholder attribute
+    ALT_TEXT,    // Match by alt attribute
+    TITLE,       // Match by title attribute
+    TEST_ID      // Match by data-testid attribute
+}
+```
+
+### LocateResult
+
+The parameter type in `KBLocator.filter { }` callbacks, containing basic info about a located element:
+
+```kotlin
+data class LocateResult(
+    val centerX: Int,                        // Element center X (CSS document pixels)
+    val centerY: Int,                        // Element center Y (CSS document pixels)
+    val width: Int,                          // Element width
+    val height: Int,                         // Element height
+    val tagName: String,                     // HTML tag name, e.g. "button"
+    val role: String,                        // ARIA role
+    val text: String,                        // Element text content
+    val isVisible: Boolean,                  // Whether the element is visible
+    val attributes: Map<String, String>      // Element attributes map
+)
+```
+
 ### KBProfile
 
 `KBProfile` is for use with `KBWebView` when you need isolated browser data (separate cookies/cache per WebView instance). `KBBrowser` manages its own profile internally — you don't need to pass `KBProfile` to `newPage()`.
@@ -377,6 +478,23 @@ interface JsResultCallback {
 interface JsPromptResultCallback {
     fun confirm(value: String?)
     fun cancel()
+}
+
+// Permission request interface
+interface PermissionRequest {
+    val origin: String                       // Requesting origin domain
+    val resources: List<PermissionResource>  // List of requested permissions
+    fun grant()                              // Grant the permission
+    fun deny()                               // Deny the permission
+}
+
+enum class PermissionResource {
+    CAMERA,
+    MICROPHONE,
+    GEOLOCATION,
+    PROTECTED_MEDIA_IDENTIFIER,
+    AUDIO_CAPTURE,
+    VIDEO_CAPTURE
 }
 ```
 
@@ -419,7 +537,7 @@ fun BrowserApp() {
             Button(onClick = { webView.loadUrl(inputUrl) }) { Text("Go") }
         }
 
-        if (loading == LoadingState.LOADING) {
+        if (loading == LoadingState.Loading) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
         }
 
@@ -503,5 +621,40 @@ suspend fun runAutomation() {
     } finally {
         page.close()
     }
+}
+```
+
+---
+
+## 8. Debug Utilities
+
+### showScreenshotPreview
+
+```kotlin
+fun showScreenshotPreview(bytes: ByteArray)
+```
+
+On JVM, opens a standalone Swing preview window displaying the screenshot. Moving the mouse over the window shows real-time 1:1 CSS document pixel coordinates in the title bar — useful for debugging click coordinates. **JVM only; no-op on Android/iOS.**
+
+```kotlin
+val png = page.screenshot()
+if (png != null) {
+    showScreenshotPreview(png)  // Opens preview window with live coordinate display
+}
+```
+
+### JcefChecker
+
+```kotlin
+object JcefChecker {
+    val isJcefAvailable: Boolean
+}
+```
+
+Checks whether the current JDK is a JetBrains Runtime (JBR) with JCEF support. The `KBWebView` Composable checks this internally and shows an error message instead of crashing when `false`. You can also check it at startup to show a friendly prompt:
+
+```kotlin
+if (!JcefChecker.isJcefAvailable) {
+    println("Please switch the SDK to JBR 25 with JCEF")
 }
 ```

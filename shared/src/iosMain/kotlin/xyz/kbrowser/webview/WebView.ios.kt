@@ -160,10 +160,10 @@ class IosWebView(
         userContentController.addScriptMessageHandler(handler, name)
         
         val js = """
-            window.$name = {
-                postMessage: function(msg) {
-                    window.webkit.messageHandlers.$name.postMessage(msg);
-                }
+            window.$name = function(msg) {
+                window.webkit.messageHandlers.$name.postMessage(
+                    typeof msg === 'string' ? msg : JSON.stringify(msg)
+                );
             };
         """.trimIndent()
         evaluateJavascript(js, null)
@@ -172,6 +172,54 @@ class IosWebView(
     override fun unregisterJsCallback(name: String) {
         val userContentController = webView?.configuration?.userContentController
         userContentController?.removeScriptMessageHandlerForName(name)
+        evaluateJavascript("delete window.$name;", null)
+    }
+
+    /**
+     * iOS 实现：使用 WKScriptMessageHandlerWithReply（iOS 14+）支持 Promise 返回值。
+     * 降级方案：通过 evaluateJavaScript 将结果注入回 JS 的 Promise resolve。
+     */
+    private val jsHandlerMap = mutableMapOf<String, (String) -> String>()
+
+    override fun registerJsHandler(name: String, handler: (String) -> String) {
+        jsHandlerMap[name] = handler
+        val w = getOrCreateWebView()
+        val userContentController = w.configuration.userContentController
+
+        // 使用 WKScriptMessageHandlerWithReply（iOS 14+）
+        val replyHandler = object : NSObject(), platform.WebKit.WKScriptMessageHandlerWithReplyProtocol {
+            override fun userContentController(
+                userContentController: platform.WebKit.WKUserContentController,
+                didReceiveScriptMessage: platform.WebKit.WKScriptMessage,
+                replyHandler: (Any?, String?) -> Unit
+            ) {
+                val bodyString = didReceiveScriptMessage.body?.toString() ?: ""
+                try {
+                    val result = handler(bodyString)
+                    replyHandler(result, null)
+                } catch (e: Exception) {
+                    replyHandler(null, e.message ?: "handler error")
+                }
+            }
+        }
+        userContentController.addScriptMessageHandlerWithReply(replyHandler, contentWorld = platform.WebKit.WKContentWorld.pageWorld, name = name)
+
+        // 注入 Promise 包装，使用 postMessage 的 reply 机制
+        val js = """
+            window.$name = function(arg) {
+                return window.webkit.messageHandlers.$name.postMessage(
+                    typeof arg === 'string' ? arg : JSON.stringify(arg)
+                );
+            };
+        """.trimIndent()
+        evaluateJavascript(js, null)
+    }
+
+    override fun unregisterJsHandler(name: String) {
+        jsHandlerMap.remove(name)
+        val userContentController = webView?.configuration?.userContentController
+        userContentController?.removeScriptMessageHandlerForName(name)
+        evaluateJavascript("delete window.$name;", null)
     }
 
     override fun clearCacheAndCookies() {

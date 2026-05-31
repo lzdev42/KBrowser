@@ -36,6 +36,18 @@ sealed interface AppScreen {
 
 @Composable
 fun App() {
+    val platformName = remember { getPlatform().name.lowercase() }
+    val isMobile = platformName.contains("android") || platformName.contains("ios")
+
+    if (isMobile) {
+        MobileApp()
+    } else {
+        DesktopApp()
+    }
+}
+
+@Composable
+fun DesktopApp() {
     var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Home) }
 
     MaterialTheme(
@@ -260,10 +272,17 @@ fun BrowserExampleScreen(
             )
         }
 
-        Row(
+        // 用 Box 包裹整个内容区，让悬浮卡片能提升到 SwingPanel 父级之外
+        // 这是 compose.interop.blending=true 下让 Compose 覆盖层正常响应事件的关键：
+        // 覆盖层不能是 SwingPanel 直接父级 Box 的子节点，否则事件会穿透到 Swing 层
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
+        ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
         ) {
             // 左侧：浏览器区域 (60%)
             Column(
@@ -299,7 +318,7 @@ fun BrowserExampleScreen(
                     }
                 }
 
-                // WebView 挂载区
+                // WebView 挂载区（纯 SwingPanel，不在此处叠加任何 Compose 视图）
                 Box(modifier = Modifier.fillMaxSize()) {
                     val activePage = state.page
                     if (activePage != null) {
@@ -307,44 +326,6 @@ fun BrowserExampleScreen(
                             webView = activePage.webView,
                             modifier = Modifier.fillMaxSize()
                         )
-                        
-                        // 实验：在浏览器视口上方直接重叠挂载一个 Compose 的交互式悬浮卡片
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(16.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xE61A1A1E))
-                                .border(1.dp, Color(0xFF3A3A42), RoundedCornerShape(12.dp))
-                                .padding(12.dp)
-                                .width(220.dp)
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = "⚡️ Compose 混合渲染实验",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "此悬浮卡片为纯 Compose 视图，目前正完美覆盖在 OSR 浏览器画布上层。",
-                                    color = Color(0xFF9E9EA8),
-                                    fontSize = 11.sp,
-                                    lineHeight = 16.sp
-                                )
-                                Button(
-                                    onClick = { 
-                                        viewModel.dispatch(BrowserIntent.ClickSelector("ComposeHoverClick"))
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                    shape = RoundedCornerShape(6.dp),
-                                    contentPadding = PaddingValues(vertical = 4.dp)
-                                ) {
-                                    Text("点击此 Compose 按钮", fontSize = 11.sp, color = Color(0xFF121214), fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
                     } else {
                         Box(
                             modifier = Modifier.fillMaxSize(),
@@ -927,7 +908,56 @@ fun BrowserExampleScreen(
                     }
                 }
             }
+        } // end Row
+
+        // ── Compose 混合渲染实验：悬浮卡片 ──────────────────────────────────────
+        // 关键：放在 Row（含 SwingPanel）的同级 Box 里，而不是 SwingPanel 的直接父级 Box 里。
+        // compose.interop.blending=true 下，事件穿透只发生在 SwingPanel 直接父级的 Box 内；
+        // 提升到这一层后，Compose 覆盖层可以正常接收鼠标/点击事件。
+        if (state.page != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 16.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xEE1A1A1E))
+                    .border(1.dp, Color(0xFF3A3A42), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+                    .width(240.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "⚡️ Compose 混合渲染实验",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "此悬浮卡片为纯 Compose 视图，覆盖在 JCEF 浏览器上层，且可正常响应点击事件。",
+                        color = Color(0xFF9E9EA8),
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp
+                    )
+                    Button(
+                        onClick = {
+                            viewModel.dispatch(BrowserIntent.ClickSelector("ComposeHoverClick"))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        shape = RoundedCornerShape(6.dp),
+                        contentPadding = PaddingValues(vertical = 4.dp)
+                    ) {
+                        Text(
+                            "点击此 Compose 按钮",
+                            fontSize = 11.sp,
+                            color = Color(0xFF121214),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
+        } // end outer Box
     }
 }
 

@@ -31,16 +31,21 @@ fun main() {
 
 ### KBrowser 对象
 
-| 方法 | 说明 |
+| 方法 / 属性 | 说明 |
 |------|------|
 | `KBrowser.setConfigPath(path: String)` | 设置 KBrowser 数据的根目录。KBrowser 会在该目录下自动创建 `kbrowser_profile` 子目录，用于存储自身数据（Cookie、缓存）。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。 |
 | `KBrowser.newPage(url: String? = null): KBPage` | 创建一个新的无头浏览器页面，可选在创建时导航到 `url`。KBrowser 内部自动管理 Profile，无需传入 Profile 参数。 |
+| `KBrowser.pages: StateFlow<List<KBPage>>` | 当前所有打开页面的响应式流，可用 `collectAsState()` 监听页面列表变化。 |
+| `KBrowser.getPages(): List<KBPage>` | 同步获取当前所有打开页面的快照列表。 |
+| `KBrowser.shutdown()` | 关闭所有页面并执行全局资源清理。应用退出时调用。 |
+| `KBrowser.registerPage(page: KBPage)` | 手动将一个 `KBPage` 注册到 KBrowser 的页面列表。通常无需手动调用，`newPage()` 会自动注册。 |
+| `KBrowser.unregisterPage(page: KBPage)` | 从 KBrowser 的页面列表中移除指定页面。通常无需手动调用，`page.close()` 会自动处理。 |
 
 ---
 
 ## 2. KBWebView — UI 组件层
 
-`KBWebView` 是平台无关的接口，代表一个网页渲染实例。通过 `rememberKBWebView` 创建，通过 `@Composable KBWebView` 挂载展示。
+`KBWebView` 是平台无关的接口，代表一个网页渲染实例。通过 `rememberKBWebView(initialUrl, profile?)` 创建，通过 `@Composable KBWebView` 挂载展示。`profile` 参数可选，传入 `KBProfile` 可为该 WebView 实例隔离独立的 Cookie/缓存存储。
 
 ### 状态流 (StateFlow)
 
@@ -48,7 +53,7 @@ fun main() {
 |------|------|------|
 | `currentUrl` | `StateFlow<String?>` | 当前页面 URL |
 | `currentTitle` | `StateFlow<String?>` | 当前页面标题 |
-| `loadingState` | `StateFlow<LoadingState>` | 加载状态：`IDLE` / `LOADING` / `FINISHED` / `ERROR` |
+| `loadingState` | `StateFlow<LoadingState>` | 加载状态，值为 `LoadingState` 的子类型：`Initializing`（初始化中）/ `Loading`（加载中）/ `Finished`（加载完成）/ `Error(errorCode, description, failingUrl)`（加载失败） |
 | `progress` | `StateFlow<Float>` | 加载进度 0.0f ~ 1.0f |
 | `canGoBack` | `StateFlow<Boolean>` | 是否可后退 |
 | `canGoForward` | `StateFlow<Boolean>` | 是否可前进 |
@@ -64,13 +69,37 @@ fun main() {
 | `goBack()` | 后退 |
 | `goForward()` | 前进 |
 
-### JS 交互
+### JS 交互 (Native <-> Web)
+
+KBrowser 提供了两种从 Web 前端调用 Native (Kotlin) 的方式：单向通知与双向 Promise 请求。
 
 | 方法 | 说明 |
 |------|------|
-| `evaluateJavascript(script, callback?)` | 执行 JS，结果通过 callback 返回 JSON 字符串 |
-| `registerJsCallback(name, callback)` | 注册 Native 回调，JS 侧通过 `window.<name>(data)` 调用 |
-| `unregisterJsCallback(name)` | 注销 JS 回调 |
+| `evaluateJavascript(script, callback?)` | 从 Kotlin 主动执行 JS，结果可选地通过 callback 返回 |
+| `registerJsCallback(name, callback)` | **单向通知 (Fire-and-Forget)**：注册后 JS 通过 `window.<name>(data)` 调用，无返回值。适用于埋点、日志、事件触发等场景。 |
+| `unregisterJsCallback(name)` | 注销 JS 单向回调 |
+| `registerJsHandler(name, handler)` | **双向请求 (Request-Response)**：注册一个有返回值的 Handler。底层封装了 Promise，JS 可直接 `await window.<name>(data)` 获取 Kotlin 返回的结果。 |
+| `unregisterJsHandler(name)` | 注销 JS 双向请求 Handler |
+
+**使用示例：双向 Promise 请求**
+```kotlin
+// Kotlin 端：注册一个有返回值的处理函数
+webView.registerJsHandler("getConfig") { jsonString ->
+    // 解析前端参数并返回结果
+    """{"theme":"dark","version":"1.0"}"""
+}
+```
+```javascript
+// JS 前端侧：像调现代 API 一样优雅地获取结果
+async function fetchConfig() {
+    try {
+        const configStr = await window.getConfig(JSON.stringify({ key: "theme" }));
+        console.log(JSON.parse(configStr).theme); // "dark"
+    } catch (e) {
+        console.error("请求失败", e);
+    }
+}
+```
 
 ### 生命周期与其他
 
@@ -82,6 +111,10 @@ fun main() {
 | `setWebChromeClient(client?)` | 设置 JS 对话框 / 权限回调 |
 | `suspend takeScreenshot(): ByteArray?` | CDP 截图，输出 CSS 像素大小的 PNG，无黑屏问题 |
 | `var onNewWindowRequest: ((url: String) -> Unit)?` | 新标签页/新窗口请求回调；不设置时静默丢弃 |
+| `setInteractionLocked(locked: Boolean)` | 锁定/解锁用户交互。`true` 时在浏览器组件上覆盖 AWT 拦截层，阻止用户所有鼠标/键盘输入；自动化操作（CDP）不受影响。遮罩层同时渲染鼠标轨迹和点击扩散动画，提供自动化过程的视觉反馈。**仅 JVM 有效，Android/iOS 为空实现。** |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | 在锁定遮罩上更新鼠标轨迹位置，坐标为视口 CSS 像素。通常无需手动调用——`clickByCoordinates`、`hoverByCoordinates`、`dragByCoordinates` 均会自动调用。**仅 JVM 有效。** |
+
+> **点击扩散动画**：无论是否调用 `setInteractionLocked`，只要通过坐标执行自动化点击（`clickByCoordinates` 等），都会在点击位置触发圆圈扩散动画，作为操作的视觉反馈。锁定状态下动画渲染在遮罩层上；未锁定时动画不可见（遮罩层未挂载）。如需在未锁定状态下也显示动画，可先调用 `setInteractionLocked(true)`。
 
 ### Composable 用法示例
 
@@ -120,6 +153,12 @@ fun BrowserScreen() {
 ## 3. KBPage — 自动化控制层
 
 `KBPage` 是对 `KBWebView` 的协程封装，所有方法均为 `suspend`，可在任意协程上下文中安全调用。通过 `KBrowser.newPage()` 创建。
+
+### 属性
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `uuid` | `String` | 每个 `KBPage` 实例创建时自动生成的唯一字符串 ID，可用于多页面场景下的标识与追踪。 |
 
 ### 状态流
 
@@ -337,6 +376,68 @@ data class Diagnostics(
 )
 ```
 
+### LoadingState
+
+`loadingState` 的实际类型为 `sealed interface`，使用时用 `is` 判断：
+
+```kotlin
+sealed interface LoadingState {
+    data object Initializing : LoadingState  // WebView 刚创建，尚未开始加载
+    data object Loading : LoadingState       // 正在加载中
+    data object Finished : LoadingState      // 加载完成
+    data class Error(                        // 加载失败
+        val errorCode: Int,
+        val description: String,
+        val failingUrl: String
+    ) : LoadingState
+}
+
+// 使用示例
+val state by webView.loadingState.collectAsState()
+when (state) {
+    is LoadingState.Loading  -> LinearProgressIndicator()
+    is LoadingState.Finished -> Text("加载完成")
+    is LoadingState.Error    -> Text("失败: ${(state as LoadingState.Error).description}")
+    else -> {}
+}
+```
+
+### KBSelectorType
+
+`KBLocator` 内部使用的选择器类型枚举，通过 `KBPage` 的工厂方法自动设置，通常无需直接使用：
+
+```kotlin
+enum class KBSelectorType {
+    CSS,         // CSS 选择器，如 ".btn-login"
+    XPATH,       // XPath，如 "//button[@id='submit']"
+    TEXT,        // 按文本内容匹配
+    ROLE,        // 按 ARIA role 匹配
+    LABEL,       // 按关联 label 文本匹配
+    PLACEHOLDER, // 按 placeholder 属性匹配
+    ALT_TEXT,    // 按 alt 属性匹配
+    TITLE,       // 按 title 属性匹配
+    TEST_ID      // 按 data-testid 属性匹配
+}
+```
+
+### LocateResult
+
+`KBLocator.filter { }` 回调中的参数类型，包含定位到的元素的基本信息：
+
+```kotlin
+data class LocateResult(
+    val centerX: Int,                        // 元素中心点 X（CSS 文档像素）
+    val centerY: Int,                        // 元素中心点 Y（CSS 文档像素）
+    val width: Int,                          // 元素宽度
+    val height: Int,                         // 元素高度
+    val tagName: String,                     // HTML 标签名，如 "button"
+    val role: String,                        // ARIA role
+    val text: String,                        // 元素文本内容
+    val isVisible: Boolean,                  // 是否可见
+    val attributes: Map<String, String>      // 元素属性字典
+)
+```
+
 ### KBProfile
 
 `KBProfile` 用于 `KBWebView`，当你需要为每个 WebView 实例隔离浏览器数据（独立的 Cookie/缓存）时使用。`KBBrowser` 内部自动管理自己的 Profile，无需向 `newPage()` 传入 `KBProfile`。
@@ -377,6 +478,23 @@ interface JsResultCallback {
 interface JsPromptResultCallback {
     fun confirm(value: String?)
     fun cancel()
+}
+
+// 权限请求接口
+interface PermissionRequest {
+    val origin: String                       // 请求来源域名
+    val resources: List<PermissionResource>  // 请求的权限列表
+    fun grant()                              // 授予权限
+    fun deny()                               // 拒绝权限
+}
+
+enum class PermissionResource {
+    CAMERA,
+    MICROPHONE,
+    GEOLOCATION,
+    PROTECTED_MEDIA_IDENTIFIER,
+    AUDIO_CAPTURE,
+    VIDEO_CAPTURE
 }
 ```
 
@@ -419,7 +537,7 @@ fun BrowserApp() {
             Button(onClick = { webView.loadUrl(inputUrl) }) { Text("跳转") }
         }
 
-        if (loading == LoadingState.LOADING) {
+        if (loading == LoadingState.Loading) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
         }
 
@@ -503,5 +621,40 @@ suspend fun runAutomation() {
     } finally {
         page.close()
     }
+}
+```
+
+---
+
+## 8. 调试工具
+
+### showScreenshotPreview
+
+```kotlin
+fun showScreenshotPreview(bytes: ByteArray)
+```
+
+在 JVM 平台弹出一个独立的 Swing 预览窗口展示截图。移动鼠标时，窗口标题栏会实时显示当前鼠标位置对应的 1:1 CSS 文档像素坐标，方便调试点击坐标。**仅 JVM 有效，Android/iOS 为空操作。**
+
+```kotlin
+val png = page.screenshot()
+if (png != null) {
+    showScreenshotPreview(png)  // 弹出预览窗口，鼠标移动时显示坐标
+}
+```
+
+### JcefChecker
+
+```kotlin
+object JcefChecker {
+    val isJcefAvailable: Boolean
+}
+```
+
+在 JVM 平台检测当前 JDK 是否为包含 JCEF 的 JetBrains Runtime（JBR）。`KBWebView` Composable 内部会检查此值，若为 `false` 则显示提示文字而非崩溃。可在应用启动时提前检查并给出友好提示：
+
+```kotlin
+if (!JcefChecker.isJcefAvailable) {
+    println("请将 SDK 切换为包含 JCEF 的 JBR 25")
 }
 ```

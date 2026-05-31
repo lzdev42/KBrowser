@@ -200,6 +200,22 @@ class JvmWebView(
                         """.trimIndent()
                         b.executeJavaScript(script, b.url ?: "", 0)
                     }
+                    // 重新注入 JS handler（Promise 包装），原因同上
+                    jsHandlers.forEach { (name, query) ->
+                        val funcName = query.myFunc.myFuncName
+                        val script = """
+                            window.$name = function(arg) {
+                                return new Promise(function(resolve, reject) {
+                                    window["$funcName"]({
+                                        request: (typeof arg === 'string' ? arg : JSON.stringify(arg)),
+                                        onSuccess: function(r) { resolve(r); },
+                                        onFailure: function(code, msg) { reject(new Error(msg || 'handler error')); }
+                                    });
+                                });
+                            };
+                        """.trimIndent()
+                        b.executeJavaScript(script, b.url ?: "", 0)
+                    }
                 }
             }
 
@@ -477,6 +493,7 @@ class JvmWebView(
     }
 
     private val jsCallbacks = mutableMapOf<String, KBCefJSQuery>()
+    private val jsHandlers = mutableMapOf<String, KBCefJSQuery>()
 
     override fun registerJsCallback(name: String, callback: (String) -> Unit) {
         if (isDestroyed.get()) return
@@ -496,7 +513,59 @@ class JvmWebView(
 
     override fun unregisterJsCallback(name: String) {
         val query = jsCallbacks.remove(name)
-        query?.dispose() // 回收到池
+        query?.dispose()
+        cefBrowser.executeJavaScript("delete window.$name;", "", 0)
+    }
+
+    /**
+     * 注册支持 Promise 的双向请求处理器。
+     *
+     * 底层使用独立的 CefMessageRouter 槽位，handler 的返回值通过
+     * CefQueryCallback.success(result) 真正传回 JS 的 Promise resolve。
+     *
+     * JS 端注入的包装代码：
+     * ```javascript
+     * window.name = function(arg) {
+     *   return new Promise(function(resolve, reject) {
+     *     cefQuery_xxx({ request: arg,
+     *       onSuccess: function(r) { resolve(r); },
+     *       onFailure: function(code, msg) { reject(new Error(msg)); }
+     *     });
+     *   });
+     * };
+     * ```
+     */
+    override fun registerJsHandler(name: String, handler: (String) -> String) {
+        if (isDestroyed.get()) return
+        val query = KBCefJSQuery.create(browser)
+        query.addHandler { request ->
+            try {
+                val result = handler(request)
+                KBCefJSQuery.Response(result)
+            } catch (e: Exception) {
+                KBCefJSQuery.Response("", errCode = 1, errMsg = e.message ?: "handler error")
+            }
+        }
+        jsHandlers[name] = query
+        val funcName = query.myFunc.myFuncName
+        // 注入 Promise 包装：onSuccess resolve，onFailure reject
+        val script = """
+            window.$name = function(arg) {
+                return new Promise(function(resolve, reject) {
+                    window["$funcName"]({
+                        request: (typeof arg === 'string' ? arg : JSON.stringify(arg)),
+                        onSuccess: function(r) { resolve(r); },
+                        onFailure: function(code, msg) { reject(new Error(msg || 'handler error')); }
+                    });
+                });
+            };
+        """.trimIndent()
+        cefBrowser.executeJavaScript(script, "", 0)
+    }
+
+    override fun unregisterJsHandler(name: String) {
+        val query = jsHandlers.remove(name)
+        query?.dispose()
         cefBrowser.executeJavaScript("delete window.$name;", "", 0)
     }
 
@@ -890,6 +959,10 @@ class JvmWebView(
 
     override fun destroy() {
         if (isDestroyed.compareAndSet(false, true)) {
+            jsCallbacks.values.forEach { it.dispose() }
+            jsCallbacks.clear()
+            jsHandlers.values.forEach { it.dispose() }
+            jsHandlers.clear()
             browser.dispose()
             try {
                 headlessFrame?.dispose()

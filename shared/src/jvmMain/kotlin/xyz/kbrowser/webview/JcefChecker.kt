@@ -44,6 +44,10 @@ class FallbackWebView(initialUrl: String) : KBWebView {
 
     override fun unregisterJsCallback(name: String) {}
 
+    override fun registerJsHandler(name: String, handler: (String) -> String) {}
+
+    override fun unregisterJsHandler(name: String) {}
+
     override fun clearCacheAndCookies() {}
 
     override fun setWebViewClient(client: KBWebViewClient?) {}
