@@ -27,6 +27,9 @@ class KBCefOsrComponent : JPanel() {
 
     private var myScale: Double = 1.0
 
+    /** IME 适配器，参照 IntelliJ 的 JBCefInputMethodAdapter */
+    private val myInputMethodAdapter = KBCefInputMethodAdapter(this)
+
     // ---- Resize 节流（对应 IDEA 的 myResizeAlarm + myScheduleResizeMs）----
     // 使用 javax.swing.Timer（在 EDT 回调，线程安全），生命周期跟随 addNotify/removeNotify
     private var myResizeAlarm: Timer? = null
@@ -41,8 +44,15 @@ class KBCefOsrComponent : JPanel() {
             AWTEvent.KEY_EVENT_MASK or
             AWTEvent.MOUSE_EVENT_MASK or
             AWTEvent.MOUSE_WHEEL_EVENT_MASK or
-            AWTEvent.MOUSE_MOTION_EVENT_MASK
+            AWTEvent.MOUSE_MOTION_EVENT_MASK or
+            AWTEvent.INPUT_METHOD_EVENT_MASK  // 启用输入法事件派发
         )
+
+        // 启用输入法支持，使 OS IME 能向组件发送组合/提交事件
+        enableInputMethods(true)
+
+        // 注册输入法监听器，将 OS IME 事件转发给 CEF
+        addInputMethodListener(myInputMethodAdapter)
 
         isFocusable = true
         focusTraversalKeysEnabled = false
@@ -78,10 +88,16 @@ class KBCefOsrComponent : JPanel() {
 
     fun setBrowser(browser: CefBrowser) {
         myBrowser = browser
+        // 将浏览器实例传递给 IME 适配器，用于调用 ImeSetComposition/ImeCommitText
+        myInputMethodAdapter.setBrowser(browser)
     }
 
     fun setRenderHandler(renderHandler: KBCefOsrHandler) {
         myRenderHandler = renderHandler
+
+        // 将 Handler 的 IME 回调桥接到 InputMethodAdapter
+        // 参照 IntelliJ: myRenderHandler.addCaretListener(myInputMethodAdapter)
+        renderHandler.addCaretListener(myInputMethodAdapter)
 
         addHierarchyListener { e ->
             if (e.changeFlags and HierarchyEvent.SHOWING_CHANGED.toLong() != 0L) {
@@ -243,6 +259,14 @@ class KBCefOsrComponent : JPanel() {
     override fun processKeyEvent(e: KeyEvent) {
         super.processKeyEvent(e)
         myBrowser?.sendKeyEvent(e)
+    }
+
+    /**
+     * 向 OS 输入法提供光标位置信息，使 IME 候选窗口正确定位。
+     * 参照 IntelliJ 的 JBCefOsrComponent.getInputMethodRequests()。
+     */
+    override fun getInputMethodRequests(): java.awt.im.InputMethodRequests {
+        return myInputMethodAdapter
     }
 
     private fun onGraphicsConfigurationChanged() {

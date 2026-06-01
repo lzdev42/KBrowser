@@ -555,6 +555,13 @@ object JsScripts {
                     } catch(e) {}
                 }
                 
+                // 收集直接子元素的 refid 列表，用于构建真实 DOM 层级
+                var childRefids = [];
+                for (var ci = 0; ci < el.children.length; ci++) {
+                    var childRefid = el.children[ci].__kb_refid;
+                    if (childRefid) childRefids.push(childRefid);
+                }
+
                 elements.push({
                     refid: refid,
                     tagName: el.tagName.toLowerCase(),
@@ -572,7 +579,9 @@ object JsScripts {
                     centerY: Math.round(rect.top + window.scrollY + rect.height / 2),
                     childCount: el.children.length,
                     attributes: attrs,
-                    selector: buildSelector(el)
+                    selector: buildSelector(el),
+                    nodeId: refid,
+                    childIds: childRefids
                 });
             });
             

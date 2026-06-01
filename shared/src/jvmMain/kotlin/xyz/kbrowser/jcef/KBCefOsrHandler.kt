@@ -57,6 +57,14 @@ open class KBCefOsrHandler(
     private var resizePushStarted: Long = 0
     private val RESIZE_PUSHER_TIMEOUT_MS: Long = 2000
 
+    /**
+     * IME 光标监听器，用于将 CEF 的 OnImeCompositionRangeChanged/OnTextSelectionChanged
+     * 回调桥接到 [KBCefInputMethodAdapter]，使 OS 输入法能获取正确的光标位置。
+     * 参照 IntelliJ 的 JBCefCaretListener + JBCefInputMethodAdapter 架构。
+     */
+    @Volatile
+    private var myCaretListener: KBCefInputMethodAdapter? = null
+
     override fun getViewRect(browser: CefBrowser): Rectangle {
         val comp = browser.uiComponent
         val scale = scaleFactor
@@ -155,9 +163,19 @@ open class KBCefOsrHandler(
         selectionRange: CefRange,
         characterBounds: Array<Rectangle>
     ) {
+        myCaretListener?.onImeCompositionRangeChanged(selectionRange, characterBounds)
     }
 
     override fun OnTextSelectionChanged(browser: CefBrowser, selectedText: String, selectionRange: CefRange) {
+        myCaretListener?.onTextSelectionChanged(selectedText, selectionRange)
+    }
+
+    /**
+     * 注册 IME 光标监听器，将 CEF 回调桥接到 [KBCefInputMethodAdapter]。
+     * 参照 IntelliJ 的 JBCefOsrHandler.addCaretListener()。
+     */
+    fun addCaretListener(listener: KBCefInputMethodAdapter) {
+        myCaretListener = listener
     }
 
     fun setLocationOnScreen(location: Point) {

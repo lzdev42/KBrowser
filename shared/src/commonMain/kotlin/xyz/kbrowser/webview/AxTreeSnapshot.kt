@@ -37,45 +37,85 @@ fun AxTreeData.toYamlSnapshot(): String {
 
     if (visibleNodes.isEmpty()) return ""
 
-    // 用坐标包含关系重建树形结构
-    // 策略：对每个节点，找面积最小的包含它的祖先节点作为父节点
-    val nodeArea = { n: AxNode -> n.width.toLong() * n.height.toLong() }
+    // ── 重建树形结构 ──
+    // 优先使用 CDP AX 树提供的 childIds（真实 DOM 层级），
+    // 仅在 CDP 层级信息不可用时回退到坐标包含关系重建。
+    //
+    // 坐标包含关系对绝对定位元素（下拉菜单、弹窗等）会错误分配父节点：
+    // 下拉菜单的视觉坐标不在 DOM 父节点（触发按钮）内，而在面积更大的其他元素内，
+    // 导致下拉菜单被错误嵌套到无关的容器节点下。
+    val nodeIndex = visibleNodes.associateBy { it.refid }
+    val parentMap = mutableMapOf<String, String>() // refid -> parentRefid
+    val childrenMap = mutableMapOf<String, MutableList<AxNode>>()
+    val hasCdpHierarchy = visibleNodes.any { it.childIds.isNotEmpty() }
 
-    // 按面积从大到小排序，面积大的更可能是父节点
-    val sorted = visibleNodes.sortedByDescending { nodeArea(it) }
-
-    // 为每个节点找父节点（面积最小的包含它的节点）
-    val parentMap = mutableMapOf<String, String?>() // refid -> parentRefid
-    for (node in visibleNodes) {
-        var bestParent: AxNode? = null
-        var bestArea = Long.MAX_VALUE
-        for (candidate in visibleNodes) {
-            if (candidate.refid == node.refid) continue
-            val area = nodeArea(candidate)
-            if (area <= nodeArea(node)) continue // 父节点面积必须更大
-            // 检查包含关系：候选节点的边界包含当前节点的中心点
-            val contains = node.centerX >= candidate.x &&
-                    node.centerX <= candidate.x + candidate.width &&
-                    node.centerY >= candidate.y &&
-                    node.centerY <= candidate.y + candidate.height
-            if (contains && area < bestArea) {
-                bestArea = area
-                bestParent = candidate
+    if (hasCdpHierarchy) {
+        // ── CDP 路径：使用 childIds 构建真实 DOM 层级 ──
+        for (node in visibleNodes) {
+            for (childRefid in node.childIds) {
+                val childNode = nodeIndex[childRefid] ?: continue
+                childrenMap.getOrPut(node.refid) { mutableListOf() }.add(childNode)
+                parentMap[childRefid] = node.refid
             }
         }
-        parentMap[node.refid] = bestParent?.refid
+
+        // 处理孤儿节点：CDP 父节点被过滤（不可见/噪音标签）后，
+        // 其子节点在可见集合中没有父节点，需要用坐标回退找最近的可见祖先
+        val orphans = visibleNodes.filter { it.refid !in parentMap }
+        if (orphans.isNotEmpty()) {
+            val nodeArea = { n: AxNode -> n.width.toLong() * n.height.toLong() }
+            for (orphan in orphans) {
+                var bestParent: AxNode? = null
+                var bestArea = Long.MAX_VALUE
+                for (candidate in visibleNodes) {
+                    if (candidate.refid == orphan.refid) continue
+                    // 跳过已经是孤儿自身后代的节点（避免循环）
+                    if (isDescendantOf(candidate.refid, orphan.refid, parentMap)) continue
+                    val area = nodeArea(candidate)
+                    if (area <= nodeArea(orphan)) continue
+                    val contains = orphan.centerX >= candidate.x &&
+                            orphan.centerX <= candidate.x + candidate.width &&
+                            orphan.centerY >= candidate.y &&
+                            orphan.centerY <= candidate.y + candidate.height
+                    if (contains && area < bestArea) {
+                        bestArea = area
+                        bestParent = candidate
+                    }
+                }
+                if (bestParent != null) {
+                    parentMap[orphan.refid] = bestParent.refid
+                    childrenMap.getOrPut(bestParent.refid) { mutableListOf() }.add(orphan)
+                }
+            }
+        }
+    } else {
+        // ── JS 注入路径：无 childIds，回退到坐标包含关系重建 ──
+        val nodeArea = { n: AxNode -> n.width.toLong() * n.height.toLong() }
+        for (node in visibleNodes) {
+            var bestParent: AxNode? = null
+            var bestArea = Long.MAX_VALUE
+            for (candidate in visibleNodes) {
+                if (candidate.refid == node.refid) continue
+                val area = nodeArea(candidate)
+                if (area <= nodeArea(node)) continue
+                val contains = node.centerX >= candidate.x &&
+                        node.centerX <= candidate.x + candidate.width &&
+                        node.centerY >= candidate.y &&
+                        node.centerY <= candidate.y + candidate.height
+                if (contains && area < bestArea) {
+                    bestArea = area
+                    bestParent = candidate
+                }
+            }
+            if (bestParent != null) {
+                parentMap[node.refid] = bestParent.refid
+                childrenMap.getOrPut(bestParent.refid) { mutableListOf() }.add(node)
+            }
+        }
     }
 
     // 找根节点（没有父节点的）
-    val roots = visibleNodes.filter { parentMap[it.refid] == null }
-    // 找子节点映射
-    val childrenMap = mutableMapOf<String, MutableList<AxNode>>()
-    for (node in visibleNodes) {
-        val pid = parentMap[node.refid]
-        if (pid != null) {
-            childrenMap.getOrPut(pid) { mutableListOf() }.add(node)
-        }
-    }
+    val roots = visibleNodes.filter { it.refid !in parentMap }
 
     // 文本上浮：如果节点 text 为空，从直接子节点中收集 #text 节点的文本
     fun collectText(node: AxNode): String {
@@ -187,4 +227,19 @@ fun AxTreeData.toYamlSnapshot(): String {
     }
 
     return sb.toString().trim()
+}
+
+/**
+ * 检查 [candidateRefid] 是否是 [ancestorRefid] 在 [parentMap] 中的后代。
+ * 用于孤儿节点回退时避免将祖先分配为自身的子节点（防止循环）。
+ */
+private fun isDescendantOf(candidateRefid: String, ancestorRefid: String, parentMap: Map<String, String>): Boolean {
+    var current = parentMap[candidateRefid]
+    var depth = 0
+    while (current != null && depth < 50) { // 防止异常数据导致无限循环
+        if (current == ancestorRefid) return true
+        current = parentMap[current]
+        depth++
+    }
+    return false
 }

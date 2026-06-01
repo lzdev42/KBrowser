@@ -68,9 +68,11 @@ object KBCefAxTreeFetcher {
         // 注意：不过滤 role 为空的节点，普通 div/span/p 等容器元素 role 可能为空或 "none"，
         // 但它们仍然是有效的 DOM 节点，需要包含在结果中。
         data class SemNode(
+            val nodeId: String,
             val backendNodeId: Int,
             val role: String,
-            val name: String
+            val name: String,
+            val childIds: List<String>
         )
         val semNodes = mutableListOf<SemNode>()
         for (node in axNodes) {
@@ -79,7 +81,9 @@ object KBCefAxTreeFetcher {
             val backendNodeId = obj["backendDOMNodeId"]?.jsonPrimitive?.int ?: continue
             val role = obj["role"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: ""
             val name = obj["name"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: ""
-            semNodes.add(SemNode(backendNodeId, role, name))
+            val nodeId = obj["nodeId"]?.jsonPrimitive?.content ?: ""
+            val childIds = obj["childIds"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+            semNodes.add(SemNode(nodeId, backendNodeId, role, name, childIds))
         }
 
         if (semNodes.isEmpty()) return AxTreeData(
@@ -95,6 +99,8 @@ object KBCefAxTreeFetcher {
 
         // backendNodeId → refid 映射，用于遮挡检测时把 backendNodeId 转成 refid
         val backendIdToRefid = semNodes.associate { it.backendNodeId to "r${it.backendNodeId}" }
+        // nodeId → refid 映射，用于将 CDP AX 树的 childIds（引用 nodeId）转换为 refid
+        val nodeIdToRefid = semNodes.associate { it.nodeId to "r${it.backendNodeId}" }
 
         for (batch in semNodes.chunked(BATCH_SIZE)) {
             val boxFutures = batch.map { sem ->
@@ -196,6 +202,10 @@ object KBCefAxTreeFetcher {
                     } catch (_: Exception) { null }
                 } else null
 
+                // 将 CDP AX 树的 childIds（引用 nodeId）转换为 refid 列表
+                // 过滤掉无法映射的 childId（对应被 ignored 的节点，不在结果集中）
+                val childRefids = sem.childIds.mapNotNull { cid -> nodeIdToRefid[cid] }
+
                 resultNodes.add(
                     AxNode(
                         refid      = "r${sem.backendNodeId}",
@@ -211,10 +221,12 @@ object KBCefAxTreeFetcher {
                         height     = h,
                         centerX    = x + w / 2,
                         centerY    = y + h / 2,
-                        childCount = 0,
+                        childCount = childRefids.size,
                         attributes = meta.attributes,
                         selector   = selector,
-                        occludedBy = occludedBy
+                        occludedBy = occludedBy,
+                        nodeId     = sem.nodeId,
+                        childIds   = childRefids
                     )
                 )
             }

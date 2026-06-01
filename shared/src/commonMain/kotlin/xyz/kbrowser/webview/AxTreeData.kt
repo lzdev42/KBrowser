@@ -26,7 +26,20 @@ data class AxNode(
      * 非 null 表示坐标点击会打到遮挡物而非该节点本身。
      * AI 应先处理遮挡物（关闭弹窗/广告），或改用 locator(selector).fill() 绕过坐标。
      */
-    val occludedBy: String? = null
+    val occludedBy: String? = null,
+    /**
+     * CDP AX 节点 ID（来自 Accessibility.getFullAXTree 的 nodeId 字段）。
+     * 用于通过 childIds 构建真实的 DOM 层级关系，替代坐标包含关系重建。
+     * JS 注入路径下为 refid 本身。
+     */
+    val nodeId: String = "",
+    /**
+     * CDP AX 子节点 ID 列表（来自 Accessibility.getFullAXTree 的 childIds 字段）。
+     * 引用其他 AX 节点的 nodeId，用于构建真实的 DOM 层级关系。
+     * 绝对定位元素（下拉菜单、弹窗等）的视觉坐标不在 DOM 父节点内，
+     * 坐标包含关系会错误分配父节点，childIds 提供了正确的层级信息。
+     */
+    val childIds: List<String> = emptyList()
 )
 
 @Serializable
