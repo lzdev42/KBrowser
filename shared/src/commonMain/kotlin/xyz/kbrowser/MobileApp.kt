@@ -606,7 +606,7 @@ fun MobileWebViewExampleScreen(onBack: () -> Unit) {
                 StateRow("currentUrl", currentUrl ?: "null")
                 StateRow("currentTitle", currentTitle ?: "null")
                 StateRow("loadingState", loadingState::class.simpleName ?: "—")
-                StateRow("progress", "%.0f%%".format(progress * 100))
+                StateRow("progress", "${(progress * 100).toInt()}%")
                 StateRow("canGoBack", canGoBack.toString())
                 StateRow("canGoForward", canGoForward.toString())
             }
