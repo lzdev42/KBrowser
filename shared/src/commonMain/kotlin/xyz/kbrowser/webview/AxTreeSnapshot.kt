@@ -104,8 +104,7 @@ private fun shouldCleanNode(
     }
 
     // 规则3：role 无语义 + 无文本 + 无交互
-    val hasSemanticRole = role.isNotBlank() && role !in setOf("generic", "none", "presentation",
-        "div", "span", "section", "article", "aside", "main", "nav", "header", "footer")
+    val hasSemanticRole = role.isNotBlank() && role !in NON_SEMANTIC_ROLES
     val hasTagSemantics = tag in setOf("button", "a", "input", "textarea", "select",
         "details", "summary", "label", "form")
     if (!hasSemanticRole && !hasTagSemantics && !hasInteraction(node) && resolveTextForClean(node, childrenMap).isBlank()) {
@@ -114,6 +113,14 @@ private fun shouldCleanNode(
 
     return false
 }
+
+/** 纯结构/格式角色，无文本无交互时视为噪音 */
+private val NON_SEMANTIC_ROLES = setOf(
+    "generic", "none", "presentation",
+    "div", "span", "section", "article", "aside", "main", "nav", "header", "footer",
+    "list", "listitem", "paragraph", "descriptionlist", "definition", "term",
+    "emphasis", "strong", "group"
+)
 
 /**
  * 节点是否有交互属性：href、placeholder、checked、aria-checked、role 明确可交互
@@ -161,35 +168,60 @@ private fun cleanTree(
 
     if (toRemove.isEmpty()) return
 
-    // 对每个父节点的 children 列表做替换：
-    // 被删节点 → 用其子节点替换（上提），子节点也要过滤
-    for (parentRefid in childrenMap.keys.toList()) {
-        val children = childrenMap[parentRefid] ?: continue
-        val newChildren = mutableListOf<AxNode>()
-        for (child in children) {
-            if (child.refid !in toRemove) {
-                newChildren.add(child)
-            } else {
-                // 被删节点的子节点上提
-                val grandChildren = childrenMap[child.refid] ?: emptyList()
-                for (gc in grandChildren) {
-                    if (gc.refid !in toRemove) {
-                        newChildren.add(gc)
-                        parentMap[gc.refid] = parentRefid
-                    }
-                }
-                childrenMap.remove(child.refid)
-                parentMap.remove(child.refid)
-            }
+    // Pass 1: 对每个保留的节点，递归向上找到最近的非删除祖先，重建 parent-child 映射
+    val newParentMap = mutableMapOf<String, String>()
+    val newChildrenMap = mutableMapOf<String, MutableList<AxNode>>()
+
+    for (node in allVisible) {
+        if (node.refid in toRemove) continue
+
+        // 沿 parentMap 递归向上，跳过所有 toRemove 节点，找到最近的保留祖先
+        var ancestorRefid = parentMap[node.refid]
+        while (ancestorRefid != null && ancestorRefid in toRemove) {
+            ancestorRefid = parentMap[ancestorRefid]
         }
-        childrenMap[parentRefid] = newChildren
+
+        if (ancestorRefid != null) {
+            newParentMap[node.refid] = ancestorRefid
+            newChildrenMap.getOrPut(ancestorRefid) { mutableListOf() }.add(node)
+        }
+        // ancestorRefid == null → 该节点成为 root（不加入 parentMap）
     }
 
-    // 处理根节点中被删的（parentMap 里没有的）
-    for (refid in toRemove) {
-        parentMap.remove(refid)
-        childrenMap.remove(refid)
+    // Pass 2: 移除冗余文本子节点
+    // 条件：非交互叶子节点 + role 为非语义 + 文本是父节点文本的子串
+    val redundant = mutableSetOf<String>()
+    for ((pRefid, children) in newChildrenMap) {
+        val parentNode = visibleIndex[pRefid] ?: continue
+        val parentText = resolveTextForClean(parentNode, newChildrenMap)
+        if (parentText.isBlank()) continue
+        for (child in children) {
+            val childRole = child.role.lowercase()
+            if (childRole !in NON_SEMANTIC_ROLES) continue
+            if (hasInteraction(child)) continue
+            if (!newChildrenMap[child.refid].isNullOrEmpty()) continue  // 有子节点，不是叶子
+            val childText = resolveTextForClean(child, newChildrenMap)
+            if (childText.isBlank()) continue
+            if (parentText.contains(childText)) {
+                redundant.add(child.refid)
+            }
+        }
     }
+    if (redundant.isNotEmpty()) {
+        for ((pRefid, children) in newChildrenMap.toMap()) {
+            val filtered = children.filterNot { it.refid in redundant }
+            if (filtered.isEmpty()) newChildrenMap.remove(pRefid)
+            else newChildrenMap[pRefid] = filtered.toMutableList()
+        }
+        for (refid in redundant) {
+            newParentMap.remove(refid)
+        }
+    }
+
+    parentMap.clear()
+    parentMap.putAll(newParentMap)
+    childrenMap.clear()
+    childrenMap.putAll(newChildrenMap)
 }
 
 // ────────────────────────────────────────────────

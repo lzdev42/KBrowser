@@ -346,7 +346,6 @@ class BrowserViewModel : ViewModel() {
                         log("[步骤 1] 正在提取 Aria 语义快照树...")
                         val rawAxTree = page.getRawAxTree()
                         val snapshot = rawAxTree.toYamlSnapshot(true)
-                        
                         log("[步骤 1] 语义树提取成功（原始节点数: ${rawAxTree.nodes.size}）")
 
                         log("[步骤 2] 正在抓取 CSS 选择器...")

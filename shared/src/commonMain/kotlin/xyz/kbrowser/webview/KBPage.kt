@@ -250,7 +250,7 @@ class KBPage internal constructor(val webView: KBWebView) {
      */
     suspend fun snapshot(): String {
         val rawTree = getRawAxTree()
-        return rawTree.toYamlSnapshot(false)
+        return rawTree.toYamlSnapshot(true)
     }
 
     /**
