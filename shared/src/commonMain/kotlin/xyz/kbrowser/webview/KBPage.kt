@@ -250,10 +250,7 @@ class KBPage internal constructor(val webView: KBWebView) {
      */
     suspend fun snapshot(): String {
         val rawTree = getRawAxTree()
-        println("=== RAW AX TREE YAML ===")
-        println(rawTree.toYamlSnapshot())
-        println("========================")
-        return rawTree.getCleanedAxTree().toYamlSnapshot()
+        return rawTree.toYamlSnapshot(false)
     }
 
     /**
@@ -261,7 +258,7 @@ class KBPage internal constructor(val webView: KBWebView) {
      * 当页面通过 target="_blank"、window.open() 等方式请求打开新窗口时触发。
      * 直接代理到底层 [KBWebView.onNewWindowRequest]。
      *
-     * 示例：
+     * 示例
      * ```kotlin
      * page.onNewPage = { url -> println("需要打开新页面: $url") }
      * ```

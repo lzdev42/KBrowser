@@ -12,6 +12,7 @@ import xyz.kbrowser.webview.KBPage
 import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.AxTreeData
 import xyz.kbrowser.webview.getCleanedAxTree
+import xyz.kbrowser.webview.toYamlSnapshot
 
 data class BrowserViewState(
     val page: KBPage? = null,
@@ -344,9 +345,7 @@ class BrowserViewModel : ViewModel() {
                     try {
                         log("[步骤 1] 正在提取 Aria 语义快照树...")
                         val rawAxTree = page.getRawAxTree()
-                        val jsonParser = kotlinx.serialization.json.Json { prettyPrint = true }
-                        val jsonStr = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), rawAxTree)
-                        val snapshot = formatJsonLikeYaml(jsonStr)
+                        val snapshot = rawAxTree.toYamlSnapshot(true)
                         
                         log("[步骤 1] 语义树提取成功（原始节点数: ${rawAxTree.nodes.size}）")
 
