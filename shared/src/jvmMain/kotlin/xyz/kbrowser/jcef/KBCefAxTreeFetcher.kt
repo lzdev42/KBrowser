@@ -74,16 +74,51 @@ object KBCefAxTreeFetcher {
             val name: String,
             val childIds: List<String>
         )
+        val childToParentMap = mutableMapOf<String, String>()
+        for (node in axNodes) {
+            val parentId = node.jsonObject["nodeId"]?.jsonPrimitive?.contentOrNull ?: continue
+            val childIds = node.jsonObject["childIds"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: continue
+            for (childId in childIds) {
+                childToParentMap[childId] = parentId
+            }
+        }
+
+        val allAxNodesMap = axNodes.associateBy { it.jsonObject["nodeId"]?.jsonPrimitive?.contentOrNull ?: "" }
+
+        fun isValidSemNode(nodeId: String): Boolean {
+            val nodeObj = allAxNodesMap[nodeId]?.jsonObject ?: return false
+            val isIgnored = nodeObj["ignored"]?.jsonPrimitive?.booleanOrNull == true
+            val backendId = nodeObj["backendDOMNodeId"]?.jsonPrimitive?.intOrNull
+            return !isIgnored && backendId != null
+        }
+
+        val resolvedChildrenMap = mutableMapOf<String, MutableList<String>>()
+        for (node in axNodes) {
+            val nodeId = node.jsonObject["nodeId"]?.jsonPrimitive?.contentOrNull ?: continue
+            if (!isValidSemNode(nodeId)) continue
+
+            var ancestorId = childToParentMap[nodeId]
+            var steps = 0
+            while (ancestorId != null && !isValidSemNode(ancestorId) && steps < 200) {
+                ancestorId = childToParentMap[ancestorId]
+                steps++
+            }
+
+            if (ancestorId != null && isValidSemNode(ancestorId)) {
+                resolvedChildrenMap.getOrPut(ancestorId) { mutableListOf() }.add(nodeId)
+            }
+        }
+
         val semNodes = mutableListOf<SemNode>()
         for (node in axNodes) {
             val obj = node.jsonObject
-            if (obj["ignored"]?.jsonPrimitive?.boolean == true) continue
-            val backendNodeId = obj["backendDOMNodeId"]?.jsonPrimitive?.int ?: continue
-            val role = obj["role"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: ""
-            val name = obj["name"]?.jsonObject?.get("value")?.jsonPrimitive?.content ?: ""
-            val nodeId = obj["nodeId"]?.jsonPrimitive?.content ?: ""
-            val childIds = obj["childIds"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
-            semNodes.add(SemNode(nodeId, backendNodeId, role, name, childIds))
+            if (obj["ignored"]?.jsonPrimitive?.booleanOrNull == true) continue
+            val backendNodeId = obj["backendDOMNodeId"]?.jsonPrimitive?.intOrNull ?: continue
+            val role = obj["role"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull ?: ""
+            val name = obj["name"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull ?: ""
+            val nodeId = obj["nodeId"]?.jsonPrimitive?.contentOrNull ?: ""
+            val resolvedChildIds = resolvedChildrenMap[nodeId] ?: emptyList()
+            semNodes.add(SemNode(nodeId, backendNodeId, role, name, resolvedChildIds))
         }
 
         if (semNodes.isEmpty()) return AxTreeData(

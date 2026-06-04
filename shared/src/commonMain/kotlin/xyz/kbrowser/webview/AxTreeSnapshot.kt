@@ -1,227 +1,91 @@
 package xyz.kbrowser.webview
 
 /**
- * 将 AxTreeData 转换为 KBrowser YAML Snapshot 格式。
+ * 将 AxTreeData 转换为 YAML 格式。
  *
- * 树构建策略：
- *   - 有 childIds（CDP 路径）→ 严格按 childIds 构建，不可见节点透明穿透，孤儿直接挂根
- *   - 无 childIds（JS 注入路径）→ 坐标包含关系构建
- * 两套逻辑完全独立，不混用。
- *
- * @param clean 是否清洗噪音节点（默认 false）
- *   清洗规则：
- *   1. 无文本 + 无交互属性 + role 无语义 → 删，子节点上提
- *   2. 纯装饰节点（image、i、空 span/wrapper）且父节点已包含其信息 → 删
- *   3. 视口外节点（center 超出 viewport）→ 删
+ * [clean] = false → 纯格式转换，不做任何过滤，所有节点、所有字段原样输出。
+ * [clean] = true  → 紧凑输出，供 AI agent 消费：
+ *   1. 视口过滤：只保留 centerX/centerY 落在视口范围内的节点
+ *   2. 删除 StaticText（#text）节点 — 父节点 text 字段已包含
+ *   3. 删除 ::before / ::after 伪元素
+ *   4. 删除不可见且不可交互的节点
+ *   5. 删除空的 generic 容器（role=generic/none/presentation，无文本，不可交互），children 提升到父级
+ *   6. 字段精简：省略空值/null/默认字段，去掉 AI 不需要的内部字段
+ *   7. attributes 只保留交互相关属性（href/placeholder/type/aria-* 等）
  */
 fun AxTreeData.toYamlSnapshot(clean: Boolean = false): String {
+    val nodes = this.nodes
     if (nodes.isEmpty()) return ""
 
-    val noiseTags = setOf("script", "style", "link", "meta", "noscript", "head", "::before", "::after")
-
-    val visibleNodes = nodes.filter { node ->
-        val tag = node.tagName.lowercase()
-        if (tag in noiseTags) return@filter false
-        if (node.id == "__kb_overlay__") return@filter false
-        val style = node.attributes["style"] ?: ""
-        if (style.contains("outline:") && style.contains("rgba") &&
-            style.contains("position: absolute") && style.contains("box-sizing: border-box")
-        ) return@filter false
-        true
-    }
-
-    if (visibleNodes.isEmpty()) return ""
-
-    val visibleIndex = visibleNodes.associateBy { it.refid }
+    val nodeIndex = nodes.associateBy { it.refid }
     val parentMap = mutableMapOf<String, String>()
     val childrenMap = mutableMapOf<String, MutableList<AxNode>>()
 
-    val hasCdpHierarchy = visibleNodes.any { it.childIds.isNotEmpty() }
+    val hasCdpHierarchy = nodes.any { it.childIds.isNotEmpty() }
     if (hasCdpHierarchy) {
-        buildCdpTree(nodes, visibleIndex, parentMap, childrenMap)
+        buildCdpTree(nodes, nodeIndex, parentMap, childrenMap)
     } else {
-        buildCoordTree(visibleNodes, parentMap, childrenMap)
+        buildCoordTree(nodes, parentMap, childrenMap)
     }
 
-    // clean 模式：对节点树做一次清洗，直接修改 childrenMap
-    if (clean) {
-        cleanTree(visibleNodes, visibleIndex, innerWidth, innerHeight, parentMap, childrenMap)
-    }
-
-    val roots = visibleNodes
+    val roots = nodes
         .filter { it.refid !in parentMap }
-        .let { list ->
-            if (clean) list.filter { !shouldCleanNode(it, innerWidth, innerHeight, childrenMap) }
-            else list
-        }
         .sortedWith(compareBy({ it.y }, { it.x }))
 
     val sb = StringBuilder()
-    sb.append("# KBrowser Snapshot\n")
-    sb.append("# url: ").append(url).append("\n")
-    sb.append("# viewport: ").append(innerWidth).append("x").append(innerHeight).append("\n")
-    sb.append("#\n")
-    sb.append("# Format: - role \"text\" @refid [center:x,y] [selector:...] [occludedBy:@refid]\n")
-    sb.append("# @refid  → use with page.click(refid) or page.locator(selector)\n")
-    sb.append("# occludedBy → coordinate click blocked; dismiss that element first\n")
-    sb.append("#\n")
+
+    // 元数据
+    sb.append("url: ").append(yamlStr(url)).append('\n')
+    sb.append("innerWidth: ").append(innerWidth).append('\n')
+    sb.append("innerHeight: ").append(innerHeight).append('\n')
+    sb.append("scrollX: ").append(scrollX).append('\n')
+    sb.append("scrollY: ").append(scrollY).append('\n')
+    if (!clean) {
+        sb.append("documentWidth: ").append(documentWidth).append('\n')
+        sb.append("documentHeight: ").append(documentHeight).append('\n')
+        sb.append("devicePixelRatio: ").append(devicePixelRatio).append('\n')
+        sb.append("totalElements: ").append(totalElements).append('\n')
+        sb.append("visibleElements: ").append(visibleElements).append('\n')
+        sb.append("hiddenElements: ").append(hiddenElements).append('\n')
+        sb.append("iframeCount: ").append(iframeCount).append('\n')
+    }
+    sb.append("nodes:\n")
+
+    val left = scrollX
+    val right = scrollX + innerWidth
+    val top = scrollY
+    val bottom = scrollY + innerHeight
+
+    val compactCache = mutableMapOf<String, Int>()
 
     for (root in roots) {
-        serializeNode(root, 0, sb, childrenMap, clean)
+        if (clean) {
+            serializeNodeCompact(root, 1, sb, childrenMap, left, right, top, bottom, compactCache)
+        } else {
+            serializeNode(root, 1, sb, childrenMap)
+        }
     }
 
-    return sb.toString().trim()
+    return sb.toString().trimEnd()
 }
 
 // ────────────────────────────────────────────────
-// 清洗
+// YAML 辅助
 // ────────────────────────────────────────────────
 
-/**
- * 判断节点是否应该被清洗掉。
- *
- * 规则1：视口外（center 超出 viewport）
- * 规则2：纯装饰 tag（image、i）且父节点文本已包含其信息（无独立文本/交互）
- * 规则3：无语义 role + 无文本 + 无任何交互属性
- */
-private fun shouldCleanNode(
-    node: AxNode,
-    viewportWidth: Int,
-    viewportHeight: Int,
-    childrenMap: Map<String, MutableList<AxNode>>,
-): Boolean {
-    val tag = node.tagName.lowercase()
-    val role = node.role.lowercase()
-
-    // 规则1：视口外
-    if (node.centerX < 0 || node.centerY < 0) return true
-    if (viewportWidth > 0 && node.centerX > viewportWidth) return true
-    if (viewportHeight > 0 && node.centerY > viewportHeight) return true
-
-    // 规则2：纯装饰 tag，无文本无交互
-    if (tag in setOf("image", "img", "i", "svg") && !hasInteraction(node)) {
-        return true
-    }
-
-    // 规则3：role 无语义 + 无文本 + 无交互
-    val hasSemanticRole = role.isNotBlank() && role !in NON_SEMANTIC_ROLES
-    val hasTagSemantics = tag in setOf("button", "a", "input", "textarea", "select",
-        "details", "summary", "label", "form")
-    if (!hasSemanticRole && !hasTagSemantics && !hasInteraction(node) && resolveTextForClean(node, childrenMap).isBlank()) {
-        return true
-    }
-
-    return false
+private fun yamlStr(s: String): String {
+    if (s.isEmpty()) return "\"\""
+    val escaped = s
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    return "\"$escaped\""
 }
 
-/** 纯结构/格式角色，无文本无交互时视为噪音 */
-private val NON_SEMANTIC_ROLES = setOf(
-    "generic", "none", "presentation",
-    "div", "span", "section", "article", "aside", "main", "nav", "header", "footer",
-    "list", "listitem", "paragraph", "descriptionlist", "definition", "term",
-    "emphasis", "strong", "group"
-)
-
-/**
- * 节点是否有交互属性：href、placeholder、checked、aria-checked、role 明确可交互
- */
-private fun hasInteraction(node: AxNode): Boolean {
-    if (node.attributes["href"]?.let { it.isNotBlank() && !it.startsWith("javascript") } == true) return true
-    if (node.attributes["placeholder"] != null) return true
-    if (node.attributes["checked"] != null) return true
-    if (node.attributes["aria-checked"] != null) return true
-    if (node.attributes["aria-selected"] != null) return true
-    if (node.attributes["aria-expanded"] != null) return true
-    val interactiveRoles = setOf("button", "link", "checkbox", "radio", "textbox", "combobox",
-        "listbox", "menuitem", "menuitemcheckbox", "menuitemradio", "option",
-        "switch", "tab", "treeitem", "spinbutton", "slider", "searchbox")
-    if (node.role.lowercase() in interactiveRoles) return true
-    return false
-}
-
-private fun resolveTextForClean(node: AxNode, childrenMap: Map<String, MutableList<AxNode>>): String {
-    if (node.text.isNotBlank()) return node.text
-    return childrenMap[node.refid]
-        ?.filter { it.tagName == "#text" && it.text.isNotBlank() }
-        ?.joinToString(" ") { it.text.trim() }
-        ?.trim()
-        ?: ""
-}
-
-/**
- * 遍历整棵树，把需要清洗的节点从 childrenMap 中移除，
- * 其子节点上提到父节点（透明穿透）。
- */
-private fun cleanTree(
-    allVisible: List<AxNode>,
-    visibleIndex: Map<String, AxNode>,
-    viewportWidth: Int,
-    viewportHeight: Int,
-    parentMap: MutableMap<String, String>,
-    childrenMap: MutableMap<String, MutableList<AxNode>>,
-) {
-    // 收集所有需要删除的节点 refid
-    val toRemove = allVisible
-        .filter { shouldCleanNode(it, viewportWidth, viewportHeight, childrenMap) }
-        .map { it.refid }
-        .toSet()
-
-    if (toRemove.isEmpty()) return
-
-    // Pass 1: 对每个保留的节点，递归向上找到最近的非删除祖先，重建 parent-child 映射
-    val newParentMap = mutableMapOf<String, String>()
-    val newChildrenMap = mutableMapOf<String, MutableList<AxNode>>()
-
-    for (node in allVisible) {
-        if (node.refid in toRemove) continue
-
-        // 沿 parentMap 递归向上，跳过所有 toRemove 节点，找到最近的保留祖先
-        var ancestorRefid = parentMap[node.refid]
-        while (ancestorRefid != null && ancestorRefid in toRemove) {
-            ancestorRefid = parentMap[ancestorRefid]
-        }
-
-        if (ancestorRefid != null) {
-            newParentMap[node.refid] = ancestorRefid
-            newChildrenMap.getOrPut(ancestorRefid) { mutableListOf() }.add(node)
-        }
-        // ancestorRefid == null → 该节点成为 root（不加入 parentMap）
-    }
-
-    // Pass 2: 移除冗余文本子节点
-    // 条件：非交互叶子节点 + role 为非语义 + 文本是父节点文本的子串
-    val redundant = mutableSetOf<String>()
-    for ((pRefid, children) in newChildrenMap) {
-        val parentNode = visibleIndex[pRefid] ?: continue
-        val parentText = resolveTextForClean(parentNode, newChildrenMap)
-        if (parentText.isBlank()) continue
-        for (child in children) {
-            val childRole = child.role.lowercase()
-            if (childRole !in NON_SEMANTIC_ROLES) continue
-            if (hasInteraction(child)) continue
-            if (!newChildrenMap[child.refid].isNullOrEmpty()) continue  // 有子节点，不是叶子
-            val childText = resolveTextForClean(child, newChildrenMap)
-            if (childText.isBlank()) continue
-            if (parentText.contains(childText)) {
-                redundant.add(child.refid)
-            }
-        }
-    }
-    if (redundant.isNotEmpty()) {
-        for ((pRefid, children) in newChildrenMap.toMap()) {
-            val filtered = children.filterNot { it.refid in redundant }
-            if (filtered.isEmpty()) newChildrenMap.remove(pRefid)
-            else newChildrenMap[pRefid] = filtered.toMutableList()
-        }
-        for (refid in redundant) {
-            newParentMap.remove(refid)
-        }
-    }
-
-    parentMap.clear()
-    parentMap.putAll(newParentMap)
-    childrenMap.clear()
-    childrenMap.putAll(newChildrenMap)
+private fun yamlStrOrNull(s: String?): String {
+    return if (s == null) "null" else yamlStr(s)
 }
 
 // ────────────────────────────────────────────────
@@ -230,29 +94,16 @@ private fun cleanTree(
 
 private fun buildCdpTree(
     allNodes: List<AxNode>,
-    visibleIndex: Map<String, AxNode>,
+    nodeIndex: Map<String, AxNode>,
     parentMap: MutableMap<String, String>,
     childrenMap: MutableMap<String, MutableList<AxNode>>,
 ) {
-    val allIndex = allNodes.associateBy { it.refid }
-
-    fun attachChildren(visibleParentRefid: String, childIds: List<String>) {
-        for (childId in childIds) {
-            val child = allIndex[childId] ?: continue
-            if (visibleIndex.containsKey(childId)) {
-                if (childId !in parentMap) {
-                    parentMap[childId] = visibleParentRefid
-                    childrenMap.getOrPut(visibleParentRefid) { mutableListOf() }.add(visibleIndex[childId]!!)
-                }
-            } else {
-                attachChildren(visibleParentRefid, child.childIds)
+    for (node in allNodes) {
+        for (childId in node.childIds) {
+            if (nodeIndex.containsKey(childId) && childId !in parentMap) {
+                parentMap[childId] = node.refid
+                childrenMap.getOrPut(node.refid) { mutableListOf() }.add(nodeIndex[childId]!!)
             }
-        }
-    }
-
-    for (node in visibleIndex.values) {
-        if (node.childIds.isNotEmpty()) {
-            attachChildren(node.refid, node.childIds)
         }
     }
 }
@@ -262,17 +113,17 @@ private fun buildCdpTree(
 // ────────────────────────────────────────────────
 
 private fun buildCoordTree(
-    visibleNodes: List<AxNode>,
+    allNodes: List<AxNode>,
     parentMap: MutableMap<String, String>,
     childrenMap: MutableMap<String, MutableList<AxNode>>,
 ) {
     val nodeArea = { n: AxNode -> n.width.toLong() * n.height.toLong() }
 
-    for (node in visibleNodes) {
+    for (node in allNodes) {
         var bestParent: AxNode? = null
         var bestArea = Long.MAX_VALUE
 
-        for (candidate in visibleNodes) {
+        for (candidate in allNodes) {
             if (candidate.refid == node.refid) continue
             val area = nodeArea(candidate)
             if (area <= nodeArea(node)) continue
@@ -293,89 +144,318 @@ private fun buildCoordTree(
     }
 }
 
-// ────────────────────────────────────────────────
-// 序列化
-// ────────────────────────────────────────────────
+// ════════════════════════════════════════════════
+// clean = false：完整序列化（所有字段，无遗漏）
+// ════════════════════════════════════════════════
 
 private fun serializeNode(
     node: AxNode,
     depth: Int,
     sb: StringBuilder,
     childrenMap: Map<String, MutableList<AxNode>>,
-    clean: Boolean,
 ) {
-    if (node.tagName == "#text") return
+    val listIndent = "  ".repeat(depth)
+    val fieldIndent = "  ".repeat(depth + 1)
 
-    val indent = "  ".repeat(depth)
+    sb.append(listIndent).append("- refid: ").append(yamlStr(node.refid)).append('\n')
+    sb.append(fieldIndent).append("tagName: ").append(yamlStr(node.tagName)).append('\n')
+    sb.append(fieldIndent).append("role: ").append(yamlStr(node.role)).append('\n')
+    sb.append(fieldIndent).append("id: ").append(yamlStr(node.id)).append('\n')
+    sb.append(fieldIndent).append("className: ").append(yamlStr(node.className)).append('\n')
+    sb.append(fieldIndent).append("text: ").append(yamlStr(node.text)).append('\n')
+    sb.append(fieldIndent).append("isVisible: ").append(node.isVisible).append('\n')
+    sb.append(fieldIndent).append("x: ").append(node.x).append('\n')
+    sb.append(fieldIndent).append("y: ").append(node.y).append('\n')
+    sb.append(fieldIndent).append("width: ").append(node.width).append('\n')
+    sb.append(fieldIndent).append("height: ").append(node.height).append('\n')
+    sb.append(fieldIndent).append("centerX: ").append(node.centerX).append('\n')
+    sb.append(fieldIndent).append("centerY: ").append(node.centerY).append('\n')
+    sb.append(fieldIndent).append("childCount: ").append(node.childCount).append('\n')
 
-    val role = when {
-        node.role.isNotBlank() &&
-                node.role.lowercase() != "generic" &&
-                node.role.lowercase() != "none" -> node.role.lowercase()
-        node.tagName.isNotBlank() && node.tagName != "#document" -> node.tagName.lowercase()
-        else -> "generic"
-    }
-
-    val text = resolveTextForClean(node, childrenMap)
-    val placeholder = node.attributes["placeholder"]
-    val href = node.attributes["href"]
-    val checked = when (node.role.lowercase()) {
-        "checkbox", "radio" -> node.attributes["checked"] ?: node.attributes["aria-checked"]
-        else -> null
-    }
-    val isActive = node.attributes["aria-selected"] == "true" ||
-            node.className.contains("active") ||
-            node.attributes["aria-current"] != null
-
-    sb.append(indent).append("- ").append(role)
-
-    when {
-        text.isNotBlank() -> {
-            val display = if (text.length > 80) text.take(80) + "…" else text
-            sb.append(" \"").append(display).append("\"")
+    if (node.attributes.isEmpty()) {
+        sb.append(fieldIndent).append("attributes: {}\n")
+    } else {
+        sb.append(fieldIndent).append("attributes:\n")
+        val attrIndent = fieldIndent + "  "
+        for ((key, value) in node.attributes) {
+            sb.append(attrIndent).append(yamlStr(key)).append(": ").append(yamlStr(value)).append('\n')
         }
-        placeholder != null -> sb.append(" [placeholder:").append(placeholder).append("]")
     }
 
-    if (node.refid.isNotBlank()) sb.append(" @").append(node.refid)
+    sb.append(fieldIndent).append("iframeSrc: ").append(yamlStrOrNull(node.iframeSrc)).append('\n')
+    sb.append(fieldIndent).append("selector: ").append(yamlStr(node.selector)).append('\n')
+    sb.append(fieldIndent).append("occludedBy: ").append(yamlStrOrNull(node.occludedBy)).append('\n')
+    sb.append(fieldIndent).append("nodeId: ").append(yamlStr(node.nodeId)).append('\n')
 
-    if (node.centerX != 0 || node.centerY != 0) {
-        sb.append(" [center:").append(node.centerX).append(",").append(node.centerY).append("]")
+    if (node.childIds.isEmpty()) {
+        sb.append(fieldIndent).append("childIds: []\n")
+    } else {
+        sb.append(fieldIndent).append("childIds: [")
+            .append(node.childIds.joinToString(", ") { yamlStr(it) })
+            .append("]\n")
     }
 
-    if (node.selector.isNotBlank()) {
-        val s = node.selector
-        val display = if (s.length > 60) s.take(60) + "…" else s
-        sb.append(" [selector:").append(display).append("]")
+    val children = childrenMap[node.refid]
+        ?.sortedWith(compareBy({ it.y }, { it.x }))
+
+    if (!children.isNullOrEmpty()) {
+        sb.append(fieldIndent).append("children:\n")
+        for (child in children) {
+            serializeNode(child, depth + 1, sb, childrenMap)
+        }
+    }
+}
+
+// ════════════════════════════════════════════════
+// clean = true：紧凑序列化（AI agent 专用）
+// ════════════════════════════════════════════════
+
+/**
+ * 紧凑序列化一个节点。
+ * 应用节点过滤规则，跳过噪音节点，空容器的 children 提升到父级。
+ * 只输出有值的字段，attributes 只保留交互相关属性。
+ */
+private fun serializeNodeCompact(
+    node: AxNode,
+    depth: Int,
+    sb: StringBuilder,
+    childrenMap: Map<String, List<AxNode>>,
+    left: Int, right: Int, top: Int, bottom: Int,
+    compactCache: MutableMap<String, Int>
+) {
+    if (!hasViewportDescendants(node, childrenMap, left, right, top, bottom)) return
+
+    val sortedChildren = childrenMap[node.refid]
+        ?.sortedWith(compareBy({ it.y }, { it.x }))
+
+    // 规则 1: 跳过 StaticText — 文本会被合并到父节点
+    if (node.tagName == "#text" || node.role == "StaticText") return
+
+    // 规则 2: 跳过伪元素
+    if (node.tagName.startsWith("::")) return
+
+    val isSelfVisibleOrInteractive = node.isVisible || isCleanInteractive(node)
+    val isSelfInViewport = node.centerX in left..right && node.centerY in top..bottom
+
+    var shouldSkipSelf = !isSelfInViewport || !isSelfVisibleOrInteractive || isEmptyGenericContainer(node, childrenMap)
+
+    // 分组保护规则：如果跳过自己会导致多于 1 个子节点被提升而产生排序混乱，则必须保留自己作为容器
+    if (shouldSkipSelf) {
+        val children = childrenMap[node.refid] ?: emptyList()
+        val compactDescendantsCount = children.sumOf { countCompactDescendants(it, childrenMap, left, right, top, bottom, compactCache) }
+        if (compactDescendantsCount >= 2) {
+            shouldSkipSelf = false
+        }
+    }
+
+    if (shouldSkipSelf) {
+        sortedChildren?.forEach { serializeNodeCompact(it, depth, sb, childrenMap, left, right, top, bottom, compactCache) }
+        return
+    }
+
+    val listIndent = "  ".repeat(depth)
+    val fieldIndent = "  ".repeat(depth + 1)
+
+    sb.append(listIndent).append("- refid: ").append(yamlStr(node.refid)).append('\n')
+
+    // role: 跳过 generic/none/presentation，但尝试通过 class name 还原出真实语义（如 button, combobox 等）
+    val roleLower = node.role.lowercase()
+    val isGeneric = roleLower == "generic" || roleLower == "none" || roleLower == "presentation" || node.role.isEmpty()
+    val mappedRole = if (isGeneric) {
+        val lowerClass = node.className.lowercase()
+        if (isLikelyContainerClass(lowerClass)) {
+            null
+        } else if (lowerClass.contains("select") || lowerClass.contains("dropdown")) {
+            "combobox"
+        } else if (lowerClass.contains("btn") || lowerClass.contains("button") || lowerClass.contains("close") || lowerClass.contains("dismiss") || lowerClass.contains("toggle") || lowerClass.contains("trigger")) {
+            "button"
+        } else null
+    } else {
+        node.role
+    }
+
+    if (mappedRole != null) {
+        sb.append(fieldIndent).append("role: ").append(yamlStr(mappedRole)).append('\n')
+    }
+
+    // text: 如果节点自身没有 text，从 StaticText 子节点合并
+    val effectiveText = if (node.text.isNotEmpty()) {
+        node.text
+    } else {
+        sortedChildren
+            ?.filter { it.tagName == "#text" || it.role == "StaticText" }
+            ?.joinToString("") { it.text }
+            ?.takeIf { it.isNotEmpty() }
+            ?: ""
+    }
+    if (effectiveText.isNotEmpty()) {
+        sb.append(fieldIndent).append("text: ").append(yamlStr(effectiveText)).append('\n')
+    }
+
+    if (node.id.isNotEmpty()) {
+        sb.append(fieldIndent).append("id: ").append(yamlStr(node.id)).append('\n')
+    }
+
+    sb.append(fieldIndent).append("centerX: ").append(node.centerX).append('\n')
+    sb.append(fieldIndent).append("centerY: ").append(node.centerY).append('\n')
+
+    if (node.selector.isNotEmpty()) {
+        sb.append(fieldIndent).append("selector: ").append(yamlStr(node.selector)).append('\n')
     }
 
     if (node.occludedBy != null) {
-        sb.append(" [occludedBy:@").append(node.occludedBy).append("]")
+        sb.append(fieldIndent).append("occludedBy: ").append(yamlStr(node.occludedBy)).append('\n')
     }
 
-    if (isActive) sb.append(" [active]")
-    when (checked) {
-        "true", "mixed" -> sb.append(" [checked]")
-        "false" -> sb.append(" [unchecked]")
+    // attributes: 只保留交互/语义相关属性
+    val usefulAttrs = filterUsefulAttributes(node.attributes)
+    if (usefulAttrs.isNotEmpty()) {
+        sb.append(fieldIndent).append("attributes:\n")
+        val attrIndent = fieldIndent + "  "
+        for ((key, value) in usefulAttrs) {
+            sb.append(attrIndent).append(yamlStr(key)).append(": ").append(yamlStr(value)).append('\n')
+        }
     }
 
-    if (href != null && !href.startsWith("javascript")) {
-        val display = if (href.length > 60) href.take(60) + "…" else href
-        sb.append(" [href:").append(display).append("]")
+    // children: 递归序列化，只在有输出时添加 children 标签
+    if (!sortedChildren.isNullOrEmpty()) {
+        val childSb = StringBuilder()
+        for (child in sortedChildren) {
+            serializeNodeCompact(child, depth + 1, childSb, childrenMap, left, right, top, bottom, compactCache)
+        }
+        if (childSb.isNotEmpty()) {
+            sb.append(fieldIndent).append("children:\n")
+            sb.append(childSb)
+        }
+    }
+}
+
+private fun hasViewportDescendants(
+    node: AxNode,
+    childrenMap: Map<String, List<AxNode>>,
+    left: Int, right: Int, top: Int, bottom: Int
+): Boolean {
+    if (node.centerX in left..right && node.centerY in top..bottom) return true
+    val children = childrenMap[node.refid] ?: return false
+    return children.any { hasViewportDescendants(it, childrenMap, left, right, top, bottom) }
+}
+
+private fun countCompactDescendants(
+    node: AxNode,
+    childrenMap: Map<String, List<AxNode>>,
+    left: Int, right: Int, top: Int, bottom: Int,
+    cache: MutableMap<String, Int>
+): Int {
+    cache[node.refid]?.let { return it }
+
+    if (!hasViewportDescendants(node, childrenMap, left, right, top, bottom)) {
+        cache[node.refid] = 0
+        return 0
     }
 
-    if (node.className.isNotBlank() && text.isBlank() && placeholder == null) {
-        sb.append(" [class:").append(node.className.take(40)).append("]")
+    if (node.tagName == "#text" || node.role == "StaticText") {
+        cache[node.refid] = 0
+        return 0
+    }
+    if (node.tagName.startsWith("::")) {
+        cache[node.refid] = 0
+        return 0
     }
 
-    sb.append("\n")
+    val isSelfVisibleOrInteractive = node.isVisible || isCleanInteractive(node)
+    val isSelfInViewport = node.centerX in left..right && node.centerY in top..bottom
 
+    val isSelfClean = isSelfInViewport && isSelfVisibleOrInteractive && !isEmptyGenericContainer(node, childrenMap)
+
+    val children = childrenMap[node.refid] ?: emptyList()
+    val childrenCount = children.sumOf { countCompactDescendants(it, childrenMap, left, right, top, bottom, cache) }
+
+    val result = if (isSelfClean) {
+        1
+    } else {
+        if (childrenCount >= 2) 1 else childrenCount
+    }
+
+    cache[node.refid] = result
+    return result
+}
+
+// ────────────────────────────────────────────────
+// clean 模式：节点分类判断
+// ────────────────────────────────────────────────
+
+/** 空的 generic 容器：没有语义角色、没有文本（含子 StaticText）、没有 id、不可交互 → 跳过并提升 children */
+private fun isEmptyGenericContainer(node: AxNode, childrenMap: Map<String, List<AxNode>>): Boolean {
+    val role = node.role.lowercase()
+    // 有语义角色的保留（list, listitem, navigation, heading, img 等）
+    if (role != "generic" && role != "none" && role != "presentation" && role.isNotEmpty()) return false
+    if (node.text.isNotEmpty()) return false
+    if (node.id.isNotEmpty()) return false // 有 id 的节点通常有语义意义
+    if (isCleanInteractive(node)) return false
+    // 子节点有 StaticText 携带文本 → 不算空（文本会被合并到此节点）
     val children = childrenMap[node.refid]
-        ?.filter { it.tagName != "#text" }
-        ?.sortedWith(compareBy({ it.y }, { it.x }))
-        ?: return
+    if (children != null && children.any { (it.tagName == "#text" || it.role == "StaticText") && it.text.isNotEmpty() }) {
+        return false
+    }
+    return true
+}
 
-    for (child in children) {
-        serializeNode(child, depth + 1, sb, childrenMap, clean)
+private val CLEAN_INTERACTIVE_ROLES = setOf(
+    "button", "link", "checkbox", "radio", "textbox", "combobox",
+    "listbox", "menuitem", "menuitemcheckbox", "menuitemradio", "option",
+    "switch", "tab", "treeitem", "spinbutton", "slider", "searchbox", "img"
+)
+
+private val CLEAN_INTERACTIVE_TAGS = setOf(
+    "a", "button", "input", "textarea", "select", "details", "summary", "img"
+)
+
+private fun isLikelyContainerClass(className: String): Boolean {
+    val lower = className.lowercase()
+    return lower.contains("group") || 
+           lower.contains("container") || 
+           lower.contains("wrapper") || 
+           lower.contains("box") || 
+           lower.contains("list") || 
+           lower.contains("bar") || 
+           lower.contains("panel")
+}
+
+private fun isCleanInteractive(node: AxNode): Boolean {
+    if (node.role.lowercase() in CLEAN_INTERACTIVE_ROLES) return true
+    if (node.tagName.lowercase() in CLEAN_INTERACTIVE_TAGS) return true
+    if (node.attributes.containsKey("href")) return true
+    if (node.attributes.containsKey("placeholder")) return true
+    
+    val lowerClass = node.className.lowercase()
+    if (!isLikelyContainerClass(lowerClass)) {
+        if (lowerClass.contains("close") || lowerClass.contains("dismiss") || 
+            lowerClass.contains("btn") || lowerClass.contains("button") || 
+            lowerClass.contains("select") || lowerClass.contains("dropdown") || 
+            lowerClass.contains("menu") || lowerClass.contains("toggle") || 
+            lowerClass.contains("trigger") || lowerClass.contains("switch") || 
+            lowerClass.contains("tab")) {
+            return true
+        }
+    }
+    return false
+}
+
+// ────────────────────────────────────────────────
+// clean 模式：attributes 白名单过滤
+// ────────────────────────────────────────────────
+
+private val USEFUL_ATTR_NAMES = setOf(
+    "href", "placeholder", "type", "value", "checked", "selected",
+    "disabled", "readonly", "required", "title", "alt", "src",
+    "name", "for", "autocomplete", "action", "method", "target",
+    "tabindex", "rel"
+)
+
+/** 只保留交互/语义相关属性，aria-* 全部保留 */
+private fun filterUsefulAttributes(attrs: Map<String, String>): Map<String, String> {
+    if (attrs.isEmpty()) return emptyMap()
+    return attrs.filter { (key, value) ->
+        value.isNotEmpty() && (key in USEFUL_ATTR_NAMES || key.startsWith("aria-"))
     }
 }

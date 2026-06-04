@@ -14,7 +14,7 @@ fun main() {
             val profile = KBProfile("test_isolation_profile", System.getProperty("user.home") + "/.browserpilot/jcef_cache")
 
             println("[测试] 正在使用 KBrowser 新建页面...")
-            val page = KBrowser.newPage("https://example.com", profile)
+            val page = KBrowser.newPage("https://example.com")
 
             println("[测试] 正在等待网页加载...")
             page.loadUrl("https://example.com")

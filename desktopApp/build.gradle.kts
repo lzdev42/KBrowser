@@ -13,6 +13,7 @@ dependencies {
     implementation(libs.kotlinx.coroutinesSwing)
 
     implementation(libs.compose.uiToolingPreview)
+    implementation(libs.kotlinx.serialization.json)
 }
 
 compose.desktop {
@@ -30,4 +31,16 @@ compose.desktop {
             packageVersion = "1.0.0"
         }
     }
+}
+
+tasks.register<JavaExec>("runDebug") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.webview.InteractiveDebugRunnerKt")
+    val compileTestKotlin = tasks.named("compileTestKotlin")
+    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
 }

@@ -213,13 +213,26 @@ class BrowserViewModel : ViewModel() {
             }
             is BrowserIntent.FetchSemanticSnapshot -> {
                 val page = _state.value.page ?: return
-                log("开始抓取 Snapshot（YAML 格式）...")
+                log("开始抓取 Snapshot（YAML 格式 & 原始 JSON）...")
                 viewModelScope.launch {
                     try {
+                        val rawTree = page.getRawAxTree()
                         val yaml = page.snapshot()
+                        
+                        val jsonParser = kotlinx.serialization.json.Json { 
+                            prettyPrint = true
+                            ignoreUnknownKeys = true
+                        }
+                        val json = jsonParser.encodeToString(xyz.kbrowser.webview.AxTreeData.serializer(), rawTree)
+                        
                         println("========== SNAPSHOT ==========")
                         println(yaml)
                         println("========== END SNAPSHOT ==========")
+                        
+//                        println("========== RAW JSON SNAPSHOT ==========")
+//                        println(json)
+//                        println("========== END RAW JSON SNAPSHOT ==========")
+                        
                         _state.update { it.copy(snapshotText = yaml) }
                         log("Snapshot 抓取完成")
                     } catch (e: Exception) {
@@ -345,7 +358,7 @@ class BrowserViewModel : ViewModel() {
                     try {
                         log("[步骤 1] 正在提取 Aria 语义快照树...")
                         val rawAxTree = page.getRawAxTree()
-                        val snapshot = rawAxTree.toYamlSnapshot(true)
+                        val snapshot = rawAxTree.toYamlSnapshot(clean = true)
                         log("[步骤 1] 语义树提取成功（原始节点数: ${rawAxTree.nodes.size}）")
 
                         log("[步骤 2] 正在抓取 CSS 选择器...")

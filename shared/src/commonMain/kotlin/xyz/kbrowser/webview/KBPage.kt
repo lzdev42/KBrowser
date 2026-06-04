@@ -10,7 +10,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
 import kotlin.random.Random
 
-class KBPage internal constructor(val webView: KBWebView) {
+class KBPage(val webView: KBWebView) {
     val uuid: String = Random.nextLong().toString()
     
     val currentUrl: StateFlow<String?> get() = webView.currentUrl
@@ -234,23 +234,25 @@ class KBPage internal constructor(val webView: KBWebView) {
     /**
      * Returns the current page state as a KBrowser YAML Snapshot string.
      *
-     * Fetches the AXTree, applies minimal cleaning (removes invisible nodes and
-     * technical noise), then converts to tree-structured YAML with text uplifted,
-     * coordinates, selectors, and occlusion info inline.
-     *
-     * Recommended for AI agents — much lower token count than raw JSON,
-     * and semantically clear (icon buttons show their text, placeholders visible, etc.).
+     * Pure JSON→YAML conversion of the AXTree — no filtering, no truncation.
+     * All node fields and attributes are preserved.
+     * Use [toYamlSnapshot] with `clean = true` for a cleaned version.
      *
      * Example output:
      * ```
-     * - document "Page Title"
-     *   - textbox [placeholder:手机号] @r29 [center:691,380] [selector:...>input]
-     *   - button "登录/注册" @r117 [center:657,534]
+     * url: "https://example.com"
+     * innerWidth: 1920
+     * ...
+     * nodes:
+     *   - refid: "r1"
+     *     tagName: "html"
+     *     role: "document"
+     *     ...
      * ```
      */
-    suspend fun snapshot(): String {
+    suspend fun snapshot(clean: Boolean = true): String {
         val rawTree = getRawAxTree()
-        return rawTree.toYamlSnapshot(true)
+        return rawTree.toYamlSnapshot(clean)
     }
 
     /**
