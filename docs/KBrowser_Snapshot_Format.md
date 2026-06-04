@@ -74,23 +74,36 @@
 ### 操作节点
 
 ```
-# 看到 @r117，直接用 refid 点击
+# 看到 @r117，可以使用 refid 操作：
+# 物理坐标点击（默认）：
 page.click("r117")
+# JS 模拟点击（无视遮挡）：
+page.jsClick("r117")
 
-# 看到 [selector:...]，用选择器操作（更稳定，不受坐标影响）
+# 看到 [selector:...]，可以使用选择器定位并执行多种操作：
+# 物理点击（基于最新坐标）：
 page.locator("body > div > button.sure-btn").click()
+# JS 点击（直接触发 DOM 事件，无视遮挡与视口）：
+page.locator("body > div > button.sure-btn").jsClick()
 
-# 看到 textbox [placeholder:手机号] @r29，填入内容
-page.locator(node.selector).fill("13800138000")
+# 看到 textbox [placeholder:手机号] @r29，填入内容：
+# 物理输入（坐标点击聚焦 -> 逐字符物理输入，高真实性）：
+page.locator(node.selector).type("13800138000")
+# 混合输入（JS 精准聚焦 -> 逐字符物理输入，高稳定性与高真实性兼顾）：
+page.locator(node.selector).jsType("13800138000")
+# JS 极速填充（JS 聚焦 -> 直接修改 value 触发 change，无视物理键盘，速度最快）：
+page.locator(node.selector).jsFill("13800138000")
 ```
 
 ### 处理遮挡
 
 ```
 # 看到 [occludedBy:@r88]，说明坐标点击会打到 r88
-# 先找 r88 是什么，关闭它，再操作目标节点
-# 或者直接用 selector 绕过坐标：
-page.locator(targetNode.selector).fill("内容")
+# 先找 r88 是什么，物理点击关闭它，再操作目标节点；
+# 或者直接采用 JS 模式绕过物理坐标碰撞测试，直接操作：
+page.jsClick("targetRefid")
+# 或
+page.locator(targetNode.selector).jsClick()
 ```
 
 ### 理解节点语义

@@ -81,7 +81,9 @@ object KBCefLocatorImpl {
         // 3. 对每个 nodeId 调用 DOM.getBoxModel（使用 nodeId，不是 backendNodeId）
         return nodeIds.mapNotNull { nodeIdElement ->
             val nodeId = nodeIdElement.jsonPrimitive.int
-            getBoxModelByNodeId(devTools, nodeId)
+            getBoxModelByNodeId(devTools, nodeId)?.copy(
+                selector = getSelector(devTools, nodeId = nodeId)
+            )
         }
     }
 
@@ -119,7 +121,9 @@ object KBCefLocatorImpl {
             // 3. 对每个 nodeId 调用 DOM.getBoxModel
             return nodeIds.mapNotNull { nodeIdElement ->
                 val nodeId = nodeIdElement.jsonPrimitive.int
-                getBoxModelByNodeId(devTools, nodeId)
+                getBoxModelByNodeId(devTools, nodeId)?.copy(
+                    selector = getSelector(devTools, nodeId = nodeId)
+                )
             }
         } finally {
             // 4. 清理搜索结果
@@ -351,7 +355,8 @@ object KBCefLocatorImpl {
                 text = node.name
             ) ?: continue
 
-            results.add(locateResult)
+            val selector = getSelector(devTools, backendNodeId = node.backendNodeId)
+            results.add(locateResult.copy(selector = selector))
         }
         return results
     }
@@ -420,6 +425,42 @@ object KBCefLocatorImpl {
             )
         } catch (_: Exception) {
             null
+        }
+    }
+
+    private fun getSelector(
+        devTools: org.cef.browser.CefDevToolsClient,
+        nodeId: Int? = null,
+        backendNodeId: Int? = null
+    ): String {
+        return try {
+            val params = when {
+                nodeId != null -> """{"nodeId":$nodeId}"""
+                backendNodeId != null -> """{"backendNodeId":$backendNodeId}"""
+                else -> return ""
+            }
+            val resolveJson = devTools.executeDevToolsMethod(
+                "DOM.resolveNode",
+                params
+            ).get(CDP_CALL_TIMEOUT_SEC, TimeUnit.SECONDS) ?: return ""
+            val r = Json.parseToJsonElement(resolveJson).jsonObject
+            val objectId = r["object"]?.jsonObject?.get("objectId")?.jsonPrimitive?.content
+                ?: r["result"]?.jsonObject?.get("object")?.jsonObject?.get("objectId")?.jsonPrimitive?.content
+                ?: r["result"]?.jsonObject?.get("result")?.jsonObject?.get("object")?.jsonObject?.get("objectId")?.jsonPrimitive?.content
+                ?: return ""
+            
+            val escapedObjId = Json.encodeToString(JsonPrimitive(objectId))
+            val selectorFn = xyz.kbrowser.webview.JsScripts.BUILD_SELECTOR_CALL_FN
+            val callJson = devTools.executeDevToolsMethod(
+                "Runtime.callFunctionOn",
+                """{"objectId":$escapedObjId,"functionDeclaration":${Json.encodeToString(JsonPrimitive(selectorFn))},"returnByValue":true}"""
+            ).get(CDP_CALL_TIMEOUT_SEC, TimeUnit.SECONDS) ?: return ""
+            val cr = Json.parseToJsonElement(callJson).jsonObject
+            cr["result"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull
+                ?: cr["result"]?.jsonObject?.get("result")?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull
+                ?: ""
+        } catch (_: Exception) {
+            ""
         }
     }
 

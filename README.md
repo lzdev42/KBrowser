@@ -118,9 +118,16 @@ page.onNewPage = { url -> println("New page request: $url") }
 
 // Navigate and interact
 page.loadUrl("https://example.com/login")
-page.getByLabel("Username").fill("admin")
-page.getByLabel("Password").type("secret")   // Physical key events, anti-detection
+
+// Mode 1: Physical Coordinates Interaction (for anti-detection physical interactions)
+page.getByLabel("Username").fill("admin")      // Clicks coordinates to focus -> fills values
+page.getByLabel("Password").type("secret")     // Clicks coordinates to focus -> types key-by-key (anti-detection)
 page.getByRole("button", name = "Login").click()
+
+// Mode 2: JS Simulation Interaction (bypasses overlays/viewports, high stability)
+page.getByLabel("Username").jsFill("admin")    // Focuses via JS -> modifies value and dispatches events
+page.getByLabel("Password").jsType("secret")    // Focuses via JS -> types key-by-key (safe & stable)
+page.getByRole("button", name = "Login").jsClick() // Dispatches DOM click event directly
 
 // Extract accessibility tree (AXTree)
 val tree = page.getRawAxTree().getCleanedAxTree()

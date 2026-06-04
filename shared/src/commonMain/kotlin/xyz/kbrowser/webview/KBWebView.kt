@@ -144,6 +144,34 @@ internal expect suspend fun performDragByCoordinates(
     endY: Int
 )
 
+internal expect suspend fun performClickByJs(
+    webView: KBWebView,
+    selector: String
+)
+
+internal expect suspend fun performHoverByJs(
+    webView: KBWebView,
+    selector: String
+)
+
+internal expect suspend fun performScrollByJs(
+    webView: KBWebView,
+    selector: String,
+    deltaX: Int,
+    deltaY: Int
+)
+
+internal expect suspend fun performDragByJs(
+    webView: KBWebView,
+    startSelector: String,
+    endSelector: String
+)
+
+internal expect suspend fun performFocusByJs(
+    webView: KBWebView,
+    selector: String
+)
+
 internal expect suspend fun performKeyPress(
     webView: KBWebView,
     key: KeyboardKey

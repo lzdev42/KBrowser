@@ -198,13 +198,28 @@ fun BrowserScreen() {
 
 调用前需先执行 `getRawAxTree()` 刷新缓存。若 refid 不存在则抛出 `ElementNotFoundException`。
 
+#### 坐标模式（物理事件）
+这些方法通过取 `nodeCache` 中元素的坐标，并分发物理系统事件（如 CDP MouseEvent / iOS 触控事件）。
+
 | 方法 | 说明 |
 |------|------|
-| `suspend click(refid: String)` | 从缓存取 `centerX`/`centerY`，通过 CDP 发送物理点击。若元素被遮挡可能失败。 |
-| `suspend hover(refid: String)` | 从缓存取坐标，CDP 发送悬停事件 |
-| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | 从缓存取坐标，CDP 发送滚轮事件 |
+| `suspend click(refid: String)` | 从缓存获取坐标，分发物理点击事件（物理点击可能会受元素遮挡影响） |
+| `suspend hover(refid: String)` | 从缓存获取坐标，分发物理悬停事件 |
+| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | 从缓存获取坐标，分发物理滚动/滚轮事件 |
+| `suspend drag(startRefid: String, endRefid: String)` | 从缓存获取起止坐标，分发物理鼠标拖拽（Drag & Drop）事件 |
+
+#### JS 模式（DOM 事件模拟）
+这些方法通过取 `nodeCache` 中元素的 CSS 选择器（`selector`），直接向页面注入并触发 DOM 事件。不受坐标或元素被遮挡的影响。
+
+| 方法 | 说明 |
+|------|------|
+| `suspend jsClick(refid: String)` | 查找 CSS 选择器，触发 DOM 节点的 `.click()` |
+| `suspend jsHover(refid: String)` | 查找 CSS 选择器，分发 DOM 的 `mouseover` / `mouseenter` / `mousemove` 事件 |
+| `suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)` | 查找 CSS 选择器，调用 DOM 节点的 `.scrollBy(dx, dy)` |
+| `suspend jsDrag(startRefid: String, endRefid: String)` | 查找起止 CSS 选择器，模拟并分发 `mousedown` -> `mousemove` -> `mouseup` 拖拽事件流 |
 
 ### 交互（基于坐标，CSS 文档像素）
+基于底层系统的物理指针事件，保持不变。
 
 | 方法 | 说明 |
 |------|------|
@@ -247,20 +262,39 @@ fun BrowserScreen() {
 
 `KBLocator` 延迟解析，每次操作时重新查找元素。JVM 平台优先使用 CDP（无 JS 注入，CSP 安全），Android/iOS fallback 到 JS。
 
-### 交互方法
+为了满足不同场景下的定位策略，`KBLocator` 提供了两套独立的方法家族：**坐标模式（默认）** 和 **JS 模式**。
+
+### 坐标模式（默认，基于物理事件）
+定位元素并基于其物理坐标派发真实系统事件。如果元素被遮挡或在视口外，坐标点击可能会失效。
 
 | 方法 | 说明 |
 |------|------|
-| `suspend click()` | 定位元素并通过坐标点击。 |
-| `suspend hover()` | 定位元素，发送悬停事件 |
-| `suspend scroll(deltaX, deltaY)` | 定位元素，发送滚轮事件 |
-| `suspend fill(value: String)` | 点击聚焦后通过 JS 设置输入框值（快速填充） |
-| `suspend type(text: String)` | 点击聚焦 → Ctrl+A → Delete → 逐字符物理键入（高防检测） |
-| `suspend focus()` | 点击聚焦元素 |
-| `suspend check()` | 点击复选框/单选框 |
-| `suspend selectOption(value: String)` | 点击下拉框，再点击匹配的 option |
-| `suspend press(key: KeyboardKey)` | 聚焦后发送单键事件 |
-| `suspend pressKeyCombination(modifier, key)` | 聚焦后发送组合键 |
+| `suspend click()` | 查找元素，计算物理坐标，分发物理点击。 |
+| `suspend hover()` | 查找元素，分发物理悬停事件。 |
+| `suspend scroll(deltaX, deltaY)` | 查找元素，分发物理滚动。 |
+| `suspend fill(value: String)` | 坐标点击聚焦 → 等待 100ms → 注入 JS 改变其 `value` 并触发事件（快速填充）。 |
+| `suspend type(text: String)` | 坐标点击聚焦 → 发送 `Ctrl+A` → 发送 `Delete` → 逐字符物理按键模拟输入（最安全的防自动化检测输入）。 |
+| `suspend focus()` | 坐标点击该元素以使其聚焦。 |
+| `suspend check()` | 坐标点击复选框/单选框元素。 |
+| `suspend selectOption(value: String)` | 坐标点击下拉框展开 → 坐标点击对应的 option 元素。 |
+| `suspend press(key: KeyboardKey)` | 坐标点击聚焦 → 发送单个物理按键。 |
+| `suspend pressKeyCombination(modifier, key)` | 坐标点击聚焦 → 发送物理组合键。 |
+
+### JS 模式（基于 DOM 事件模拟）
+通过定位到的元素的唯一 CSS 选择器，在 DOM 树中执行 JS 事件。免去坐标计算，即使元素被遮蔽或在视口外也能稳定触发。
+
+| 方法 | 说明 |
+|------|------|
+| `suspend jsClick()` | 触发 DOM 节点的 `.click()`。 |
+| `suspend jsHover()` | 派发 DOM `mouseover`、`mouseenter`、`mousemove` 事件。 |
+| `suspend jsScroll(deltaX, deltaY)` | 触发 DOM 节点的 `.scrollBy(dx, dy)`。 |
+| `suspend jsFill(value: String)` | JS 聚焦 `.focus()` → 等待 100ms → 注入 JS 改变值（不触发物理点击，无视遮挡）。 |
+| `suspend jsType(text: String)` | JS 聚焦 `.focus()` → 发送 `Ctrl+A` → 发送 `Delete` → 物理键盘逐字键入（高精度定位与键盘输入的完美结合）。 |
+| `suspend jsFocus()` | 触发 DOM 节点的 `.focus()`。 |
+| `suspend jsCheck()` | 通过 JS 改变 checkbox/radio 状态，确保被选中并触发 change 事件。 |
+| `suspend jsSelectOption(value: String)` | 通过 JS 直接触发下拉框选中对应的 option 值。 |
+| `suspend jsPress(key: KeyboardKey)` | JS 聚焦 `.focus()` → 发送物理按键。 |
+| `suspend jsPressKeyCombination(modifier, key)` | JS 聚焦 `.focus()` → 发送物理组合键。 |
 
 ### 查询方法
 
@@ -434,7 +468,8 @@ data class LocateResult(
     val role: String,                        // ARIA role
     val text: String,                        // 元素文本内容
     val isVisible: Boolean,                  // 是否可见
-    val attributes: Map<String, String>      // 元素属性字典
+    val attributes: Map<String, String>,     // 元素属性字典
+    val selector: String = ""                // 元素唯一 CSS 选择器，用于 JS 模式定位（如 jsClick）
 )
 ```
 

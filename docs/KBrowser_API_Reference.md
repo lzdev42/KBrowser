@@ -198,20 +198,35 @@ These two extension functions are pure Kotlin computations. They execute in the 
 
 Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNotFoundException` if the refid does not exist.
 
+#### Coordinate Mode (Physical System Events)
+These methods resolve the element's coordinates from the cache and dispatch real physical OS/CDP events.
+
 | Method | Description |
 |------|------|
-| `suspend click(refid: String)` | Resolves `centerX`/`centerY` from cache and dispatches a physical click via CDP. May fail if the element is covered by an overlay. |
-| `suspend hover(refid: String)` | Resolves coordinates from the cache and dispatches hover event via CDP. |
-| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | Resolves coordinates from the cache and dispatches wheel event via CDP. |
+| `suspend click(refid: String)` | Resolves coordinates from the cache and dispatches a physical click event (may fail if the element is covered by an overlay). |
+| `suspend hover(refid: String)` | Resolves coordinates from the cache and dispatches a hover event. |
+| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | Resolves coordinates from the cache and dispatches a wheel scroll event. |
+| `suspend drag(startRefid: String, endRefid: String)` | Resolves start/end coordinates from the cache and dispatches a physical mouse drag event sequence. |
+
+#### JS Mode (DOM Event Simulation)
+These methods resolve the element's unique CSS selector and simulate actions directly inside the DOM via injected script. Bypasses coordinate calculation and overlays.
+
+| Method | Description |
+|------|------|
+| `suspend jsClick(refid: String)` | Locates element via selector and triggers `.click()`. |
+| `suspend jsHover(refid: String)` | Locates element via selector and dispatches `mouseover`, `mouseenter`, and `mousemove` DOM events. |
+| `suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)` | Locates element via selector and calls `.scrollBy(dx, dy)`. |
+| `suspend jsDrag(startRefid: String, endRefid: String)` | Locates start/end elements and simulates a `mousedown` -> `mousemove` -> `mouseup` drag event sequence. |
 
 ### Interaction (Coordinates-based, CSS document pixels)
+Dispatches physical system events based on raw coordinates.
 
 | Method | Description |
 |------|------|
 | `suspend clickByCoordinates(x: Int, y: Int)` | CDP `Input.dispatchMouseEvent` (automatically converts to viewport coordinates). |
 | `suspend hoverByCoordinates(x: Int, y: Int)` | CDP hover. |
 | `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)` | CDP wheel scroll. |
-| `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP simulated mouse drag. |
+| `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP simulated mouse drag event sequence. |
 
 ### Keyboard
 
@@ -247,20 +262,39 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 
 `KBLocator` evaluates lazily, re-finding elements for every action. The JVM platform prefers CDP (no JS injection, CSP-safe), while Android/iOS fall back to JS.
 
-### Interaction Methods
+To support various automation scenarios, `KBLocator` offers two distinct interaction families: **Coordinate Mode (Default)** and **JS Mode**.
+
+### Coordinate Mode (Default, Physical System Events)
+Locates the element and dispatches real physical events on its coordinates. May fail if elements are covered or out of view.
 
 | Method | Description |
 |------|------|
-| `suspend click()` | Locates the element and clicks it using coordinate-based click. |
-| `suspend hover()` | Locates the element and dispatches a hover event. |
-| `suspend scroll(deltaX, deltaY)` | Locates the element and dispatches a wheel scroll event. |
-| `suspend fill(value: String)` | Focuses and sets the input value via JS (fast fill). |
-| `suspend type(text: String)` | Focuses → Ctrl+A → Delete → Types text character-by-character physically (high anti-detection). |
-| `suspend focus()` | Focuses on the element. |
-| `suspend check()` | Clicks the checkbox/radio button. |
-| `suspend selectOption(value: String)` | Clicks dropdown, then clicks the matching option. |
-| `suspend press(key: KeyboardKey)` | Sends single key event after focusing. |
-| `suspend pressKeyCombination(modifier, key)` | Sends key combination after focusing. |
+| `suspend click()` | Locates the element, computes its center coordinates, and dispatches a physical click. |
+| `suspend hover()` | Locates the element and dispatches a physical hover event. |
+| `suspend scroll(deltaX, deltaY)` | Locates the element and dispatches a physical scroll event. |
+| `suspend fill(value: String)` | Physical click to focus → waits 100ms → sets value via JS and fires DOM input/change events (fast fill). |
+| `suspend type(text: String)` | Physical click to focus → sends `Ctrl+A` → sends `Delete` → simulates physical keystrokes with delays (highest anti-detection input). |
+| `suspend focus()` | Physical click to focus on the element. |
+| `suspend check()` | Physical click on a checkbox or radio button. |
+| `suspend selectOption(value: String)` | Physical click to expand select dropdown → physical click on matching option. |
+| `suspend press(key: KeyboardKey)` | Physical click to focus → dispatches a physical keystroke. |
+| `suspend pressKeyCombination(modifier, key)` | Physical click to focus → dispatches physical modifier+key combination. |
+
+### JS Mode (DOM Event Simulation)
+Performs actions directly in the DOM using the element's unique CSS selector. Bypasses coordinate calculation and works even if elements are obscured.
+
+| Method | Description |
+|------|------|
+| `suspend jsClick()` | Triggers DOM node `.click()`. |
+| `suspend jsHover()` | Dispatches DOM `mouseover`, `mouseenter`, and `mousemove` events. |
+| `suspend jsScroll(deltaX, deltaY)` | Triggers DOM node `.scrollBy(dx, dy)`. |
+| `suspend jsFill(value: String)` | JS focus `.focus()` → waits 100ms → sets value via JS (no physical click, immune to overlays). |
+| `suspend jsType(text: String)` | JS focus `.focus()` → sends `Ctrl+A` → sends `Delete` → simulates physical keystrokes with delays (combines focus reliability with anti-detection typing). |
+| `suspend jsFocus()` | Triggers DOM node `.focus()`. |
+| `suspend jsCheck()` | Updates checkbox/radio state via JS, ensuring it is checked, and fires change event. |
+| `suspend jsSelectOption(value: String)` | Sets dropdown value directly via JS and fires change event. |
+| `suspend jsPress(key: KeyboardKey)` | JS focus `.focus()` → dispatches physical keystroke. |
+| `suspend jsPressKeyCombination(modifier, key)` | JS focus `.focus()` → dispatches physical modifier+key combination. |
 
 ### Query Methods
 
@@ -434,7 +468,8 @@ data class LocateResult(
     val role: String,                        // ARIA role
     val text: String,                        // Element text content
     val isVisible: Boolean,                  // Whether the element is visible
-    val attributes: Map<String, String>      // Element attributes map
+    val attributes: Map<String, String>,     // Element attributes map
+    val selector: String = ""                // Unique CSS selector of the element, used for JS mode (e.g. jsClick)
 )
 ```
 

@@ -589,3 +589,135 @@ internal actual suspend fun findElementsNative(
     name: String?,
     exact: Boolean
 ): List<LocateResult>? = null  // iOS uses JS fallback
+
+private suspend fun KBWebView.evaluateJsSuspend(script: String): String {
+    return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+        kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            evaluateJavascript(script) { result ->
+                // iOS evaluateJavascript callback always returns a string, or ERROR if failed.
+                if (continuation.isActive) {
+                    continuation.resume(result)
+                }
+            }
+        }
+    }
+}
+
+internal actual suspend fun performClickByJs(
+    webView: KBWebView,
+    selector: String
+) {
+    val escaped = selector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+    val js = """
+        (function() {
+            var el = document.querySelector("$escaped");
+            if (el) {
+                el.click();
+                return "ok";
+            }
+            return "not_found";
+        })()
+    """.trimIndent()
+    webView.evaluateJsSuspend(js)
+}
+
+internal actual suspend fun performHoverByJs(
+    webView: KBWebView,
+    selector: String
+) {
+    val escaped = selector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+    val js = """
+        (function() {
+            var el = document.querySelector("$escaped");
+            if (el) {
+                var events = ["mouseover", "mouseenter", "mousemove"];
+                events.forEach(function(name) {
+                    var ev = new MouseEvent(name, { bubbles: true, cancelable: true, view: window });
+                    el.dispatchEvent(ev);
+                });
+                return "ok";
+            }
+            return "not_found";
+        })()
+    """.trimIndent()
+    webView.evaluateJsSuspend(js)
+}
+
+internal actual suspend fun performScrollByJs(
+    webView: KBWebView,
+    selector: String,
+    deltaX: Int,
+    deltaY: Int
+) {
+    val escaped = selector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+    val js = """
+        (function() {
+            var el = document.querySelector("$escaped");
+            if (el) {
+                el.scrollBy($deltaX, $deltaY);
+                return "ok";
+            }
+            return "not_found";
+        })()
+    """.trimIndent()
+    webView.evaluateJsSuspend(js)
+}
+
+internal actual suspend fun performDragByJs(
+    webView: KBWebView,
+    startSelector: String,
+    endSelector: String
+) {
+    val escapedStart = startSelector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+    val escapedEnd = endSelector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+    val js = """
+        (function() {
+            var startEl = document.querySelector("$escapedStart");
+            var endEl = document.querySelector("$escapedEnd");
+            if (startEl && endEl) {
+                var startRect = startEl.getBoundingClientRect();
+                var endRect = endEl.getBoundingClientRect();
+                var startX = startRect.left + startRect.width / 2;
+                var startY = startRect.top + startRect.height / 2;
+                var endX = endRect.left + endRect.width / 2;
+                var endY = endRect.top + endRect.height / 2;
+
+                var down = new MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX: startX, clientY: startY });
+                startEl.dispatchEvent(down);
+
+                var steps = 5;
+                for (var i = 1; i <= steps; i++) {
+                    var ratio = i / steps;
+                    var currX = startX + (endX - startX) * ratio;
+                    var currY = startY + (endY - startY) * ratio;
+                    var move = new MouseEvent("mousemove", { bubbles: true, cancelable: true, clientX: currX, clientY: currY });
+                    document.dispatchEvent(move);
+                }
+
+                var up = new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: endX, clientY: endY });
+                endEl.dispatchEvent(up);
+                return "ok";
+            }
+            return "not_found";
+        })()
+    """.trimIndent()
+    webView.evaluateJsSuspend(js)
+}
+
+internal actual suspend fun performFocusByJs(
+    webView: KBWebView,
+    selector: String
+) {
+    val escaped = selector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+    val js = """
+        (function() {
+            var el = document.querySelector("$escaped");
+            if (el) {
+                el.focus();
+                return "ok";
+            }
+            return "not_found";
+        })()
+    """.trimIndent()
+    webView.evaluateJsSuspend(js)
+}

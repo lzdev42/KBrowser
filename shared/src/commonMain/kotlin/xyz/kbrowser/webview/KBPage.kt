@@ -111,6 +111,16 @@ class KBPage(val webView: KBWebView) {
     }
 
     /**
+     * Clicks the element with the specified [refid] using JS-based interaction.
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun jsClick(refid: String) {
+        val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
+        performClickByJs(webView, node.selector)
+    }
+
+    /**
      * Hovers over the element with the specified [refid] using coordinate-based interaction.
      *
      * @throws ElementNotFoundException if [refid] is not found in the cache
@@ -121,6 +131,16 @@ class KBPage(val webView: KBWebView) {
     }
 
     /**
+     * Hovers over the element with the specified [refid] using JS-based interaction.
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun jsHover(refid: String) {
+        val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
+        performHoverByJs(webView, node.selector)
+    }
+
+    /**
      * Scrolls the element with the specified [refid] using coordinate-based interaction.
      *
      * @throws ElementNotFoundException if [refid] is not found in the cache
@@ -128,6 +148,38 @@ class KBPage(val webView: KBWebView) {
     suspend fun scroll(refid: String, deltaX: Int, deltaY: Int) {
         val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
         scrollByCoordinates(node.centerX, node.centerY, deltaX, deltaY)
+    }
+
+    /**
+     * Scrolls the element with the specified [refid] using JS-based interaction.
+     *
+     * @throws ElementNotFoundException if [refid] is not found in the cache
+     */
+    suspend fun jsScroll(refid: String, deltaX: Int, deltaY: Int) {
+        val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
+        performScrollByJs(webView, node.selector, deltaX, deltaY)
+    }
+
+    /**
+     * Drags from start element to end element using coordinate-based interaction.
+     *
+     * @throws ElementNotFoundException if start or end refid is not found in the cache
+     */
+    suspend fun drag(startRefid: String, endRefid: String) {
+        val startNode = nodeCache[startRefid] ?: throw ElementNotFoundException(startRefid)
+        val endNode = nodeCache[endRefid] ?: throw ElementNotFoundException(endRefid)
+        dragByCoordinates(startNode.centerX, startNode.centerY, endNode.centerX, endNode.centerY)
+    }
+
+    /**
+     * Drags from start element to end element using JS-based interaction.
+     *
+     * @throws ElementNotFoundException if start or end refid is not found in the cache
+     */
+    suspend fun jsDrag(startRefid: String, endRefid: String) {
+        val startNode = nodeCache[startRefid] ?: throw ElementNotFoundException(startRefid)
+        val endNode = nodeCache[endRefid] ?: throw ElementNotFoundException(endRefid)
+        performDragByJs(webView, startNode.selector, endNode.selector)
     }
 
     suspend fun clickByCoordinates(x: Int, y: Int) {

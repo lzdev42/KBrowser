@@ -44,3 +44,14 @@ tasks.register<JavaExec>("runDebug") {
         "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
     )
 }
+
+tasks.register<JavaExec>("runBingTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.scratch.BingTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+}

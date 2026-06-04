@@ -45,7 +45,17 @@ classDiagram
         +suspend evaluateJavascript(script: String) String
         +suspend getRawAxTree() AxTreeData
         +suspend click(refid: String)
+        +suspend hover(refid: String)
+        +suspend scroll(refid: String, deltaX: Int, deltaY: Int)
+        +suspend drag(startRefid: String, endRefid: String)
+        +suspend jsClick(refid: String)
+        +suspend jsHover(refid: String)
+        +suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)
+        +suspend jsDrag(startRefid: String, endRefid: String)
         +suspend clickByCoordinates(x: Int, y: Int)
+        +suspend hoverByCoordinates(x: Int, y: Int)
+        +suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)
+        +suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)
         +suspend screenshot() ByteArray?
         +var onNewPage: ((url: String) -> Unit)?
         +close()
@@ -71,8 +81,25 @@ classDiagram
         +String selector
         +KBSelectorType selectorType
         +suspend click()
-        +suspend type(text: String)
+        +suspend hover()
+        +suspend scroll(deltaX: Int, deltaY: Int)
         +suspend fill(value: String)
+        +suspend type(text: String)
+        +suspend focus()
+        +suspend check()
+        +suspend selectOption(value: String)
+        +suspend press(key: KeyboardKey)
+        +suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)
+        +suspend jsClick()
+        +suspend jsHover()
+        +suspend jsScroll(deltaX: Int, deltaY: Int)
+        +suspend jsFill(value: String)
+        +suspend jsType(text: String)
+        +suspend jsFocus()
+        +suspend jsCheck()
+        +suspend jsSelectOption(value: String)
+        +suspend jsPress(key: KeyboardKey)
+        +suspend jsPressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)
         +suspend isVisible() Boolean
         +filter(predicate) KBLocator
         +nth(index: Int) KBLocator
@@ -95,6 +122,36 @@ classDiagram
 | Locator Positioning | JVM: CDP `DOM.querySelectorAll` / `DOM.performSearch` / `Accessibility.getFullAXTree` (no JS injection, CSP-safe); Android/iOS: JS fallback | Returned coordinates are also in CSS document pixels |
 
 > **Note**: There is no DPR scaling ambiguity. Screenshot coordinates match interaction coordinates exactly; pixel coordinates from screenshots can directly drive clicks.
+
+## 4. Interaction Modes and Execution Paths
+
+KBrowser provides two parallel interaction models, clearly separated by explicit naming conventions in both `KBPage` and `KBLocator`:
+
+### Coordinate Mode (Physical System Events)
+* **API Examples**: `page.click(refid)`, `locator.click()`, `page.clickByCoordinates(x, y)`
+* **Mechanism**:
+  1. Resolves the target element's center **CSS document coordinates (x, y)** from the cache (`refid`) or via locator resolution.
+  2. Converts coordinates to viewport pixels and dispatches real physical pointer events (Mouse/Touch events) via CDP or platform-specific Touch APIs.
+* **Pros**:
+  * Real physical pointer simulation, easily bypassing basic anti-bot checks.
+  * Works on components without DOM access (e.g., inside Canvas or Flash elements) using pixel coordinates.
+* **Cons**:
+  * Susceptible to element occlusion (e.g., cookie banners, sidebar ads) or elements scrolled out of the viewport.
+
+### JS Mode (DOM Event Simulation)
+* **API Examples**: `page.jsClick(refid)`, `locator.jsClick()`, `locator.jsFill("val")`
+* **Mechanism**:
+  1. Resolves the unique CSS `selector` from the cached `nodeCache` or the locator chain.
+  2. Directly injects and evaluates JavaScript code matching the target element selector.
+  3. Uses CDP `Runtime.callFunctionOn` / `Runtime.evaluate` on JVM (JCEF), and `evaluateJavascript` on Android/iOS.
+* **Pros**:
+  * **High Stability**: Immune to occlusion, overlap, or off-viewport issues.
+  * **Precise Modification**: `jsFill`, `jsCheck`, and `jsSelectOption` modify properties directly and fire change events, bypassing coordinates click-to-focus.
+  * **Hybrid Capability**: `jsType` and `jsPress` focus the element via JS but execute inputs via native physical keyboard events, combining locator stability with input authenticity.
+* **Cons**:
+  * Advanced anti-bot detection systems might block synthetic events by checking the `.isTrusted` event flag.
+
+---
 
 ## 4. Platform Requirements
 

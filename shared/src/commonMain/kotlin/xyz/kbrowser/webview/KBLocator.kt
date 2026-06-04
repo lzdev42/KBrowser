@@ -212,6 +212,123 @@ data class KBLocator(
         page.pressKeyCombination(modifier, key)
     }
 
+    // ===== JS-based Interaction Operations =====
+
+    suspend fun jsClick() {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        performClickByJs(page.webView, node.selector)
+    }
+
+    suspend fun jsHover() {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        performHoverByJs(page.webView, node.selector)
+    }
+
+    suspend fun jsScroll(deltaX: Int, deltaY: Int) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        performScrollByJs(page.webView, node.selector, deltaX, deltaY)
+    }
+
+    suspend fun jsFill(value: String) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        // 1. Focus via JS
+        performFocusByJs(page.webView, node.selector)
+        // 2. Wait briefly
+        delay(100)
+        // 3. Set value using JS
+        val escapedValue = escapeJs(value)
+        val escapedSelector = escapeJs(node.selector)
+        val fillJs = JsScripts.SET_VALUE_NATIVE
+            .replace("__SELECTOR__", escapedSelector)
+            .replace("__VALUE__", escapedValue)
+            .replace("__SELECTOR_TYPE__", "CSS")
+        page.evaluateJavascript(fillJs)
+    }
+
+    suspend fun jsType(text: String) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        // 1. Focus via JS
+        performFocusByJs(page.webView, node.selector)
+        delay(100)
+        // 2. Clear existing value: Ctrl+A -> Delete
+        page.pressKeyCombination(KeyboardKey.CONTROL, KeyboardKey.A)
+        delay(50)
+        page.press(KeyboardKey.DELETE)
+        delay(50)
+        // 3. Type each character with random delay
+        for (char in text) {
+            page.typeChar(char)
+            delay(Random.nextLong(30, 150))
+        }
+    }
+
+    suspend fun jsFocus() {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        performFocusByJs(page.webView, node.selector)
+    }
+
+    suspend fun jsCheck() {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        val js = """
+            (function() {
+                var el = document.querySelector("${escapeJs(node.selector)}");
+                if (el && !el.checked) {
+                    el.click();
+                    if (!el.checked) {
+                        el.checked = true;
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+            })()
+        """.trimIndent()
+        page.evaluateJavascript(js)
+    }
+
+    suspend fun jsSelectOption(value: String) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        val escapedValue = escapeJs(value)
+        val escapedSelector = escapeJs(node.selector)
+        val optionJs = JsScripts.FIND_OPTION_AND_CLICK
+            .replace("__SELECTOR__", escapedSelector)
+            .replace("__VALUE__", escapedValue)
+        val optionResultJson = page.evaluateJavascript(optionJs)
+        
+        val cleanJson = unwrapJsonString(optionResultJson)
+
+        if (cleanJson.isNotBlank() && cleanJson != "null") {
+            try {
+                val optionResult = jsonParser.decodeFromString<LocateResult>(cleanJson)
+                performClickByJs(page.webView, optionResult.selector)
+            } catch (e: Exception) {
+                // fallback to setting value directly
+                val fallbackJs = """
+                    (function() {
+                        var select = document.querySelector("$escapedSelector");
+                        if (select) {
+                            select.value = "$escapedValue";
+                            select.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    })()
+                """.trimIndent()
+                page.evaluateJavascript(fallbackJs)
+            }
+        }
+    }
+
+    suspend fun jsPress(key: KeyboardKey) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        performFocusByJs(page.webView, node.selector)
+        delay(50)
+        page.press(key)
+    }
+
+    suspend fun jsPressKeyCombination(modifier: KeyboardKey, key: KeyboardKey) {
+        val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        performFocusByJs(page.webView, node.selector)
+        delay(50)
+        page.pressKeyCombination(modifier, key)
+    }
+
     // ===== Query Methods =====
 
     suspend fun isVisible(): Boolean {

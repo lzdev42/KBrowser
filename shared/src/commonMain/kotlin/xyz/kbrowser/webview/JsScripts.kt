@@ -82,6 +82,7 @@ object JsScripts {
         return parts.join(' > ');
     }"""
     private const val BUILD_RESULT_JS = """
+        $BUILD_SELECTOR_FN
         function buildResult(el) {
             var rect = el.getBoundingClientRect();
             return {
@@ -111,7 +112,8 @@ object JsScripts {
                         }
                     } 
                     return a; 
-                })()
+                })(),
+                selector: buildSelector(el)
             };
         }
     """
@@ -405,6 +407,7 @@ object JsScripts {
 
     val FIND_OPTION_AND_CLICK: String = """
         (function() {
+            $BUILD_SELECTOR_FN
             var selector = '__SELECTOR__';
             var value = '__VALUE__';
             
@@ -426,7 +429,8 @@ object JsScripts {
                         tagName: 'option',
                         role: 'option',
                         text: options[i].textContent.trim(),
-                        isVisible: rect.width > 0 && rect.height > 0
+                        isVisible: rect.width > 0 && rect.height > 0,
+                        selector: buildSelector(options[i])
                     });
                 }
             }

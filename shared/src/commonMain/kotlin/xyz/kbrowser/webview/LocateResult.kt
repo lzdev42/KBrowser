@@ -12,7 +12,8 @@ data class LocateResult(
     val role: String = "",
     val text: String = "",
     val isVisible: Boolean = true,
-    val attributes: Map<String, String> = emptyMap()
+    val attributes: Map<String, String> = emptyMap(),
+    val selector: String = ""
 )
 
 @Serializable

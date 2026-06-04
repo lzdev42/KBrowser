@@ -118,15 +118,22 @@ page.onNewPage = { url -> println("新窗口请求: $url") }
 
 // 页面导航与交互
 page.loadUrl("https://example.com/login")
-page.getByLabel("Username").fill("admin")
-page.getByLabel("Password").type("secret")   // 发送物理按键事件，防自动化检测
+
+// 模式 1：物理坐标模拟交互（支持物理防检测输入与物理点击）
+page.getByLabel("Username").fill("admin")      // 物理坐标点击聚焦 -> 快速填充
+page.getByLabel("Password").type("secret")     // 物理坐标点击聚焦 -> 逐字符物理输入（防检测）
 page.getByRole("button", name = "Login").click()
+
+// 模式 2：JS 模拟交互（无视遮挡与视口限制，稳定性极高）
+page.getByLabel("Username").jsFill("admin")    // JS 聚焦 -> 直接修改 value 并派发事件
+page.getByLabel("Password").jsType("secret")    // JS 聚焦 -> 逐字符物理输入（精准且安全）
+page.getByRole("button", name = "Login").jsClick() // 直接派发 DOM 点击事件
 
 // 提取 AXTree 语义树
 val tree = page.getRawAxTree().getCleanedAxTree()
 println("可见节点数: ${tree.visibleElements}")
 
-// 页面截图 — 输出 CSS 像素大小的 PNG，与 AXTree 坐标完全对齐
+// 页面截图 — 输出 CSS 像素大小 of PNG，与 AXTree 坐标完全对齐
 val png = page.screenshot()
 
 page.close()
