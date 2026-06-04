@@ -465,7 +465,7 @@ class JvmWebView(
                 (function() {
                     try {
                         var result = (function() { $script })();
-                        var responseText = (typeof result === 'string' ? result : JSON.stringify(result));
+                        var responseText = (result === undefined ? "undefined" : (typeof result === 'string' ? result : JSON.stringify(result)));
                         window["$funcName"]({
                             request: responseText,
                             onSuccess: function(r){},
