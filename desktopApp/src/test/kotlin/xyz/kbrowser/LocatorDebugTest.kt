@@ -44,11 +44,11 @@ fun main() {
                 val page = KBPage(webView)
                 KBrowser.registerPage(page)
 
-                val url = "https://ctext.org/wiki.pl?if=gb&res=98755&remap=gb"
-                println("正在导航到: $url")
+                val url = "https://ctext.org/wiki.pl?if=gb&chapter=357161&remap=gb"
+                println("正在直接导航到古文正文页面: $url")
                 page.loadUrl(url)
-                println("等待页面加载 (12秒)...")
-                Thread.sleep(12000)
+                println("等待正文页面加载 (10秒)...")
+                Thread.sleep(10000)
 
                 // ── 1. 抓取原始 Accessibility.getFullAXTree ──
                 println("\n[1] 抓取原始 Accessibility.getFullAXTree...")
@@ -180,61 +180,26 @@ fun main() {
                     val snapshotData = page.snapshot(clean = false)
                     println("  -> snapshot(clean = false) 前 500 字符: \n${snapshotData.take(500)}...")
                 } catch(e: Exception) {
-                    println("  -> ❌ snapshot(clean = false) 失败: ${e.message}")
+                    println("  -> ❌ snapshot 失败: ${e.message}")
+                }
+                
+                // F. 摘录文章详细内容 (用户指定的真实需求)
+                println("\n--- [测试] 直接抓取古文详细内容 ---")
+                try {
+                    // 正文部分通常在 id 为 "content" 的区域，为了确保拿到纯文本，我们直接拿 body 或者 #content
+                    val contentLocator = page.locator("#content").first()
+                    val realArticleText = contentLocator.getText()
+                    
+                    println("  -> 成功抓取正文页面！以下为真实古文正文详细内容的摘录（前 1500 字）:")
+                    println("=========================================")
+                    println(realArticleText.take(1500))
+                    println("=========================================")
+                } catch(e: Exception) {
+                    println("  -> ❌ 抓取真实正文内容失败: ${e.message}")
+                    e.printStackTrace()
                 }
 
-                // ── 4. 自研提取逻辑 VS KBLocator 内部逻辑对比诊断 ──
-                println("\n[4] 开始内部逻辑深入诊断...")
-                if (devTools != null) {
-                    val rawJsonStr = File("ctext_axtree_raw.json").readText()
-                    val rawRoot = Json.parseToJsonElement(rawJsonStr).jsonObject
-                    val nodesArray = rawRoot["nodes"]?.jsonArray
-                        ?: rawRoot["result"]?.jsonObject?.get("nodes")?.jsonArray
-                        ?: rawRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("nodes")?.jsonArray
-
-                    if (nodesArray != null) {
-                        println("原始 AXTree 包含节点数: ${nodesArray.size}")
-                        // 我们寻找含有 Wiki 等关键词的原始节点
-                        val keywords = listOf("Wiki", "简体", "繁体", "中國", "电子化")
-                        println("\n--- 在原始节点中搜索包含关键词的节点 ---")
-                        for (node in nodesArray) {
-                            val obj = node.jsonObject
-                            val name = obj["name"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull ?: ""
-                            val role = obj["role"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull ?: ""
-                            val ignored = obj["ignored"]?.jsonPrimitive?.booleanOrNull ?: false
-                            val backendDOMNodeId = obj["backendDOMNodeId"]?.jsonPrimitive?.intOrNull ?: -1
-
-                            if (keywords.any { name.contains(it) }) {
-                                println("发现匹配节点: backendDOMNodeId=$backendDOMNodeId, role='$role', name='$name', ignored=$ignored")
-                                
-                                // 如果它没被忽略，尝试调用 DOM.getBoxModel 看能否拿到坐标
-                                if (backendDOMNodeId > 0) {
-                                    try {
-                                        val boxJson = devTools.executeDevToolsMethod(
-                                            "DOM.getBoxModel",
-                                            """{"backendNodeId":$backendDOMNodeId}"""
-                                        ).get(2, TimeUnit.SECONDS)
-                                        println("  -> DOM.getBoxModel 响应: $boxJson")
-                                    } catch (ex: Exception) {
-                                        println("  -> ❌ DOM.getBoxModel 失败: ${ex.message}")
-                                    }
-
-                                    // 尝试 DOM.resolveNode
-                                    try {
-                                        val resolveJson = devTools.executeDevToolsMethod(
-                                            "DOM.resolveNode",
-                                            """{"backendNodeId":$backendDOMNodeId}"""
-                                        ).get(2, TimeUnit.SECONDS)
-                                        println("  -> DOM.resolveNode 响应: $resolveJson")
-                                    } catch (ex: Exception) {
-                                        println("  -> ❌ DOM.resolveNode 失败: ${ex.message}")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
+                // 结束测试，去掉不需要的内部诊断代码，以防在新页面下因为 ID 变更报错
             } catch (e: Exception) {
                 println("[Debugger] ❌ 执行过程中发生错误:")
                 e.printStackTrace()

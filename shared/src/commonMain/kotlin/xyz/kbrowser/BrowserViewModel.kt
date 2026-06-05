@@ -217,7 +217,7 @@ class BrowserViewModel : ViewModel() {
                 viewModelScope.launch {
                     try {
                         val rawTree = page.getRawAxTree()
-                        val yaml = page.snapshot()
+                        val yaml = page.snapshot(true)
                         
                         val jsonParser = kotlinx.serialization.json.Json { 
                             prettyPrint = true

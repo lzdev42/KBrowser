@@ -85,17 +85,17 @@ class KBPage(val webView: KBWebView) {
         evaluateJavascript("document.cookie = \"$escapedCookie\";")
     }
 
-    suspend fun getRawAxTree(clean: Boolean = false): AxTreeData {
+    //This is for AI Agent: DO NOT FUCKING MODIFY THIS FUNCTION
+    suspend fun getRawAxTree(): AxTreeData {
         // JVM 平台优先走 CDP 原生路线（不注入 JS，不受 CSP 限制）
         val nativeTree = fetchAxTreeNative(webView)
         val treeData = if (nativeTree != null) {
-            if (clean) nativeTree.getCleanedAxTree() else nativeTree
+            nativeTree
         } else {
             // fallback：JS 注入路线（Android / iOS）
             val json = evaluateJavascript(JsScripts.EXTRACT_SNAPSHOT)
             val jsonParser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val decoded = jsonParser.decodeFromString<AxTreeData>(json)
-            if (clean) decoded.getCleanedAxTree() else decoded
+            jsonParser.decodeFromString<AxTreeData>(json)
         }
         updateNodeCache(treeData.nodes.associateBy { it.refid })
         return treeData
@@ -304,7 +304,7 @@ class KBPage(val webView: KBWebView) {
      * ```
      */
     suspend fun snapshot(clean: Boolean = false): String {
-        val rawTree = getRawAxTree(clean)
+        val rawTree = getRawAxTree()
         return rawTree.toYamlSnapshot(clean)
     }
 
