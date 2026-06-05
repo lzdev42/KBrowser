@@ -35,7 +35,7 @@ compose.desktop {
 
 tasks.register<JavaExec>("runDebug") {
     group = "application"
-    mainClass.set("xyz.kbrowser.webview.InteractiveDebugRunnerKt")
+    mainClass.set("xyz.kbrowser.webview.LocatorDebugTestKt")
     val compileTestKotlin = tasks.named("compileTestKotlin")
     classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
     jvmArgs(

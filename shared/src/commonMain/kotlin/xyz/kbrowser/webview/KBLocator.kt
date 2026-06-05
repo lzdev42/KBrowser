@@ -338,12 +338,51 @@ data class KBLocator(
 
     suspend fun getText(): String {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
+        if (node.text.isEmpty() && node.selector.isNotEmpty()) {
+            val escapedSelector = escapeJs(node.selector)
+            val js = """
+                (function() {
+                    var el = document.querySelector("$escapedSelector");
+                    return el ? (el.innerText || el.textContent || "") : "";
+                })()
+            """.trimIndent()
+            try {
+                val evaluated = page.evaluateJavascript(js)
+                val clean = unwrapJsonString(evaluated)
+                if (clean.isNotEmpty()) return clean
+            } catch (e: Exception) {
+                // fallback
+            }
+        }
         return node.text
     }
 
     suspend fun getAttribute(name: String): String? {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        return node.attributes[name]
+        val localVal = node.attributes[name]
+        if (localVal == null && node.selector.isNotEmpty()) {
+            val escapedSelector = escapeJs(node.selector)
+            val escapedName = escapeJs(name)
+            val js = """
+                (function() {
+                    var el = document.querySelector("$escapedSelector");
+                    if (!el) return JSON.stringify(["false", null]);
+                    var attr = el.getAttribute("$escapedName");
+                    return JSON.stringify(["" + (attr !== null), attr]);
+                })()
+            """.trimIndent()
+            try {
+                val evaluated = page.evaluateJavascript(js)
+                val clean = unwrapJsonString(evaluated)
+                val arr = jsonParser.decodeFromString<List<String?>>(clean)
+                if (arr.size == 2 && arr[0] == "true") {
+                    return arr[1]
+                }
+            } catch (e: Exception) {
+                // fallback
+            }
+        }
+        return localVal
     }
 
     suspend fun count(): Int {

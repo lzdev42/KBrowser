@@ -459,12 +459,19 @@ class JvmWebView(
 
             // 直接把脚本内联执行，不走 base64+eval，避免触发 CSP eval() 限制。
             // 用 Function 构造器也会被 CSP 拦截，所以直接把脚本文本嵌入 IIFE。
-            // 脚本本身已经是 (function(){...})() 形式，直接包一层 try/catch 即可。
             val funcName = jsQuery.myFunc.myFuncName
+            val trimmed = script.trim()
+            val processedScript = if (trimmed.startsWith("return")) {
+                trimmed
+            } else if (trimmed.startsWith("(") || !trimmed.contains("\n")) {
+                "return ($trimmed);"
+            } else {
+                trimmed
+            }
             val jsCode = """
                 (function() {
                     try {
-                        var result = (function() { $script })();
+                        var result = (function() { $processedScript })();
                         var responseText = (result === undefined ? "undefined" : (typeof result === 'string' ? result : JSON.stringify(result)));
                         window["$funcName"]({
                             request: responseText,
