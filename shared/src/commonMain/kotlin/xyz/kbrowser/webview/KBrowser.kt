@@ -37,9 +37,8 @@ object KBrowser {
     suspend fun newPage(url: String? = null): KBPage {
         val path = configPath
             ?: throw IllegalStateException("KBrowser.setConfigPath() must be called before newPage()")
-        val profile = KBProfile("kbrowser_default", "$path/kbrowser_profile")
         val webView = withContext(Dispatchers.Main) {
-            createHeadlessWebView(null, profile)
+            createHeadlessWebView(null, null)
         }
         val page = KBPage(webView)
         _pages.update { it + page }
