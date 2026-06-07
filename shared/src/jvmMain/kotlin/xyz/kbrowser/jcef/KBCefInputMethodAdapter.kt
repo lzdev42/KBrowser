@@ -33,6 +33,15 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     @Volatile
     private var browser: CefBrowser? = null
 
+    /**
+     * IME 是否正在组合中。
+     * 由 [inputMethodTextChanged] 维护，供 [KBCefOsrComponent.processKeyEvent] 查询，
+     * 以便在组合期间吞掉 KEY_TYPED 事件，避免英文字母与中文输入双路冲突。
+     */
+    @Volatile
+    var isComposing: Boolean = false
+        private set
+
     /** CEF 回调 OnImeCompositionRangeChanged 提供的字符边界 */
     @Volatile
     private var compositionCharacterBounds: Array<Rectangle>? = null
@@ -86,7 +95,15 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     override fun getTextLocation(offset: TextHitInfo?): Rectangle {
         val bounds = compositionCharacterBounds
         val rect = if (bounds != null && bounds.isNotEmpty()) {
-            Rectangle(bounds[0])
+            // 将浏览器视图坐标（CSS 像素）乘以 pixelDensity 转换为物理像素
+            val b = bounds[0]
+            val density = component.renderHandler?.pixelDensity ?: 1.0
+            Rectangle(
+                (b.x * density).toInt(),
+                (b.y * density).toInt(),
+                (b.width * density).toInt(),
+                (b.height * density).toInt()
+            )
         } else {
             // 没有组合字符边界时，返回组件底部左侧作为默认位置
             defaultImePosition
@@ -170,6 +187,8 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             // CEF 提交后不会通知选择范围变化，当前数据已过时
             selectedText = ""
             selectionRange = DEFAULT_RANGE
+            // 提交后组合状态结束
+            isComposing = false
         }
 
         // 处理组合中的字符（IME 正在编辑但尚未确认的文本）
@@ -180,6 +199,7 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
         }
         val composedText = composedBuffer.toString()
         if (composedText.isNotEmpty()) {
+            isComposing = true
             var replacementRange = selectionRange
             if (replacementRange.from == replacementRange.to) {
                 // 零长度范围指向光标位置，传给 CEF 会破坏韩语输入顺序
@@ -188,6 +208,10 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             // 选择范围：将光标移到组合文本末尾
             val selRange = CefRange(composedText.length, composedText.length)
             imeSetComposition(br, composedText, replacementRange, selRange)
+        } else if (isComposing) {
+            // 组合被取消（Escape / 点击其他位置），通知 CEF 清理组合状态
+            isComposing = false
+            imeCancelComposition(br)
         }
         event.consume()
     }
@@ -242,6 +266,20 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             method.invoke(browser, text, replacementRange, relativeCursorPos)
         } catch (e: Exception) {
             println("[KBCefInputMethodAdapter] ImeCommitText 反射调用失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 取消当前的 IME 组合状态。
+     * 当用户按 Escape 或点击其他位置导致组合被取消时调用，
+     * 确保 CEF 内部状态被正确清理，避免残留幽灵文本。
+     */
+    private fun imeCancelComposition(browser: CefBrowser) {
+        try {
+            val method = browser.javaClass.getMethod("ImeCancelComposition")
+            method.invoke(browser)
+        } catch (e: Exception) {
+            println("[KBCefInputMethodAdapter] ImeCancelComposition 反射调用失败: ${e.message}")
         }
     }
 

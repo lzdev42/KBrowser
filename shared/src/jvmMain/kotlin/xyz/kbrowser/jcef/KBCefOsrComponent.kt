@@ -84,7 +84,8 @@ class KBCefOsrComponent : JPanel() {
         }
     }
 
-    fun getRenderHandler(): KBCefOsrHandler? = myRenderHandler
+    /** 供 [KBCefInputMethodAdapter] 访问 pixelDensity 用于 DPI 坐标转换 */
+    val renderHandler: KBCefOsrHandler? get() = myRenderHandler
 
     fun setBrowser(browser: CefBrowser) {
         myBrowser = browser
@@ -258,6 +259,12 @@ class KBCefOsrComponent : JPanel() {
 
     override fun processKeyEvent(e: KeyEvent) {
         super.processKeyEvent(e)
+        // IME 组合期间，KEY_TYPED 事件由 InputMethodEvent 通道处理，
+        // 不转发给 CEF，避免英文字母与中文输入双路冲突。
+        if (e.id == KeyEvent.KEY_TYPED && myInputMethodAdapter.isComposing) {
+            e.consume()
+            return
+        }
         myBrowser?.sendKeyEvent(e)
     }
 

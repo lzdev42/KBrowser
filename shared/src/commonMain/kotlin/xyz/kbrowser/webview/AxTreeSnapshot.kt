@@ -335,7 +335,10 @@ private fun hasViewportDescendants(
     childrenMap: Map<String, List<AxNode>>,
     left: Int, right: Int, top: Int, bottom: Int
 ): Boolean {
-    if (node.centerX in left..right && node.centerY in top..bottom) return true
+    val nodeRight = node.x + node.width
+    val nodeBottom = node.y + node.height
+    val intersects = node.x <= right && nodeRight >= left && node.y <= bottom && nodeBottom >= top
+    if (intersects) return true
     val children = childrenMap[node.refid] ?: return false
     return children.any { hasViewportDescendants(it, childrenMap, left, right, top, bottom) }
 }
