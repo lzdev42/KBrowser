@@ -234,4 +234,27 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
         }
     }
     fun removeRequestHandler(handler: CefRequestHandler, browser: CefBrowser) = myRequestHandler.remove(handler, browser) { cefClient.removeRequestHandler() }
+
+    // --- Dialog ---
+    fun addDialogHandler(handler: CefDialogHandler, browser: CefBrowser) {
+        myDialogHandler.add(handler, browser) {
+            cefClient.addDialogHandler(object : CefDialogHandler {
+                override fun onFileDialog(
+                    b: CefBrowser,
+                    mode: CefDialogHandler.FileDialogMode,
+                    title: String,
+                    defaultFilePath: String,
+                    acceptFilters: Vector<String>,
+                    acceptExtensions: Vector<String>,
+                    acceptDescriptions: Vector<String>,
+                    callback: CefFileDialogCallback
+                ): Boolean {
+                    return myDialogHandler.handleBooleanAny(b, false) {
+                        it.onFileDialog(b, mode, title, defaultFilePath, acceptFilters, acceptExtensions, acceptDescriptions, callback)
+                    }
+                }
+            })
+        }
+    }
+    fun removeDialogHandler(handler: CefDialogHandler, browser: CefBrowser) = myDialogHandler.remove(handler, browser) { cefClient.removeDialogHandler() }
 }

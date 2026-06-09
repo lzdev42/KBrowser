@@ -97,6 +97,17 @@ interface KBWebView {
      * 不设置时，新窗口请求会被静默丢弃（不会打开任何东西）。
      */
     var onNewWindowRequest: ((url: String) -> Unit)?
+
+    /**
+     * 文件对话框请求回调。
+     * 当页面通过 <input type="file"> 或上传按钮触发文件选择时调用。
+     *
+     * JVM Desktop: 设置后文件选择交由调用方通过 callback 返回文件路径；
+     * 不设置时静默取消（不弹原生对话框，OSR 模式下无法弹出）。
+     *
+     * Android/iOS: 空实现属性，文件上传走平台原生流程。
+     */
+    var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)?
 }
 
 @Composable

@@ -260,6 +260,56 @@ class JvmWebView(
             }
         }, cefBrowser)
 
+        // 拦截文件对话框（<input type="file"> 等）
+        // OSR 模式下没有原生窗口，无法弹出原生文件对话框，必须始终拦截
+        // 非 OSR 降级实例也统一拦截：自动化库的核心就是程序化控制
+        browser.myCefClient.addDialogHandler(object : org.cef.handler.CefDialogHandler {
+            override fun onFileDialog(
+                b: org.cef.browser.CefBrowser,
+                mode: org.cef.handler.CefDialogHandler.FileDialogMode,
+                title: String,
+                defaultFilePath: String,
+                acceptFilters: java.util.Vector<String>,
+                acceptExtensions: java.util.Vector<String>,
+                acceptDescriptions: java.util.Vector<String>,
+                callback: org.cef.callback.CefFileDialogCallback
+            ): Boolean {
+                val handler = onFileDialogRequest
+                if (handler != null) {
+                    // 有监听者：映射为跨平台模型，交给上层处理
+                    val kbMode = when (mode) {
+                        org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_OPEN -> KBFileDialogMode.OPEN
+                        org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_OPEN_MULTIPLE -> KBFileDialogMode.OPEN_MULTIPLE
+                        org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_OPEN_FOLDER -> KBFileDialogMode.OPEN_FOLDER
+                        org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_SAVE -> KBFileDialogMode.SAVE
+                        else -> KBFileDialogMode.OPEN
+                    }
+                    val request = KBFileDialogRequest(
+                        mode = kbMode,
+                        title = title,
+                        defaultFilePath = defaultFilePath,
+                        acceptFilters = acceptFilters.toList(),
+                        acceptExtensions = acceptExtensions.toList(),
+                        acceptDescriptions = acceptDescriptions.toList()
+                    )
+                    val kbCallback = object : KBFileDialogCallback {
+                        override fun selectFiles(filePaths: List<String>) {
+                            callback.Continue(java.util.Vector(filePaths))
+                        }
+                        override fun cancel() {
+                            callback.Cancel()
+                        }
+                    }
+                    handler(request, kbCallback)
+                    return true  // 已拦截，阻止弹原生对话框
+                } else {
+                    // 无监听者：始终拦截，静默取消（与 onNewWindowRequest 模式一致）
+                    callback.Cancel()
+                    return true
+                }
+            }
+        }, cefBrowser)
+
         if (isHeadless) {
             SwingUtilities.invokeLater {
                 val frame = javax.swing.JFrame()
@@ -577,6 +627,8 @@ class JvmWebView(
     }
 
     override var onNewWindowRequest: ((url: String) -> Unit)? = null
+
+    override var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)? = null
 
     override fun clearCacheAndCookies() {
         try {

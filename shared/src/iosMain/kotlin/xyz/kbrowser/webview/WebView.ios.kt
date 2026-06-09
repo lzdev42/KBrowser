@@ -247,6 +247,8 @@ class IosWebView(
 
     override var onNewWindowRequest: ((url: String) -> Unit)? = null
 
+    override var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)? = null
+
     override fun destroy() {
         webView = null
     }
