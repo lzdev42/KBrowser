@@ -657,3 +657,11 @@ internal actual suspend fun performFocusByJs(
     """.trimIndent()
     webView.evaluateJsSuspend(js)
 }
+
+internal actual suspend fun performSetFiles(
+    webView: KBWebView,
+    selector: String,
+    filePaths: List<String>
+) {
+    throw UnsupportedOperationException("File upload via CDP is not supported on Android. Use native file dialog instead.")
+}

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>File Upload Test</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; }
+        .hidden-input { display: none; }
+        .btn { padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        .btn:hover { background: #45a049; }
+        #result { margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 8px; white-space: pre-wrap; }
+        .status { font-weight: bold; }
+        .success { color: green; }
+        .waiting { color: orange; }
+    </style>
+</head>
+<body>
+    <h1>KBrowser File Upload Test</h1>
+
+    <!-- Scenario A: Visible file input -->
+    <div class="section">
+        <h2>A) Visible file input</h2>
+        <input type="file" id="visibleInput" accept=".txt,.jpg,.png,.pdf">
+        <p id="visibleResult" class="status waiting">Waiting for file...</p>
+    </div>
+
+    <!-- Scenario B: Hidden file input + visible upload button -->
+    <div class="section">
+        <h2>B) Hidden input + Upload button</h2>
+        <input type="file" id="hiddenInput" class="hidden-input" accept=".txt,.jpg,.png,.pdf">
+        <button class="btn" id="uploadBtn" onclick="document.getElementById('hiddenInput').click()">
+            Choose File to Upload
+        </button>
+        <p id="hiddenResult" class="status waiting">Waiting for file...</p>
+    </div>
+
+    <!-- Scenario C: Multiple file upload -->
+    <div class="section">
+        <h2>C) Multiple file upload</h2>
+        <input type="file" id="multiInput" multiple accept=".txt,.jpg,.png,.pdf">
+        <p id="multiResult" class="status waiting">Waiting for files...</p>
+    </div>
+
+    <!-- Result log -->
+    <div id="result">
+        <strong>Event Log:</strong>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        function log(msg) {
+            var el = document.getElementById('log');
+            var time = new Date().toISOString().substr(11, 12);
+            el.innerHTML += '[' + time + '] ' + msg + '\n';
+        }
+
+        function formatFile(file) {
+            return file.name + ' (' + file.size + ' bytes, ' + file.type + ')';
+        }
+
+        // Scenario A: visible input
+        document.getElementById('visibleInput').addEventListener('change', function(e) {
+            var files = Array.from(e.target.files);
+            if (files.length > 0) {
+                var info = files.map(formatFile).join(', ');
+                document.getElementById('visibleResult').textContent = 'Selected: ' + info;
+                document.getElementById('visibleResult').className = 'status success';
+                log('A) visible input: ' + info);
+            }
+        });
+
+        // Scenario B: hidden input
+        document.getElementById('hiddenInput').addEventListener('change', function(e) {
+            var files = Array.from(e.target.files);
+            if (files.length > 0) {
+                var info = files.map(formatFile).join(', ');
+                document.getElementById('hiddenResult').textContent = 'Uploaded: ' + info;
+                document.getElementById('hiddenResult').className = 'status success';
+                log('B) hidden input (via button): ' + info);
+            }
+        });
+
+        // Scenario C: multiple files
+        document.getElementById('multiInput').addEventListener('change', function(e) {
+            var files = Array.from(e.target.files);
+            if (files.length > 0) {
+                var info = files.map(formatFile).join(', ');
+                document.getElementById('multiResult').textContent = 'Files (' + files.length + '): ' + info;
+                document.getElementById('multiResult').className = 'status success';
+                log('C) multi input: ' + files.length + ' files - ' + info);
+            }
+        });
+
+        log('Page loaded, ready for file upload tests.');
+    </script>
+</body>
+</html>

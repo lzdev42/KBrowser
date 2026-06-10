@@ -198,3 +198,16 @@ internal expect suspend fun performTypeChar(
     webView: KBWebView,
     char: Char
 )
+
+/**
+ * Set files on an input[type=file] element directly via CDP DOM.setFileInputFiles.
+ * This bypasses the file dialog entirely — no click, no dialog, no user gesture needed.
+ *
+ * JVM: uses CDP DOM.setFileInputFiles + dispatches 'change' event.
+ * Android/iOS: throws UnsupportedOperationException (mobile uses native file dialog).
+ */
+internal expect suspend fun performSetFiles(
+    webView: KBWebView,
+    selector: String,
+    filePaths: List<String>
+)

@@ -338,36 +338,37 @@ class KBPage(val webView: KBWebView) {
     /**
      * 一步完成文件上传。
      *
-     * 适用于两种场景：
-     * 1. `<input type="file">` 元素：refid 直接指向 input 元素
-     * 2. 上传按钮：refid 指向触发文件对话框的按钮
+     * 适用于 `<input type="file">` 元素：refid 指向 input 元素本身（即使隐藏也能上传）。
      *
-     * 内部流程：设置临时 handler → click(refid) → handler 收到文件对话框请求
-     * → 自动调用 callback.selectFiles(filePaths) → 文件上传完成 → 恢复原 handler
+     * JVM Desktop: 通过 CDP DOM.setFileInputFiles 直接设置文件到 input 元素，
+     * 不需要弹文件对话框，不需要用户手势，不依赖元素可见性。
      *
-     * JVM Desktop 有效（通过 CefDialogHandler 拦截）。
-     * Android/iOS 暂不支持（移动端走平台原生文件对话框）。
+     * Android/iOS: 不支持此方法（移动端走平台原生文件对话框），会抛 UnsupportedOperationException。
      *
-     * @param refid 上传按钮或 <input type="file"> 元素的 refid
+     * @param refid input[type=file] 元素的 refid
      * @param filePaths 要上传的文件绝对路径列表
      * @throws ElementNotFoundException refid 不在缓存中
+     * @throws UnsupportedOperationException Android/iOS 平台不支持
      */
     suspend fun uploadFile(refid: String, filePaths: List<String>) {
         val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
-        val deferred = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val previousHandler = webView.onFileDialogRequest
+        performSetFiles(webView, node.selector, filePaths)
+    }
 
-        webView.onFileDialogRequest = { _, callback ->
-            callback.selectFiles(filePaths)
-            deferred.complete(Unit)
-        }
-
-        try {
-            clickByCoordinates(node.centerX, node.centerY)
-            withTimeout(5000L) { deferred.await() }
-        } finally {
-            webView.onFileDialogRequest = previousHandler
-        }
+    /**
+     * 一步完成文件上传（CSS selector 版本）。
+     *
+     * 直接使用 CSS 选择器定位 input[type=file] 元素，不依赖 AX tree 缓存。
+     * 适用于被隐藏（display:none）而不在 AX tree 中的 input 元素。
+     *
+     * JVM Desktop: 通过 CDP DOM.setFileInputFiles 直接设置文件。
+     * Android/iOS: 不支持，会抛 UnsupportedOperationException。
+     *
+     * @param selector CSS 选择器，例如 "#fileInput" 或 "input[type=file]"
+     * @param filePaths 要上传的文件绝对路径列表
+     */
+    suspend fun uploadFileBySelector(selector: String, filePaths: List<String>) {
+        performSetFiles(webView, selector, filePaths)
     }
 
     fun close() {

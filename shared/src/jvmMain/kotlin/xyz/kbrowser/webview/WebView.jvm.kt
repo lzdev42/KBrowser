@@ -282,7 +282,6 @@ class JvmWebView(
                         org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_OPEN_MULTIPLE -> KBFileDialogMode.OPEN_MULTIPLE
                         org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_OPEN_FOLDER -> KBFileDialogMode.OPEN_FOLDER
                         org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_SAVE -> KBFileDialogMode.SAVE
-                        else -> KBFileDialogMode.OPEN
                     }
                     val request = KBFileDialogRequest(
                         mode = kbMode,
@@ -1479,6 +1478,72 @@ internal actual suspend fun performTypeChar(
     if (webView is JvmWebView) {
         webView.typeChar(char)
     }
+}
+
+internal actual suspend fun performSetFiles(
+    webView: KBWebView,
+    selector: String,
+    filePaths: List<String>
+) {
+    if (webView !is JvmWebView) return
+    val cefBrowser = webView.browser.getCefBrowser()
+    val devTools = cefBrowser.devToolsClient
+        ?: throw UnsupportedOperationException("DevTools client not available")
+    if (devTools.isClosed) throw UnsupportedOperationException("DevTools client is closed")
+
+    withContext(Dispatchers.IO) {
+        // Step 1: Get document root node ID
+        val docResult = devTools.executeDevToolsMethod("DOM.getDocument")
+            .get(5, java.util.concurrent.TimeUnit.SECONDS)
+            ?: throw RuntimeException("DOM.getDocument returned null")
+        val docRoot = kotlinx.serialization.json.Json.parseToJsonElement(docResult)
+        val docNodeId = docRoot.jsonObject["root"]
+            ?.jsonObject?.get("nodeId")?.jsonPrimitive?.content?.toIntOrNull()
+            ?: throw RuntimeException("Failed to get document nodeId. Response: $docResult")
+
+        // Step 2: Query element by CSS selector
+        val escapedSelector = kotlinx.serialization.json.Json.encodeToString(
+            kotlinx.serialization.json.JsonPrimitive(selector)
+        )
+        val queryResult = devTools.executeDevToolsMethod(
+            "DOM.querySelector",
+            """{"nodeId":$docNodeId,"selector":$escapedSelector}"""
+        ).get(5, java.util.concurrent.TimeUnit.SECONDS)
+            ?: throw RuntimeException("DOM.querySelector returned null")
+        val queryRoot = kotlinx.serialization.json.Json.parseToJsonElement(queryResult)
+        val elementNodeId = queryRoot.jsonObject["nodeId"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: throw RuntimeException("Element not found for selector: $selector. Response: $queryResult")
+        if (elementNodeId == 0) throw RuntimeException("Element not found for selector: $selector (nodeId=0)")
+
+        // Step 3: Set files on the input element via CDP
+        val filesJson = kotlinx.serialization.json.Json.encodeToString(
+            kotlinx.serialization.json.JsonArray(filePaths.map { kotlinx.serialization.json.JsonPrimitive(it) })
+        )
+        val setResult = devTools.executeDevToolsMethod(
+            "DOM.setFileInputFiles",
+            """{"nodeId":$elementNodeId,"files":$filesJson}"""
+        ).get(5, java.util.concurrent.TimeUnit.SECONDS)
+        if (setResult == null) throw RuntimeException("DOM.setFileInputFiles returned null")
+
+        // Check for error in result
+        val setRoot = kotlinx.serialization.json.Json.parseToJsonElement(setResult)
+        val error = setRoot.jsonObject["error"]
+        if (error != null) throw RuntimeException("DOM.setFileInputFiles error: $error")
+    }
+
+    // Step 4: Dispatch 'change' event via JS so the page detects the file selection
+    val escaped = selector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+    val js = """
+        (function() {
+            var el = document.querySelector("$escaped");
+            if (el) {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return "ok";
+            }
+            return "not_found";
+        })()
+    """.trimIndent()
+    webView.evaluateJsSuspend(js)
 }
 
 internal actual fun performGlobalShutdown() {
