@@ -18,6 +18,27 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
     constructor(url: String) : this(KBCefBrowserBuilder().setUrl(url))
 
     private val myComponent: JPanel = object : JPanel(BorderLayout()) {
+        init {
+            // 外层 JPanel 不应获取焦点，让焦点穿透到内层 KBCefOsrComponent
+            // 这样 InputMethodEvent 会直接派发给 KBCefOsrComponent
+            isFocusable = false
+            // 启用 IME 作为安全网（当焦点意外落在此 JPanel 时仍能处理 IME 事件）
+            enableInputMethods(true)
+        }
+
+        override fun addNotify() {
+            super.addNotify()
+            // 诊断：跟踪整个组件层级中的焦点变化
+            val window = javax.swing.SwingUtilities.getWindowAncestor(this)
+            window?.addWindowFocusListener(object : java.awt.event.WindowFocusListener {
+                override fun windowGainedFocus(e: java.awt.event.WindowEvent?) {
+                    val focusOwner = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                    println("[IME-DEBUG] Window gained focus, focusOwner=${focusOwner?.javaClass?.simpleName}")
+                }
+                override fun windowLostFocus(e: java.awt.event.WindowEvent?) {}
+            })
+        }
+
         override fun getPreferredSize(): Dimension {
             val size = super.getPreferredSize()
             return if (size.width > 0 && size.height > 0) size else Dimension(800, 600)
@@ -25,8 +46,7 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
 
         /**
          * 将 IME 请求委托给内部的 [KBCefOsrComponent]。
-         * 当 AWT 焦点落在此 JPanel 上时，OS 输入法仍能获取正确的光标位置信息，
-         * 避免因焦点未穿透到内层组件导致 IME 完全失效。
+         * 当 AWT 焦点落在此 JPanel 上时，OS 输入法仍能获取正确的光标位置信息。
          */
         override fun getInputMethodRequests(): InputMethodRequests? {
             val osrComp = findOsrComponent()
@@ -34,16 +54,17 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
         }
 
         /**
-         * 不在外层 JPanel 注册 InputMethodListener，
-         * 让 InputMethodEvent 直接穿透到内层 KBCefOsrComponent。
-         * 如果在外层也注册，会导致同一事件被处理两次。
+         * 将收到的 InputMethodEvent 转发给内层 KBCefOsrComponent。
+         * AWT 的 InputMethodEvent 只派发给焦点拥有者，不会自动穿透给子组件，
+         * 因此当焦点意外落在此 JPanel 上时，必须手动转发。
          */
-        override fun addInputMethodListener(l: InputMethodListener?) {
-            // 不调用 super，让事件穿透到内层
-        }
-
-        override fun removeInputMethodListener(l: InputMethodListener?) {
-            // 对称空实现
+        override fun processInputMethodEvent(e: InputMethodEvent) {
+            val osrComp = findOsrComponent()
+            if (osrComp != null) {
+                osrComp.forwardInputMethodEvent(e)
+            } else {
+                super.processInputMethodEvent(e)
+            }
         }
     }
 

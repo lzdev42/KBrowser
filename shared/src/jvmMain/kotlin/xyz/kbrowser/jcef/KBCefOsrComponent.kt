@@ -20,6 +20,9 @@ class KBCefOsrComponent : JPanel() {
     companion object {
         /** 与 IDEA 保持一致：100ms 节流，防止高频 wasResized 导致 JCEF native 崩溃 */
         private const val RESIZE_DELAY_MS = 100
+
+        /** 全局焦点追踪器是否已安装（只安装一次） */
+        private val companionFocusTrackerInstalled = AtomicBoolean(false)
     }
 
     @Volatile private var myRenderHandler: KBCefOsrHandler? = null
@@ -45,11 +48,32 @@ class KBCefOsrComponent : JPanel() {
             AWTEvent.MOUSE_EVENT_MASK or
             AWTEvent.MOUSE_WHEEL_EVENT_MASK or
             AWTEvent.MOUSE_MOTION_EVENT_MASK or
-            AWTEvent.INPUT_METHOD_EVENT_MASK  // 启用输入法事件派发
+            AWTEvent.INPUT_METHOD_EVENT_MASK or  // 启用输入法事件派发
+            AWTEvent.FOCUS_EVENT_MASK           // 启用焦点事件派发，用于同步 CEF 焦点状态
         )
 
         // 启用输入法支持，使 OS IME 能向组件发送组合/提交事件
         enableInputMethods(true)
+
+        // 全局焦点诊断：安装一个 AWT 焦点变化监听器
+        // 只在第一个实例安装，避免重复日志
+        if (!companionFocusTrackerInstalled.getAndSet(true)) {
+            java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addPropertyChangeListener("focusOwner") { evt ->
+                val oldComp = evt.oldValue as? java.awt.Component
+                val newComp = evt.newValue as? java.awt.Component
+                if (newComp != null) {
+                    println("[IME-DEBUG] AWT FOCUS CHANGE: ${oldComp?.javaClass?.simpleName} -> ${newComp.javaClass.simpleName}")
+                    // 如果焦点落在 KBCefOsrComponent 的祖先链上，打印详细路径
+                    var p: java.awt.Component? = newComp
+                    val path = mutableListOf<String>()
+                    while (p != null) {
+                        path.add(p!!.javaClass.simpleName)
+                        p = p!!.parent
+                    }
+                    println("[IME-DEBUG]   Component hierarchy: ${path.joinToString(" -> ")}")
+                }
+            }
+        }
 
         // 注册输入法监听器，将 OS IME 事件转发给 CEF
         addInputMethodListener(myInputMethodAdapter)
@@ -62,7 +86,18 @@ class KBCefOsrComponent : JPanel() {
                 if (isShowing) {
                     myRenderHandler?.setLocationOnScreen(locationOnScreen)
                 }
-                requestFocusInWindow()
+                val focused = requestFocusInWindow()
+                println("[IME-DEBUG] KBCefOsrComponent.mousePressed: requestFocusInWindow=$focused, isFocusOwner=$isFocusOwner, isFocusable=$isFocusable")
+            }
+        })
+
+        // 诊断：跟踪焦点变化
+        addFocusListener(object : java.awt.event.FocusAdapter() {
+            override fun focusGained(e: java.awt.event.FocusEvent) {
+                println("[IME-DEBUG] KBCefOsrComponent FOCUS GAINED, oppositeComponent=${e.oppositeComponent?.javaClass?.simpleName}")
+            }
+            override fun focusLost(e: java.awt.event.FocusEvent) {
+                println("[IME-DEBUG] KBCefOsrComponent FOCUS LOST, oppositeComponent=${e.oppositeComponent?.javaClass?.simpleName}")
             }
         })
 
@@ -257,13 +292,34 @@ class KBCefOsrComponent : JPanel() {
         )
     }
 
+    /**
+     * 当 AWT 焦点变化时，同步通知 CEF。
+     * OSR 模式下 CEF 没有原生窗口来检测焦点，必须由嵌入方显式通知。
+     * 如果不调用 [CefBrowser.setFocus]，CEF 内部认为浏览器没有焦点，
+     * 会静默丢弃所有 IME 请求（ImeSetComposition/ImeCommitText），
+     * 而 sendKeyEvent 不检查焦点状态所以英文字母能输入——这就是中文无法输入的根本原因。
+     */
+    override fun processFocusEvent(e: FocusEvent) {
+        super.processFocusEvent(e)
+        val browser = myBrowser
+        if (browser != null) {
+            val focusGained = e.id == FocusEvent.FOCUS_GAINED
+            println("[IME-DEBUG] processFocusEvent: calling setFocus($focusGained), permanent=${e.isTemporary}")
+            browser.setFocus(focusGained)
+        }
+    }
+
     override fun processKeyEvent(e: KeyEvent) {
         super.processKeyEvent(e)
         // IME 组合期间，KEY_TYPED 事件由 InputMethodEvent 通道处理，
         // 不转发给 CEF，避免英文字母与中文输入双路冲突。
         if (e.id == KeyEvent.KEY_TYPED && myInputMethodAdapter.isComposing) {
+            println("[IME-DEBUG] processKeyEvent: KEY_TYPED blocked (isComposing=true), keyChar='${e.keyChar}'")
             e.consume()
             return
+        }
+        if (e.id == KeyEvent.KEY_TYPED) {
+            println("[IME-DEBUG] processKeyEvent: KEY_TYPED forwarded (isComposing=false), keyChar='${e.keyChar}'")
         }
         myBrowser?.sendKeyEvent(e)
     }
@@ -273,7 +329,22 @@ class KBCefOsrComponent : JPanel() {
      * 参照 IntelliJ 的 JBCefOsrComponent.getInputMethodRequests()。
      */
     override fun getInputMethodRequests(): java.awt.im.InputMethodRequests {
+        println("[IME-DEBUG] getInputMethodRequests called on KBCefOsrComponent, hasFocus=$isFocusOwner, isShowing=$isShowing")
         return myInputMethodAdapter
+    }
+
+    /**
+     * 从外层 [KBCefBrowser.myComponent] 转发 [InputMethodEvent]。
+     * AWT 的 InputMethodEvent 只派发给焦点拥有者，不会自动穿透给子组件，
+     * 因此当焦点落在外层 JPanel 上时，由外层手动调用此方法完成转发。
+     *
+     * 使用 [processInputMethodEvent] 而非直接调用 listener，保证
+     * INPUT_METHOD_TEXT_CHANGED 和 CARET_POSITION_CHANGED 两种事件
+     * 都能被正确路由到对应的 listener 方法。
+     */
+    fun forwardInputMethodEvent(e: InputMethodEvent) {
+        println("[IME-DEBUG] forwardInputMethodEvent on KBCefOsrComponent, id=${e.id}, source=${e.source?.javaClass?.simpleName}")
+        processInputMethodEvent(e)
     }
 
     private fun onGraphicsConfigurationChanged() {

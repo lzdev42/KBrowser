@@ -35,7 +35,7 @@ compose.desktop {
 
 tasks.register<JavaExec>("runDebug") {
     group = "application"
-    mainClass.set("xyz.kbrowser.webview.LocatorDebugTestKt")
+    mainClass.set("xyz.kbrowser.webview.BossJDTestKt")
     val compileTestKotlin = tasks.named("compileTestKotlin")
     classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
     jvmArgs(
@@ -54,4 +54,17 @@ tasks.register<JavaExec>("runBingTest") {
         "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
         "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
     )
+}
+
+tasks.register<JavaExec>("runFileUploadTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.FileUploadTestKt")
+    val compileTestKotlin = tasks.named("compileTestKotlin")
+    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+    workingDir = rootProject.projectDir
 }
