@@ -167,11 +167,7 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     // ═══════════════════════════════════════════════════════════════
 
     override fun inputMethodTextChanged(event: InputMethodEvent) {
-        println("[IME-DEBUG] inputMethodTextChanged: committed=${event.committedCharacterCount}, text='${event.text?.let { t -> val sb = StringBuilder(); var c = t.first(); while (c != CharacterIterator.DONE) { sb.append(c); c = t.next() }; sb.toString() }}', source=${event.source?.javaClass?.simpleName}")
-        val br = browser ?: run {
-            println("[IME-DEBUG] inputMethodTextChanged: browser is NULL, returning!")
-            return
-        }
+        val br = browser ?: return
         val committedCharacterCount = event.committedCharacterCount
         val text = event.text ?: return
 
@@ -186,7 +182,6 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
                 c = text.next()
             }
             val committedText = textBuffer.toString()
-            println("[IME-DEBUG] commitText: '$committedText'")
             imeCommitText(br, committedText, DEFAULT_RANGE, 0)
 
             // CEF 提交后不会通知选择范围变化，当前数据已过时
@@ -212,7 +207,6 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             }
             // 选择范围：将光标移到组合文本末尾
             val selRange = CefRange(composedText.length, composedText.length)
-            println("[IME-DEBUG] setComposition: '$composedText', replacementRange=$replacementRange, selRange=$selRange")
             imeSetComposition(br, composedText, replacementRange, selRange)
         } else if (isComposing) {
             // 组合被取消（Escape / 点击其他位置），通知 CEF 清理组合状态
@@ -249,11 +243,9 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             )
             // 创建下划线（透明色，仅用于标记组合范围）
             val underline = createCompositionUnderline(text.length)
-            val result = method.invoke(browser, text, listOf(underline), replacementRange, selectionRange)
-            println("[IME-DEBUG] ImeSetComposition 反射成功: text='$text', result=$result")
+            method.invoke(browser, text, listOf(underline), replacementRange, selectionRange)
         } catch (e: Exception) {
             // 反射调用失败时回退：取消组合并让 CEF 通过 key event 处理
-            println("[IME-DEBUG] ImeSetComposition 反射调用失败: ${e.message}")
         }
     }
 
@@ -270,10 +262,8 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
                 CefRange::class.java,
                 Int::class.javaPrimitiveType
             )
-            val result = method.invoke(browser, text, replacementRange, relativeCursorPos)
-            println("[IME-DEBUG] ImeCommitText 反射成功: text='$text', result=$result")
+            method.invoke(browser, text, replacementRange, relativeCursorPos)
         } catch (e: Exception) {
-            println("[IME-DEBUG] ImeCommitText 反射调用失败: ${e.message}")
         }
     }
 

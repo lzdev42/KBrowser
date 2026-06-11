@@ -5,7 +5,6 @@ import java.awt.Dimension
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.InputMethodEvent
-import java.awt.event.InputMethodListener
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.im.InputMethodRequests
@@ -24,19 +23,6 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
             isFocusable = false
             // 启用 IME 作为安全网（当焦点意外落在此 JPanel 时仍能处理 IME 事件）
             enableInputMethods(true)
-        }
-
-        override fun addNotify() {
-            super.addNotify()
-            // 诊断：跟踪整个组件层级中的焦点变化
-            val window = javax.swing.SwingUtilities.getWindowAncestor(this)
-            window?.addWindowFocusListener(object : java.awt.event.WindowFocusListener {
-                override fun windowGainedFocus(e: java.awt.event.WindowEvent?) {
-                    val focusOwner = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
-                    println("[IME-DEBUG] Window gained focus, focusOwner=${focusOwner?.javaClass?.simpleName}")
-                }
-                override fun windowLostFocus(e: java.awt.event.WindowEvent?) {}
-            })
         }
 
         override fun getPreferredSize(): Dimension {
