@@ -221,7 +221,7 @@ open class KBCefOsrHandler(
                 drawVolatileImage(vi)
             }
 
-            when (vi.validate(g.deviceConfiguration)) {
+            when (vi!!.validate(g.deviceConfiguration)) {
                 VolatileImage.IMAGE_RESTORED -> drawVolatileImage(vi)
                 VolatileImage.IMAGE_INCOMPATIBLE -> vi = createVolatileImage(g, logicalW, logicalH)
             }

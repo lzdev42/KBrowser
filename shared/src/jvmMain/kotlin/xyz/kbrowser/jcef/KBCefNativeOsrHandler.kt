@@ -24,6 +24,47 @@ class KBCefNativeOsrHandler(
     screenBoundsProvider: (JComponent) -> Rectangle
 ) : KBCefOsrHandler(component, screenBoundsProvider), CefNativeRenderHandler {
 
+    companion object {
+        @Volatile private var isReflectInitialized = false
+        var lockMethod: java.lang.reflect.Method? = null
+        var unlockMethod: java.lang.reflect.Method? = null
+        var getPtrMethod: java.lang.reflect.Method? = null
+        var getWidthMethod: java.lang.reflect.Method? = null
+        var getHeightMethod: java.lang.reflect.Method? = null
+        var getRectsOffsetMethod: java.lang.reflect.Method? = null
+        var getDirtyRectsCountMethod: java.lang.reflect.Method? = null
+        
+        var wrapRasterMethod: java.lang.reflect.Method? = null
+        var wrapRectsMethod: java.lang.reflect.Method? = null
+        var setWidthMethod: java.lang.reflect.Method? = null
+        var setHeightMethod: java.lang.reflect.Method? = null
+        var setDirtyRectsCountMethod: java.lang.reflect.Method? = null
+
+        @Synchronized
+        fun initReflection(frameClass: Class<*>) {
+            if (isReflectInitialized) return
+            try {
+                lockMethod = frameClass.getMethod("lock").apply { isAccessible = true }
+                unlockMethod = frameClass.getMethod("unlock").apply { isAccessible = true }
+                getPtrMethod = frameClass.getMethod("getPtr").apply { isAccessible = true }
+                getWidthMethod = frameClass.getMethod("getWidth").apply { isAccessible = true }
+                getHeightMethod = frameClass.getMethod("getHeight").apply { isAccessible = true }
+                getRectsOffsetMethod = frameClass.getMethod("getRectsOffset").apply { isAccessible = true }
+                getDirtyRectsCountMethod = frameClass.getMethod("getDirtyRectsCount").apply { isAccessible = true }
+                
+                wrapRasterMethod = frameClass.getMethod("wrapRaster").apply { isAccessible = true }
+                wrapRectsMethod = frameClass.getMethod("wrapRects").apply { isAccessible = true }
+                setWidthMethod = frameClass.getMethod("setWidth", Int::class.java).apply { isAccessible = true }
+                setHeightMethod = frameClass.getMethod("setHeight", Int::class.java).apply { isAccessible = true }
+                setDirtyRectsCountMethod = frameClass.getMethod("setDirtyRectsCount", Int::class.java).apply { isAccessible = true }
+                
+                isReflectInitialized = true
+            } catch (e: Exception) {
+                println("[KBCefNativeOsrHandler] Reflection init failed: \${e.message}")
+            }
+        }
+    }
+
     private val forceUseSoftwareRendering: Boolean = System.getProperty("jcef.remote.enable_hardware_rendering") == "false"
     private var myCurrentFrame: Any? = null // Holds SharedMemory.WithRaster instance
     @Volatile private var myFrameWidth: Int = 0
@@ -84,8 +125,18 @@ class KBCefNativeOsrHandler(
 
             myContentOutdated = true
             SwingUtilities.invokeLater {
-                if (!browser.uiComponent.isShowing) return@invokeLater
-                browser.uiComponent.repaint()
+                val comp = browser.uiComponent
+                if (!comp.isShowing) return@invokeLater
+                val root = SwingUtilities.getRootPane(comp)
+                if (root != null) {
+                    val rm = javax.swing.RepaintManager.currentManager(root)
+                    val dirtySrc = Rectangle(0, 0, comp.width, comp.height)
+                    val dirtyDst = SwingUtilities.convertRectangle(comp, dirtySrc, root)
+                    val dx = 1
+                    rm.addDirtyRegion(root, dirtyDst.x - dx, dirtyDst.y - dx, dirtyDst.width + dx * 2, dirtyDst.height + dx * 2)
+                } else {
+                    comp.repaint()
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -107,95 +158,82 @@ class KBCefNativeOsrHandler(
             return
         }
         
-        var nativeRasterLoaded = false
-        val frameClass = frame.javaClass
+        synchronized(frame) {
+            initReflection(frame.javaClass)
+            var nativeRasterLoaded = false
 
-        try {
-            frameClass.getMethod("lock").apply { isAccessible = true }.invoke(frame)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        try {
-            if (useNativeRasterLoader()) {
-                val jbrClass = Class.forName("com.jetbrains.JBR")
-                val getNativeRasterLoaderMethod = jbrClass.getMethod("getNativeRasterLoader").apply { isAccessible = true }
-                val rasterLoader = getNativeRasterLoaderMethod.invoke(null)
-                
-                val getPtrMethod = frameClass.getMethod("getPtr").apply { isAccessible = true }
-                val ptr = getPtrMethod.invoke(frame) as Long
-                
-                val getWidthMethod = frameClass.getMethod("getWidth").apply { isAccessible = true }
-                val width = getWidthMethod.invoke(frame) as Int
-                
-                val getHeightMethod = frameClass.getMethod("getHeight").apply { isAccessible = true }
-                val height = getHeightMethod.invoke(frame) as Int
-                
-                val getRectsOffsetMethod = frameClass.getMethod("getRectsOffset").apply { isAccessible = true }
-                val rectsOffset = getRectsOffsetMethod.invoke(frame) as Int
-                
-                val getDirtyRectsCountMethod = frameClass.getMethod("getDirtyRectsCount").apply { isAccessible = true }
-                val dirtyRectsCount = getDirtyRectsCountMethod.invoke(frame) as Int
-                
-                val loadMethod = rasterLoader.javaClass.getMethod(
-                    "loadNativeRaster", 
-                    VolatileImage::class.java, Long::class.java, Int::class.java, Int::class.java, Long::class.java, Int::class.java
-                ).apply { isAccessible = true }
-                
-                loadMethod.invoke(rasterLoader, vi, ptr, width, height, ptr + rectsOffset, dirtyRectsCount)
-                nativeRasterLoaded = true
-            }
-        } catch (e: Exception) {
-            println("[KBCefNativeOsrHandler] NativeRasterLoader failed, falling back to CPU buffering: ${e.message}")
-        }
-
-        try {
-            if (!nativeRasterLoaded) {
-                val getWidthMethod = frameClass.getMethod("getWidth").apply { isAccessible = true }
-                val width = getWidthMethod.invoke(frame) as Int
-                
-                val getHeightMethod = frameClass.getMethod("getHeight").apply { isAccessible = true }
-                val height = getHeightMethod.invoke(frame) as Int
-                
-                var image = myImage
-                if (image == null || image.width != width || image.height != height) {
-                    image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE)
-                }
-                loadBuffered(image, frame)
-                myImage = image
-                
-                super.drawVolatileImage(vi)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
             try {
-                frameClass.getMethod("unlock").apply { isAccessible = true }.invoke(frame)
-            } catch (e: Exception) { }
+                lockMethod?.invoke(frame)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            try {
+                if (useNativeRasterLoader()) {
+                    val jbrClass = Class.forName("com.jetbrains.JBR")
+                    val getNativeRasterLoaderMethod = jbrClass.getMethod("getNativeRasterLoader").apply { isAccessible = true }
+                    val rasterLoader = getNativeRasterLoaderMethod.invoke(null)
+                    
+                    val ptr = getPtrMethod?.invoke(frame) as Long
+                    val width = getWidthMethod?.invoke(frame) as Int
+                    val height = getHeightMethod?.invoke(frame) as Int
+                    val rectsOffset = getRectsOffsetMethod?.invoke(frame) as Int
+                    val dirtyRectsCount = getDirtyRectsCountMethod?.invoke(frame) as Int
+                    
+                    val loadMethod = rasterLoader.javaClass.getMethod(
+                        "loadNativeRaster", 
+                        VolatileImage::class.java, Long::class.java, Int::class.java, Int::class.java, Long::class.java, Int::class.java
+                    ).apply { isAccessible = true }
+                    
+                    loadMethod.invoke(rasterLoader, vi, ptr, width, height, ptr + rectsOffset, dirtyRectsCount)
+                    nativeRasterLoaded = true
+                }
+            } catch (e: Exception) {
+                println("[KBCefNativeOsrHandler] NativeRasterLoader failed, falling back to CPU buffering: ${e.message}")
+            }
+
+            try {
+                if (!nativeRasterLoaded) {
+                    val width = getWidthMethod?.invoke(frame) as Int
+                    val height = getHeightMethod?.invoke(frame) as Int
+                    
+                    var image = myImage
+                    if (image == null || image.width != width || image.height != height) {
+                        image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE)
+                    }
+                    loadBuffered(image, frame)
+                    myImage = image
+                    
+                    super.drawVolatileImage(vi)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                try {
+                    unlockMethod?.invoke(frame)
+                } catch (e: Exception) { }
+            }
         }
     }
     
     private fun loadBuffered(bufImage: BufferedImage, mem: Any) {
         try {
-            val memClass = mem.javaClass
-            val srcW = memClass.getMethod("getWidth").apply { isAccessible = true }.invoke(mem) as Int
-            val srcH = memClass.getMethod("getHeight").apply { isAccessible = true }.invoke(mem) as Int
+            val srcW = getWidthMethod?.invoke(mem) as Int
+            val srcH = getHeightMethod?.invoke(mem) as Int
             
-            val wrapRasterMethod = memClass.getMethod("wrapRaster").apply { isAccessible = true }
-            val srcBuffer = wrapRasterMethod.invoke(mem) as ByteBuffer
+            val srcBuffer = wrapRasterMethod?.invoke(mem) as ByteBuffer
             val src = srcBuffer.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
             
             val dstW = bufImage.raster.width
             val dstH = bufImage.raster.height
             val dst = (bufImage.raster.dataBuffer as DataBufferInt).data
             
-            val rectsCount = memClass.getMethod("getDirtyRectsCount").apply { isAccessible = true }.invoke(mem) as Int
+            val rectsCount = getDirtyRectsCountMethod?.invoke(mem) as Int
             var dirtyRects = arrayOf(Rectangle(0, 0, srcW, srcH))
             
             if (rectsCount > 0) {
                 dirtyRects = Array(rectsCount) { Rectangle() }
-                val wrapRectsMethod = memClass.getMethod("wrapRects").apply { isAccessible = true }
-                val rectsMem = wrapRectsMethod.invoke(mem) as ByteBuffer
+                val rectsMem = wrapRectsMethod?.invoke(mem) as ByteBuffer
                 val rects = rectsMem.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
                 for (c in 0 until rectsCount) {
                     var pos = c * 4
