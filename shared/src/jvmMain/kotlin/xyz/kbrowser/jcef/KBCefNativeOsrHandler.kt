@@ -40,6 +40,22 @@ class KBCefNativeOsrHandler(
         var setHeightMethod: java.lang.reflect.Method? = null
         var setDirtyRectsCountMethod: java.lang.reflect.Method? = null
 
+        private var unsafe: Any? = null
+        private var allocateMemoryMethod: java.lang.reflect.Method? = null
+        private var freeMemoryMethod: java.lang.reflect.Method? = null
+        private var putIntMethod: java.lang.reflect.Method? = null
+
+        init {
+            try {
+                val unsafeClass = Class.forName("sun.misc.Unsafe")
+                val theUnsafeField = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }
+                unsafe = theUnsafeField.get(null)
+                allocateMemoryMethod = unsafeClass.getMethod("allocateMemory", Long::class.java)
+                freeMemoryMethod = unsafeClass.getMethod("freeMemory", Long::class.java)
+                putIntMethod = unsafeClass.getMethod("putInt", Long::class.java, Int::class.java)
+            } catch (e: Exception) {}
+        }
+
         @Synchronized
         fun initReflection(frameClass: Class<*>) {
             if (isReflectInitialized) return
@@ -70,6 +86,9 @@ class KBCefNativeOsrHandler(
     @Volatile private var myFrameWidth: Int = 0
     @Volatile private var myFrameHeight: Int = 0
     @Volatile private var myForceFullRepaint: Boolean = false
+
+    private val myAccumulatedRects = ArrayList<Rectangle>()
+    private val dirtyRectLock = Any()
 
     override fun notifyFullRepaintRequired() {
         myForceFullRepaint = true
@@ -123,9 +142,30 @@ class KBCefNativeOsrHandler(
                     myPopupImage = image
                 }
             } else {
-                if (myContentOutdated) {
-                    myForceFullRepaint = true
+                val currentFrameRects = ArrayList<Rectangle>()
+                if (dirtyRectsCount > 0) {
+                    try {
+                        val rectsMem = wrapRectsMethod?.invoke(mem) as ByteBuffer
+                        val rects = rectsMem.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+                        for (c in 0 until dirtyRectsCount) {
+                            var pos = c * 4
+                            val x = rects.get(pos++)
+                            val y = rects.get(pos++)
+                            val w = rects.get(pos++)
+                            val h = rects.get(pos)
+                            currentFrameRects.add(Rectangle(x, y, w, h))
+                        }
+                    } catch (e: Exception) {}
                 }
+
+                synchronized(dirtyRectLock) {
+                    myAccumulatedRects.addAll(currentFrameRects)
+                    if (myAccumulatedRects.size > 100) {
+                        myAccumulatedRects.clear()
+                        myAccumulatedRects.add(Rectangle(0, 0, myFrameWidth, myFrameHeight))
+                    }
+                }
+
                 myCurrentFrame = mem
                 myFrameWidth = width
                 myFrameHeight = height
@@ -173,6 +213,14 @@ class KBCefNativeOsrHandler(
             val forceFull = myForceFullRepaint
             myForceFullRepaint = false
 
+            var rectsToDraw: List<Rectangle>? = null
+            synchronized(dirtyRectLock) {
+                if (myAccumulatedRects.isNotEmpty()) {
+                    rectsToDraw = ArrayList(myAccumulatedRects)
+                    myAccumulatedRects.clear()
+                }
+            }
+
             try {
                 lockMethod?.invoke(frame)
             } catch (e: Exception) {
@@ -180,7 +228,7 @@ class KBCefNativeOsrHandler(
             }
 
             try {
-                if (!forceFull && useNativeRasterLoader()) {
+                if (useNativeRasterLoader()) {
                     val jbrClass = Class.forName("com.jetbrains.JBR")
                     val getNativeRasterLoaderMethod = jbrClass.getMethod("getNativeRasterLoader").apply { isAccessible = true }
                     val rasterLoader = getNativeRasterLoaderMethod.invoke(null)
@@ -189,15 +237,68 @@ class KBCefNativeOsrHandler(
                     val width = getWidthMethod?.invoke(frame) as Int
                     val height = getHeightMethod?.invoke(frame) as Int
                     val rectsOffset = getRectsOffsetMethod?.invoke(frame) as Int
-                    val dirtyRectsCount = getDirtyRectsCountMethod?.invoke(frame) as Int
+                    var dirtyRectsCount = getDirtyRectsCountMethod?.invoke(frame) as Int
+
+                    var fallbackToCpu = false
                     
-                    val loadMethod = rasterLoader.javaClass.getMethod(
-                        "loadNativeRaster", 
-                        VolatileImage::class.java, Long::class.java, Int::class.java, Int::class.java, Long::class.java, Int::class.java
-                    ).apply { isAccessible = true }
-                    
-                    loadMethod.invoke(rasterLoader, vi, ptr, width, height, ptr + rectsOffset, dirtyRectsCount)
-                    nativeRasterLoaded = true
+                    try {
+                        val loadMethod = rasterLoader.javaClass.getMethod(
+                            "loadNativeRaster", 
+                            VolatileImage::class.java, Long::class.java, Int::class.java, Int::class.java, Long::class.java, Int::class.java
+                        ).apply { isAccessible = true }
+                        
+                        if (forceFull && unsafe != null) {
+                            val myRectsPtr = allocateMemoryMethod!!.invoke(unsafe, 16L) as Long
+                            putIntMethod!!.invoke(unsafe, myRectsPtr, 0)
+                            putIntMethod!!.invoke(unsafe, myRectsPtr + 4, 0)
+                            putIntMethod!!.invoke(unsafe, myRectsPtr + 8, width)
+                            putIntMethod!!.invoke(unsafe, myRectsPtr + 12, height)
+                            
+                            loadMethod.invoke(rasterLoader, vi, ptr, width, height, myRectsPtr, 1)
+                            freeMemoryMethod!!.invoke(unsafe, myRectsPtr)
+                            nativeRasterLoaded = true
+                        } else if (unsafe != null) {
+                            var totalRects = 0
+                            if (rectsToDraw != null) totalRects += rectsToDraw!!.size
+                            if (dirtyRectsCount > 0) totalRects += dirtyRectsCount
+                            
+                            if (totalRects > 0) {
+                                val memorySize = totalRects * 16L
+                                val myRectsPtr = allocateMemoryMethod!!.invoke(unsafe, memorySize) as Long
+                                
+                                var offset = 0L
+                                if (rectsToDraw != null) {
+                                    for (dr in rectsToDraw!!) {
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset, dr.x)
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset + 4, dr.y)
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset + 8, dr.width)
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset + 12, dr.height)
+                                        offset += 16L
+                                    }
+                                }
+                                
+                                if (dirtyRectsCount > 0) {
+                                    val rectsMem = wrapRectsMethod?.invoke(frame) as ByteBuffer
+                                    val rects = rectsMem.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+                                    for (c in 0 until dirtyRectsCount) {
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset, rects.get(c * 4))
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset + 4, rects.get(c * 4 + 1))
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset + 8, rects.get(c * 4 + 2))
+                                        putIntMethod!!.invoke(unsafe, myRectsPtr + offset + 12, rects.get(c * 4 + 3))
+                                        offset += 16L
+                                    }
+                                }
+                                
+                                loadMethod.invoke(rasterLoader, vi, ptr, width, height, myRectsPtr, totalRects)
+                                freeMemoryMethod!!.invoke(unsafe, myRectsPtr)
+                            }
+                            nativeRasterLoaded = true
+                        } else {
+                            fallbackToCpu = true
+                        }
+                    } catch (e: Exception) {
+                        fallbackToCpu = true
+                    }
                 }
             } catch (e: Exception) {
                 println("[KBCefNativeOsrHandler] NativeRasterLoader failed, falling back to CPU buffering: ${e.message}")
@@ -212,7 +313,8 @@ class KBCefNativeOsrHandler(
                     if (image == null || image.width != width || image.height != height) {
                         image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE)
                     }
-                    loadBuffered(image, frame, forceFull)
+                    
+                    loadBuffered(image, frame, forceFull, null)
                     myImage = image
                     
                     super.drawVolatileImage(vi)
@@ -227,7 +329,7 @@ class KBCefNativeOsrHandler(
         }
     }
     
-    private fun loadBuffered(bufImage: BufferedImage, mem: Any, forceFull: Boolean = false) {
+    private fun loadBuffered(bufImage: BufferedImage, mem: Any, forceFull: Boolean = false, accRect: Rectangle? = null) {
         try {
             val srcW = getWidthMethod?.invoke(mem) as Int
             val srcH = getHeightMethod?.invoke(mem) as Int
@@ -239,21 +341,27 @@ class KBCefNativeOsrHandler(
             val dstH = bufImage.raster.height
             val dst = (bufImage.raster.dataBuffer as DataBufferInt).data
             
-            val rectsCount = getDirtyRectsCountMethod?.invoke(mem) as Int
             var dirtyRects = arrayOf(Rectangle(0, 0, srcW, srcH))
             
-            if (rectsCount > 0 && !forceFull) {
-                dirtyRects = Array(rectsCount) { Rectangle() }
-                val rectsMem = wrapRectsMethod?.invoke(mem) as ByteBuffer
-                val rects = rectsMem.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
-                for (c in 0 until rectsCount) {
-                    var pos = c * 4
-                    val r = Rectangle()
-                    r.x = rects.get(pos++)
-                    r.y = rects.get(pos++)
-                    r.width = rects.get(pos++)
-                    r.height = rects.get(pos)
-                    dirtyRects[c] = r
+            if (!forceFull) {
+                if (accRect != null) {
+                    dirtyRects = arrayOf(accRect)
+                } else {
+                    val rectsCount = getDirtyRectsCountMethod?.invoke(mem) as Int
+                    if (rectsCount > 0) {
+                        dirtyRects = Array(rectsCount) { Rectangle() }
+                        val rectsMem = wrapRectsMethod?.invoke(mem) as ByteBuffer
+                        val rects = rectsMem.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+                        for (c in 0 until rectsCount) {
+                            var pos = c * 4
+                            val r = Rectangle()
+                            r.x = rects.get(pos++)
+                            r.y = rects.get(pos++)
+                            r.width = rects.get(pos++)
+                            r.height = rects.get(pos)
+                            dirtyRects[c] = r
+                        }
+                    }
                 }
             }
             
