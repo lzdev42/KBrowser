@@ -69,6 +69,11 @@ class KBCefNativeOsrHandler(
     private var myCurrentFrame: Any? = null // Holds SharedMemory.WithRaster instance
     @Volatile private var myFrameWidth: Int = 0
     @Volatile private var myFrameHeight: Int = 0
+    @Volatile private var myForceFullRepaint: Boolean = false
+
+    override fun notifyFullRepaintRequired() {
+        myForceFullRepaint = true
+    }
 
     private val mySharedMemCache: Any?
     private val sharedMemCacheGetMethod: java.lang.reflect.Method?
@@ -118,6 +123,9 @@ class KBCefNativeOsrHandler(
                     myPopupImage = image
                 }
             } else {
+                if (myContentOutdated) {
+                    myForceFullRepaint = true
+                }
                 myCurrentFrame = mem
                 myFrameWidth = width
                 myFrameHeight = height
@@ -162,6 +170,9 @@ class KBCefNativeOsrHandler(
             initReflection(frame.javaClass)
             var nativeRasterLoaded = false
 
+            val forceFull = myForceFullRepaint
+            myForceFullRepaint = false
+
             try {
                 lockMethod?.invoke(frame)
             } catch (e: Exception) {
@@ -169,7 +180,7 @@ class KBCefNativeOsrHandler(
             }
 
             try {
-                if (useNativeRasterLoader()) {
+                if (!forceFull && useNativeRasterLoader()) {
                     val jbrClass = Class.forName("com.jetbrains.JBR")
                     val getNativeRasterLoaderMethod = jbrClass.getMethod("getNativeRasterLoader").apply { isAccessible = true }
                     val rasterLoader = getNativeRasterLoaderMethod.invoke(null)
@@ -201,7 +212,7 @@ class KBCefNativeOsrHandler(
                     if (image == null || image.width != width || image.height != height) {
                         image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB_PRE)
                     }
-                    loadBuffered(image, frame)
+                    loadBuffered(image, frame, forceFull)
                     myImage = image
                     
                     super.drawVolatileImage(vi)
@@ -216,7 +227,7 @@ class KBCefNativeOsrHandler(
         }
     }
     
-    private fun loadBuffered(bufImage: BufferedImage, mem: Any) {
+    private fun loadBuffered(bufImage: BufferedImage, mem: Any, forceFull: Boolean = false) {
         try {
             val srcW = getWidthMethod?.invoke(mem) as Int
             val srcH = getHeightMethod?.invoke(mem) as Int
@@ -231,7 +242,7 @@ class KBCefNativeOsrHandler(
             val rectsCount = getDirtyRectsCountMethod?.invoke(mem) as Int
             var dirtyRects = arrayOf(Rectangle(0, 0, srcW, srcH))
             
-            if (rectsCount > 0) {
+            if (rectsCount > 0 && !forceFull) {
                 dirtyRects = Array(rectsCount) { Rectangle() }
                 val rectsMem = wrapRectsMethod?.invoke(mem) as ByteBuffer
                 val rects = rectsMem.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()

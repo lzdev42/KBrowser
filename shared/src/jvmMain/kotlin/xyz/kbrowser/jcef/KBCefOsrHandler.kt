@@ -222,7 +222,10 @@ open class KBCefOsrHandler(
             }
 
             when (vi!!.validate(g.deviceConfiguration)) {
-                VolatileImage.IMAGE_RESTORED -> drawVolatileImage(vi)
+                VolatileImage.IMAGE_RESTORED -> {
+                    notifyFullRepaintRequired()
+                    drawVolatileImage(vi)
+                }
                 VolatileImage.IMAGE_INCOMPATIBLE -> vi = createVolatileImage(g, logicalW, logicalH)
             }
 
@@ -263,6 +266,7 @@ open class KBCefOsrHandler(
         gimg.composite = AlphaComposite.Src
         gimg.clearRect(0, 0, image.width, image.height)
         gimg.dispose()
+        notifyFullRepaintRequired()
         drawVolatileImage(image)
         return image
     }
@@ -272,6 +276,8 @@ open class KBCefOsrHandler(
         if (x >= image.width || y >= image.height || x < 0 || y < 0) return null
         return Color(image.getRGB(x, y), true)
     }
+
+    open fun notifyFullRepaintRequired() {}
 
     fun startResizePusher(browser: CefBrowser, resetTimeout: Boolean) {
         SwingUtilities.invokeLater {
@@ -314,7 +320,7 @@ open class KBCefOsrHandler(
             val dstData = (dst.raster.dataBuffer as DataBufferInt).data
             val srcData = src.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
             val imgWidth = dst.width
-            val capacity = src.capacity()
+            val capacity = srcData.capacity()
 
             for (rect in rectangles) {
                 if (rect.width < imgWidth) {
