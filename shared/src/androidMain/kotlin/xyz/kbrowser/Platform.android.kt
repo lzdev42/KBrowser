@@ -15,3 +15,5 @@ actual fun makeImageBitmap(bytes: ByteArray): androidx.compose.ui.graphics.Image
     val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     return bitmap.asImageBitmap()
 }
+
+actual fun getDefaultStorageDir(): String? = null

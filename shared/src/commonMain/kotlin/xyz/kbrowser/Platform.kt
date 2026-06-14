@@ -11,4 +11,6 @@ expect fun getPlatform(): Platform
  */
 expect fun currentTimeMillis(): Long
 
+expect fun getDefaultStorageDir(): String?
+
 expect fun makeImageBitmap(bytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap

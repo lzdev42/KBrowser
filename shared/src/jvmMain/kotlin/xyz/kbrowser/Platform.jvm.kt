@@ -13,3 +13,7 @@ actual fun currentTimeMillis(): Long = System.currentTimeMillis()
 actual fun makeImageBitmap(bytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap {
     return org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap()
 }
+
+actual fun getDefaultStorageDir(): String? {
+    return System.getProperty("user.home") + "/.browserpilot/jcef_cache"
+}

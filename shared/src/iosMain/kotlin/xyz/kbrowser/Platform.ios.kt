@@ -15,3 +15,5 @@ actual fun currentTimeMillis(): Long = platform.posix.time(null) * 1000L
 actual fun makeImageBitmap(bytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap {
     return org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap()
 }
+
+actual fun getDefaultStorageDir(): String? = null

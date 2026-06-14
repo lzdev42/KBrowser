@@ -18,7 +18,7 @@ object KBrowser {
     internal fun getConfigPath(): String? = storageDir
 
     // 全局唯一初始化入口
-    fun initializeConfig(storageDir: String, useOsr: Boolean = true) {
+    fun initializeConfig(storageDir: String?, useOsr: Boolean = true) {
         this.storageDir = storageDir
         this.useOsrMode = useOsr
     }

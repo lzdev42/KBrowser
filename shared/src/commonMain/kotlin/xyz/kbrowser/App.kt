@@ -102,7 +102,7 @@ fun DesktopApp() {
                             isInitializing = true
                             scope.launch {
                                 chosenModeIsOsr = useOsr
-                                val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
+                                val storageDir = getDefaultStorageDir()
                                 KBrowser.initializeConfig(storageDir, useOsr = useOsr)
                                 initializeKBrowser()
                                 isInitialized = true
