@@ -69,13 +69,23 @@ The library does not bundle JCEF. Configure your IDE or build tool to use JBR 25
 
 ### 1. JVM Initialization (Desktop)
 
-Must be called **before** `application {}`:
+Must be called **before** `application {}`. 
+> ⚠️ **Performance Note**: `KBrowser` runs in OSR (Off-Screen Rendering) mode by default, which supports Compose matrix transformations but consumes more CPU/GPU resources. **For high-performance scenarios (e.g., rendering complex WebGL, 60fps animations), you MUST set `useOsr = false`**. This mode selection is final and can only be set once during application startup.
 
 ```kotlin
-fun main() {
-    KBrowser.setConfigPath("/path/to/cache")
-    initializeKBrowser()  // Must come before any UI initialization
+import kotlinx.coroutines.runBlocking
+
+fun main() = runBlocking {
+    // 1. Configure cache directory and rendering mode (Must be set exactly once at startup)
+    KBrowser.initializeConfig(
+        storageDir = "/path/to/cache", 
+        useOsr = false // Set to false for High-Performance (Native Window) mode
+    )
+    
+    // 2. Initialize the engine asynchronously
+    initializeKBrowser()  // Suspend function, must come before any UI initialization
  
+    // 3. Start your Compose application
     application {
         Window(onCloseRequest = ::exitApplication) { App() }
     }

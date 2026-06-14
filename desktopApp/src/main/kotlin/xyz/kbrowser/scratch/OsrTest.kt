@@ -15,7 +15,7 @@ fun main() {
     
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
     xyz.kbrowser.webview.KBrowser.setConfigPath(storageDir)
-    initializeKBrowser()
+    kotlinx.coroutines.runBlocking { initializeKBrowser() }
     
     SwingUtilities.invokeLater {
         try {

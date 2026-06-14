@@ -64,9 +64,10 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
                 // Remote 模式是零拷贝 OSR 的前提条件（SharedMemory + NativeRasterLoader）
                 true
             }
-            // 强制启用 Remote 模式：零拷贝 OSR 必须走 cef_server 进程
-            CefApp.setIsRemoteEnabled(true)
-            println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: true (config reported: $isRemote)")
+            // 启用/禁用 Remote 模式和离屏渲染
+            val useOsr = xyz.kbrowser.webview.KBrowser.useOsrMode
+            CefApp.setIsRemoteEnabled(useOsr)
+            println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: $useOsr (config reported: $isRemote)")
         } catch (e: Throwable) {
             println("[KBCefApp] Failed to set remote mode: ${e.message}")
         }
@@ -75,7 +76,7 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         val settings = config.cefSettings
         
         // JCEF Settings
-        settings.windowless_rendering_enabled = true
+        settings.windowless_rendering_enabled = xyz.kbrowser.webview.KBrowser.useOsrMode
         settings.log_severity = CefSettings.LogSeverity.LOGSEVERITY_INFO
         
         // Ensure Alloy rendering mode by disabling Chrome Runtime

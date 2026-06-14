@@ -130,6 +130,7 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
                     }
                 }
             } else {
+                println("====== [JCEF Native] Executing createBrowser with isOffscreen = FALSE (Native Windowed) ======")
                 cefBrowser = myCefClient.cefClient.createBrowser(
                     builder.myUrl, CefRendering.DEFAULT, false, builder.myRequestContext
                 )

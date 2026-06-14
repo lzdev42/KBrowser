@@ -10,9 +10,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 object KBrowser {
-    private var configPath: String? = null
+    internal var storageDir: String? = null
+        private set
+    internal var useOsrMode: Boolean = true
+        private set
 
-    internal fun getConfigPath(): String? = configPath
+    internal fun getConfigPath(): String? = storageDir
+
+    // 全局唯一初始化入口
+    fun initializeConfig(storageDir: String, useOsr: Boolean = true) {
+        this.storageDir = storageDir
+        this.useOsrMode = useOsr
+    }
 
     private val _pages = MutableStateFlow<List<KBPage>>(emptyList())
     val pages: StateFlow<List<KBPage>> = _pages.asStateFlow()
@@ -30,13 +39,14 @@ object KBrowser {
      * initializeKBrowser()
      * ```
      */
+    @Deprecated("Use initializeConfig instead", ReplaceWith("initializeConfig(path)"))
     fun setConfigPath(path: String) {
-        this.configPath = path
+        initializeConfig(path)
     }
 
     suspend fun newPage(url: String? = null): KBPage {
-        val path = configPath
-            ?: throw IllegalStateException("KBrowser.setConfigPath() must be called before newPage()")
+        val path = storageDir
+            ?: throw IllegalStateException("KBrowser.initializeConfig() must be called before newPage()")
         val webView = withContext(Dispatchers.Main) {
             createHeadlessWebView(null, null)
         }

@@ -69,13 +69,23 @@ Package: JDK + JCEF
 
 ### 1. JVM 初始化 (Desktop)
 
-必须在调用 `application {}` **之前**进行初始化：
+必须在调用 `application {}` **之前**进行初始化。
+> ⚠️ **性能警告**：`KBrowser` 默认运行在 OSR (Off-Screen Rendering) 离屏渲染模式下，该模式支持 Compose 的任意矩阵变换，但会消耗较高的 CPU/GPU 资源。**针对高帧率动画、复杂 WebGL 渲染等对性能要求极高的场景，必须使用非 OSR 模式（即设置 `useOsr = false`）**。此渲染模式只能在程序刚启动时设置一次，中途不可更改。
 
 ```kotlin
-fun main() {
-    KBrowser.setConfigPath("/path/to/cache")
-    initializeKBrowser()  // 必须在任何 UI 启动前调用
+import kotlinx.coroutines.runBlocking
+
+fun main() = runBlocking {
+    // 1. 配置缓存目录与渲染模式（必须在程序启动时唯一确定）
+    KBrowser.initializeConfig(
+        storageDir = "/path/to/cache",
+        useOsr = false // 高性能场景请务必设置为 false (原生窗口模式)
+    )
+    
+    // 2. 异步初始化引擎
+    initializeKBrowser()  // 挂起函数，必须在任何 UI 启动前调用
  
+    // 3. 启动 Compose 应用
     application {
         Window(onCloseRequest = ::exitApplication) { App() }
     }

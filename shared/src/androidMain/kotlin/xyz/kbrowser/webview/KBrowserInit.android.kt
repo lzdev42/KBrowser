@@ -1,5 +1,5 @@
 package xyz.kbrowser.webview
 
-actual fun initializeKBrowser() {
+actual suspend fun initializeKBrowser() {
     // No-op on Android
 }

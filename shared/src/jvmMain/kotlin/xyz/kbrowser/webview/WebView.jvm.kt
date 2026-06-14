@@ -46,7 +46,7 @@ object OsrMode {
     private enum class State { UNKNOWN, OSR_OK, FALLBACK }
 
     /** 当前是否应该尝试 OSR */
-    fun shouldUseOsr(): Boolean = state != State.FALLBACK
+    fun shouldUseOsr(): Boolean = KBrowser.useOsrMode && state != State.FALLBACK
 
     /** 标记 OSR 已成功，后续直接走 OSR */
     fun markOk() { if (state == State.UNKNOWN) state = State.OSR_OK }
@@ -122,12 +122,15 @@ class JvmWebView(
             try {
                 val b = buildBrowser(useOsr = true)
                 OsrMode.markOk()
+                println("====== [KBrowser] JvmWebView Initialized with OSR Mode = TRUE ======")
                 b
             } catch (e: Exception) {
                 OsrMode.markFailed()
+                println("====== [KBrowser] JvmWebView OSR initialization failed, fallback to OSR Mode = FALSE ======")
                 buildBrowser(useOsr = false)
             }
         } else {
+            println("====== [KBrowser] JvmWebView Initialized with OSR Mode = FALSE ======")
             buildBrowser(useOsr = false)
         }
         

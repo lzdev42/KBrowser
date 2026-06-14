@@ -1,6 +1,7 @@
 package xyz.kbrowser
 
 import androidx.compose.animation.*
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +27,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import xyz.kbrowser.webview.KBWebView
 import xyz.kbrowser.webview.LoadingState
+import xyz.kbrowser.webview.KBrowser
+import xyz.kbrowser.webview.initializeKBrowser
+import xyz.kbrowser.webview.rememberKBWebView
 
 // 路由页面定义
 sealed interface AppScreen {
@@ -48,6 +52,10 @@ fun App() {
 
 @Composable
 fun DesktopApp() {
+    val scope = rememberCoroutineScope()
+    var isInitialized by remember { mutableStateOf(false) }
+    var isInitializing by remember { mutableStateOf(false) }
+    var chosenModeIsOsr by remember { mutableStateOf(true) }
     var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Home) }
 
     MaterialTheme(
@@ -67,34 +75,76 @@ fun DesktopApp() {
                     )
                 )
         ) {
-            when (currentScreen) {
-                AppScreen.Home -> HomeScreen(
-                    onNavigateToBrowser = { currentScreen = AppScreen.BrowserExample },
-                    onNavigateToWebView = { currentScreen = AppScreen.WebViewExample }
-                )
-                AppScreen.BrowserExample -> {
-                    val viewModel = remember { BrowserViewModel() }
-                    DisposableEffect(Unit) {
-                        onDispose {
-                            viewModel.state.value.page?.close()
+            if (!isInitialized) {
+                if (isInitializing) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(60.dp),
+                                strokeWidth = 4.dp
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Text(
+                                text = "正在加载浏览器内核...",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     }
-                    BrowserExampleScreen(
-                        viewModel = viewModel,
-                        onBack = { currentScreen = AppScreen.Home }
+                } else {
+                    InitSelectionScreen(
+                        onModeSelected = { useOsr ->
+                            isInitializing = true
+                            scope.launch {
+                                chosenModeIsOsr = useOsr
+                                val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
+                                KBrowser.initializeConfig(storageDir, useOsr = useOsr)
+                                initializeKBrowser()
+                                isInitialized = true
+                                isInitializing = false
+                            }
+                        }
                     )
                 }
-                AppScreen.WebViewExample -> {
-                    val viewModel = remember { WebViewExampleViewModel() }
-                    DisposableEffect(Unit) {
-                        onDispose {
-                            viewModel.state.value.page?.close()
+            } else {
+                if (chosenModeIsOsr) {
+                    when (currentScreen) {
+                        AppScreen.Home -> HomeScreen(
+                            onNavigateToBrowser = { currentScreen = AppScreen.BrowserExample },
+                            onNavigateToWebView = { currentScreen = AppScreen.WebViewExample }
+                        )
+                        AppScreen.BrowserExample -> {
+                            val viewModel = remember { BrowserViewModel() }
+                            DisposableEffect(Unit) {
+                                onDispose {
+                                    viewModel.state.value.page?.close()
+                                }
+                            }
+                            BrowserExampleScreen(
+                                viewModel = viewModel,
+                                onBack = { currentScreen = AppScreen.Home }
+                            )
+                        }
+                        AppScreen.WebViewExample -> {
+                            val viewModel = remember { WebViewExampleViewModel() }
+                            DisposableEffect(Unit) {
+                                onDispose {
+                                    viewModel.state.value.page?.close()
+                                }
+                            }
+                            WebViewExampleScreen(
+                                viewModel = viewModel,
+                                onBack = { currentScreen = AppScreen.Home }
+                            )
                         }
                     }
-                    WebViewExampleScreen(
-                        viewModel = viewModel,
-                        onBack = { currentScreen = AppScreen.Home }
-                    )
+                } else {
+                    PureNonOsrWebViewScreen()
                 }
             }
         }
@@ -1680,6 +1730,179 @@ fun ScreenshotPreview(bytes: ByteArray?, axTree: xyz.kbrowser.webview.AxTreeData
         } else {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("暂无截图数据，请在 [控制] Tab 中点击 [测试网页截图]", color = Color(0xFF888894), fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun PureNonOsrWebViewScreen() {
+    val webView = rememberKBWebView("https://webglsamples.org/aquarium/aquarium.html", null)
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .background(Color(0xFF1E1E24))
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "非 OSR 模式 (WebGL Aquarium)",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = "系统原生窗口渲染 - 无法覆盖 Compose UI",
+                color = Color.Gray,
+                fontSize = 12.sp
+            )
+        }
+        KBWebView(
+            webView = webView,
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+@Composable
+fun InitSelectionScreen(onModeSelected: (Boolean) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "KBrowser 渲染模式抉择",
+            style = MaterialTheme.typography.headlineLarge.copy(
+                fontWeight = FontWeight.Bold,
+                fontSize = 36.sp
+            ),
+            color = Color(0xFFE3F2FD),
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        
+        Text(
+            text = "请选择最契合您应用场景的底层渲染模式，启动后不可切换",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.Gray,
+            modifier = Modifier.padding(bottom = 40.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            horizontalArrangement = Arrangement.spacedBy(32.dp)
+        ) {
+            Card(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onModeSelected(true) }
+                    .border(1.dp, Brush.linearGradient(listOf(Color(0xFF64B5F6), Color(0xFF00E5FF))), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2129))
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFF1565C0), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "推荐 / 易开发",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "OSR (离屏渲染) 模式",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "• 完美融入 Compose 视图树\n• 支持叠加任意 Compose 弹窗与 UI 元素\n• 采用零拷贝极速内存共享绘制\n• 适用于需要复杂界面混排的应用",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFB0BEC5),
+                        lineHeight = 22.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        onClick = { onModeSelected(true) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5))
+                    ) {
+                        Text("以 OSR 模式启动", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { onModeSelected(false) }
+                    .border(1.dp, Brush.linearGradient(listOf(Color(0xFFB388FF), Color(0xFFEA80FC))), RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E2129))
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFF6A1B9A), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "极致性能",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "Non-OSR (原生窗口) 模式",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "• 独占系统底层物理窗口进行绘制\n• 强悍的三维渲染性能 (支持 WebGL 满帧)\n• 不支持直接在其上叠加 Compose 元素\n• 适用于独立的游戏、大屏数据可视化等",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFB0BEC5),
+                        lineHeight = 22.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        onClick = { onModeSelected(false) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8E24AA))
+                    ) {
+                        Text("以 非 OSR 模式启动", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
     }

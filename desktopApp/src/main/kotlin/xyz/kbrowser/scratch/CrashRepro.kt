@@ -7,7 +7,7 @@ import org.cef.browser.CefRendering
 fun main() {
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
     xyz.kbrowser.webview.KBrowser.setConfigPath(storageDir)
-    initializeKBrowser()
+    kotlinx.coroutines.runBlocking { initializeKBrowser() }
     println("Initializing KBCefApp...")
     val app = KBCefApp.getInstance()
     println("App initialized. Creating client...")
