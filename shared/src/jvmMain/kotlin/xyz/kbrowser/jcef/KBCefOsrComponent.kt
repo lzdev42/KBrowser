@@ -36,6 +36,19 @@ class KBCefOsrComponent : JPanel() {
     private val myScheduleResizeMs = AtomicLong(-1L)
     private val myScaleInitialized = AtomicBoolean(false)
 
+    /**
+     * 首帧同步快速通道标志（EDT 单线程访问，无需 volatile）。
+     *
+     * 背景：Compose/AWT 首次 layout 触发的首次 reshape 必然落入 100ms 节流窗口
+     * （now - myScheduleResizeMs ≈ 0 < RESIZE_DELAY_MS），导致 wasResized 被推迟。
+     * 若此时 addNotify 里的 invokeLater 又已用 0/默认尺寸通知过 CEF，
+     * CEF 会一直停留在初始大尺寸排版，直到下次真实拖拽窗口才会恢复。
+     *
+     * 此标志保证"首次有效 reshape 立即同步尺寸给 CEF"，绕过节流；
+     * 仅首帧生效，后续拖拽仍走 100ms 节流，不影响防崩溃逻辑。
+     */
+    private var myFirstResizeSynced = false
+
     init {
         preferredSize = Dimension(800, 600)
         background = Color.WHITE
@@ -157,6 +170,7 @@ class KBCefOsrComponent : JPanel() {
         myResizeAlarm?.stop()
         myResizeAlarm = null
         myScheduleResizeMs.set(-1L)
+        myFirstResizeSynced = false
         myScaleInitialized.set(false)
         myRenderHandler?.stopResizePusher()
     }
@@ -171,6 +185,9 @@ class KBCefOsrComponent : JPanel() {
      * - 快速拖拽时每次 reshape 只重置 alarm，不立即调用 wasResized
      * - 超过 RESIZE_DELAY_MS 没有新的 reshape 时才真正通知 JCEF
      * - 防止高频调用导致 native 层崩溃
+     *
+     * 首帧修复：首次有效 reshape（width/height > 0）立即同步，绕过 100ms 节流，
+     * 避免 Compose 首次 layout 与 CEF 视口同步的时序偏差。
      */
     @Suppress("DEPRECATION")
     override fun reshape(x: Int, y: Int, w: Int, h: Int) {
@@ -178,6 +195,18 @@ class KBCefOsrComponent : JPanel() {
         val alarm = myResizeAlarm ?: return   // addNotify 之前忽略
         val browser = myBrowser ?: return
         val handler = myRenderHandler ?: return
+
+        // 首帧快速通道：第一次拿到有效尺寸时立即同步给 CEF，不进入节流窗口。
+        // 否则首帧 reshape 必然落入 100ms 节流分支而被推迟，叠加 addNotify 的
+        // invokeLater 用默认尺寸占位，会导致 CEF 维持初始大尺寸排版。
+        if (!myFirstResizeSynced && w > 0 && h > 0) {
+            myFirstResizeSynced = true
+            browser.wasResized(0, 0)
+            handler.startResizePusher(browser, true)
+            // 同时记录起始时间，避免后续首个节流 alarm 立即判定为超时
+            myScheduleResizeMs.set(System.currentTimeMillis())
+            return
+        }
 
         val now = System.currentTimeMillis()
         if (!alarm.isRunning) {

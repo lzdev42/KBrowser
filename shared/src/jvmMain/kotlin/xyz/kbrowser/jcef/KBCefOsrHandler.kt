@@ -14,6 +14,7 @@ import java.awt.image.DataBufferInt
 import java.awt.image.VolatileImage
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JComponent
 import javax.swing.SwingUtilities
@@ -56,6 +57,17 @@ open class KBCefOsrHandler(
     private var myResizePusherAlarm: Timer? = null
     private var resizePushStarted: Long = 0
     private val RESIZE_PUSHER_TIMEOUT_MS: Long = 2000
+
+    /**
+     * onPaint 尺寸不匹配兜底节流字段。
+     *
+     * onPaint 在 CEF 渲染线程高频回调，若每次 mismatch 都直接 wasResized 会高频
+     * 触发 native 调用，存在崩溃风险。这里用时间节流（与 reshape 的 100ms 一致）
+     * + pending 标志（防止 invokeLater 在 EDT 堆积）双重保护。
+     */
+    private val myLastFallbackWasResizedMs = AtomicLong(0L)
+    @Volatile private var myFallbackResizePending = false
+    private val FALLBACK_RESIZE_THROTTLE_MS: Long = 100L
 
     /**
      * IME 光标监听器，用于将 CEF 的 OnImeCompositionRangeChanged/OnTextSelectionChanged
@@ -121,6 +133,11 @@ open class KBCefOsrHandler(
         val h = rect.height * pixelDensity
         if (w != width.toDouble() || h != height.toDouble()) {
             startResizePusher(browser, false)
+            // 兜底：尺寸不匹配时，除 invalidate 外，节流地再触发一次 wasResized。
+            // 仅 invalidate 只会重绘当前帧，不会让 CEF 重新读 viewRect 做自适应布局；
+            // 必须由 wasResized 才能推动 CEF 重新 layout。这能兜住 reshape 节流窗口
+            // 内或任何时序遗漏导致的视口不同步。节流到 100ms + pending 防堆积。
+            scheduleFallbackWasResized(browser)
         } else {
             stopResizePusher()
         }
@@ -284,6 +301,29 @@ open class KBCefOsrHandler(
             if (component.isShowing) {
                 startResizePusherImpl(browser, resetTimeout)
             }
+        }
+    }
+
+    /**
+     * onPaint 尺寸不匹配时的兜底 wasResized 触发（节流到 EDT）。
+     *
+     * 设计要点：
+     * - onPaint 在 CEF 渲染线程高频回调，直接 wasResized 有崩溃风险，必须转 EDT。
+     * - [myFallbackResizePending] 防止 invokeLater 在 EDT 队列堆积；已有一份待执行时跳过。
+     * - [myLastFallbackWasResizedMs] 时间节流（100ms），与 reshape 节流窗口对齐，
+     *   避免与 KBCefOsrComponent.reshape 的节流逻辑产生竞争或过度触发。
+     * - 组件未显示时跳过，避免向 CEF 传入无意义尺寸。
+     */
+    private fun scheduleFallbackWasResized(browser: CefBrowser) {
+        val now = System.currentTimeMillis()
+        if (now - myLastFallbackWasResizedMs.get() < FALLBACK_RESIZE_THROTTLE_MS) return
+        if (myFallbackResizePending) return
+        myFallbackResizePending = true
+        myLastFallbackWasResizedMs.set(now)
+        SwingUtilities.invokeLater {
+            myFallbackResizePending = false
+            if (!component.isShowing) return@invokeLater
+            browser.wasResized(0, 0)
         }
     }
 
