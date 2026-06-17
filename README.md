@@ -1,6 +1,6 @@
 # KBrowser
 
-> ⚠️ **Work in Progress** — APIs are evolving rapidly; backward compatibility is not guaranteed. Android and iOS platforms are not yet fully tested. Current automation capabilities primarily target the Desktop (JVM) platform.
+> **Work in Progress** — APIs are subject to change without notice. iOS and Android platforms have not been tested.
 
 English | [简体中文](README_zh.md)
 
@@ -13,55 +13,95 @@ English | [简体中文](README_zh.md)
 
 **KBrowser** is a Kotlin Multiplatform library that provides:
 
-1. **`KBWebView`** — A cross-platform WebView UI component for Android, iOS, and Desktop (JVM), with a unified API similar to `WKWebView` / Android `WebView`.
-2. **`KBPage` + `KBBrowser`** — A Playwright-inspired browser automation API for Desktop (JVM), built on Chrome DevTools Protocol (CDP). Supports headless mode, AXTree extraction, CSP-safe element location, anti-detection physical clicks, and screenshot capture.
-
----
-
-## Keywords
-
-`kotlin multiplatform` `compose multiplatform` `webview` `browser automation` `playwright` `CDP` `chrome devtools protocol` `JCEF` `JetBrains CEF` `headless browser` `web scraping` `AXTree` `accessibility tree` `KMP` `CMP` `desktop automation` `cross-platform webview` `kotlin browser` `kotlin scraper`
+1. **`KBWebView`** — A cross-platform WebView UI component for Android, iOS, and Desktop (JVM). It is a pure WebView abstraction with a unified API similar to `WKWebView` / Android `WebView`.
+2. **`KBPage`** — A Playwright-inspired browser automation wrapper around `KBWebView` for Desktop (JVM). Built on Chrome DevTools Protocol (CDP), it provides AXTree extraction, CSP-safe element location, anti-detection physical clicks, screenshot capture, and coroutine-based thread safety.
 
 ---
 
 ## Platform Status
 
-| Platform | KBWebView UI | Automation (KBPage) | Test Status |
-|----------|-------------|---------------------|-------------|
+| Platform | KBWebView UI | KBPage Automation | Test Status |
+|----------|-------------|-------------------|-------------|
 | **Desktop (JVM)** | ✅ | ✅ Primary target | ✅ Actively tested |
-| Android | ✅ | ⚠️ Partial | ❌ Not tested |
-| iOS | ✅ | ⚠️ Partial | ❌ Not tested |
+| Android | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
+| iOS | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
 
-> ⚠️ **Note**: Automation features (such as AXTree, CDP-based physical clicks, and screenshots) are **Desktop-only**. On Android and iOS, `KBLocator` falls back to JS injection.
+> Automation features (AXTree, CDP-based interactions, screenshots) are Desktop-only. On Android and iOS, `KBLocator` falls back to JS injection.
 
 ---
 
 ## Requirements
 
-### Desktop (JVM) — Required
+### Desktop (JVM)
 
-**Must use [JetBrains Runtime 25 (JBR) with JCEF](https://github.com/JetBrains/JetBrainsRuntime).** Standard JDK will not work.
+**Must use [JetBrains Runtime (JBR) with JCEF](https://github.com/JetBrains/JetBrainsRuntime).** Standard JDK will not work. The library uses JCEF directly from JBR — JCEF is not bundled.
 
 ```
-Distribution: JetBrains Runtime 25
+Distribution: JetBrains Runtime
 Package: JDK + JCEF
 ```
-
-The library does not bundle JCEF. Configure your IDE or build tool to use JBR 25 with JCEF as the project runtime.
 
 ### Other Platforms
 
 | Platform | Minimum Version |
-|----------|---------|
+|----------|-----------------|
 | Android | API 34 (Android 14) |
 | iOS | iOS 17.0+ |
 
 ---
 
-## Documentation
+## Setup
 
-- [Architecture Design](docs/KBrowser_Architecture_Design.md) — Coordinate system, platform internals, threading model
-- [API Reference](docs/KBrowser_API_Reference.md) — All APIs with descriptions and usage examples
+### 1. Add Dependency
+
+In `gradle/libs.versions.toml`:
+
+```toml
+[versions]
+kbrowser = "0.1.0-alpha31"
+
+[libraries]
+kbrowser = { module = "io.github.lzdev42:kbrowser", version.ref = "kbrowser" }
+```
+
+In your module's `build.gradle.kts`:
+
+```kotlin
+implementation(libs.kbrowser)
+```
+
+### 2. Configure JBR with JCEF
+
+Configure your IDE or build tool to use JBR with JCEF as the project runtime. In `compose.desktop` configuration, the following JVM arguments are required:
+
+```kotlin
+compose.desktop {
+    application {
+        jvmArgs += listOf(
+            "--enable-native-access=jcef",
+            "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+            "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+        )
+    }
+}
+```
+
+> **Note**: Without these JVM arguments, OSR mode will not support Chinese input.
+
+---
+
+## Rendering Modes (JVM Desktop)
+
+On JVM, JCEF supports two rendering modes. The mode is determined at initialization time via `KBrowser.initializeConfig(useOsr = ...)` and **cannot be changed after the application starts**.
+
+| Mode | `useOsr` | Overlay Compose UI | Event Handling | Performance |
+|------|----------|-------------------|----------------|-------------|
+| **Non-OSR (Native Window)** | `false` | ❌ Cannot overlay Compose UI on top of JCEF | ✅ Normal | ✅ Better |
+| **OSR (Off-Screen Rendering)** | `true` | ✅ Can overlay Compose UI on top of JCEF | ⚠️ Events are dispatched to the underlying JCEF view, not to overlay Compose components | Lower (higher CPU/GPU usage) |
+
+**Known Issue (OSR mode)**: In OSR mode, JCEF renders off-screen, allowing Compose UI to be layered on top. However, mouse and keyboard events are received by the underlying JCEF native view, not by the Compose overlay. This means interactive Compose components placed over the JCEF area will not respond to user input. This issue has not been investigated yet and is currently low priority.
+
+**Recommendation**: Use non-OSR mode (`useOsr = false`) unless you specifically need to overlay Compose UI on top of the browser. Non-OSR mode provides better rendering performance and correct event handling for the JCEF view itself.
 
 ---
 
@@ -69,30 +109,35 @@ The library does not bundle JCEF. Configure your IDE or build tool to use JBR 25
 
 ### 1. JVM Initialization (Desktop)
 
-Must be called **before** `application {}`. 
-> ⚠️ **Performance Note**: `KBrowser` runs in OSR (Off-Screen Rendering) mode by default, which supports Compose matrix transformations but consumes more CPU/GPU resources. **For high-performance scenarios (e.g., rendering complex WebGL, 60fps animations), you MUST set `useOsr = false`**. This mode selection is final and can only be set once during application startup.
+`KBrowser.initializeConfig()` and `initializeKBrowser()` must be called **before** `application {}`:
 
 ```kotlin
-import kotlinx.coroutines.runBlocking
+import xyz.kbrowser.webview.KBrowser
+import xyz.kbrowser.webview.initializeKBrowser
+import androidx.compose.ui.window.application
 
-fun main() = runBlocking {
-    // 1. Configure cache directory and rendering mode (Must be set exactly once at startup)
+fun main() {
+    // 1. Configure cache directory and rendering mode (must be called once at startup)
     KBrowser.initializeConfig(
-        storageDir = "/path/to/cache", 
-        useOsr = false // Set to false for High-Performance (Native Window) mode
+        storageDir = "/path/to/cache",
+        useOsr = false  // Set to true only if you need Compose UI overlay on top of JCEF
     )
-    
-    // 2. Initialize the engine asynchronously
-    initializeKBrowser()  // Suspend function, must come before any UI initialization
- 
-    // 3. Start your Compose application
+
+    // 2. Initialize JCEF engine (suspend function, must be called before any UI)
+    kotlinx.coroutines.runBlocking {
+        initializeKBrowser()
+    }
+
+    // 3. Start Compose application
     application {
         Window(onCloseRequest = ::exitApplication) { App() }
     }
 }
 ```
 
-### 2. UI Component (KBWebView)
+### 2. KBWebView — UI Component
+
+`KBWebView` is a pure WebView component. Use it when you need to display web content in your Compose UI:
 
 ```kotlin
 @Composable
@@ -100,9 +145,8 @@ fun BrowserScreen() {
     val webView = rememberKBWebView(initialUrl = "https://example.com")
 
     LaunchedEffect(webView) {
-        // Handle new window requests (e.g. window.open() or target="_blank")
         webView.onNewWindowRequest = { url ->
-            webView.loadUrl(url)  // Load in current webview, or open a new KBPage
+            webView.loadUrl(url)
         }
     }
 
@@ -117,37 +161,68 @@ fun BrowserScreen() {
 }
 ```
 
-### 3. Browser Automation (Desktop)
+### 3. KBPage — Browser Automation
+
+`KBPage` is a coroutine-based automation wrapper around `KBWebView`. It provides:
+- Suspend-based page navigation (`loadUrl` suspends until page finishes loading)
+- AXTree extraction and element location
+- Coordinate-based physical interactions (CDP)
+- JS-based DOM interactions
+- Thread-safe node caching with `Mutex` for writes and `@Volatile` for reads
 
 ```kotlin
-// Runs in headless mode, no UI needed
 val page = KBrowser.newPage(url = "https://example.com")
 
-// Intercept new page requests
 page.onNewPage = { url -> println("New page request: $url") }
 
-// Navigate and interact
 page.loadUrl("https://example.com/login")
 
-// Mode 1: Physical Coordinates Interaction (for anti-detection physical interactions)
-page.getByLabel("Username").fill("admin")      // Clicks coordinates to focus -> fills values
-page.getByLabel("Password").type("secret")     // Clicks coordinates to focus -> types key-by-key (anti-detection)
+// Coordinate mode (physical events, anti-detection)
+page.getByLabel("Username").fill("admin")
+page.getByLabel("Password").type("secret")
 page.getByRole("button", name = "Login").click()
 
-// Mode 2: JS Simulation Interaction (bypasses overlays/viewports, high stability)
-page.getByLabel("Username").jsFill("admin")    // Focuses via JS -> modifies value and dispatches events
-page.getByLabel("Password").jsType("secret")    // Focuses via JS -> types key-by-key (safe & stable)
-page.getByRole("button", name = "Login").jsClick() // Dispatches DOM click event directly
+// JS mode (DOM event simulation, bypasses occlusion)
+page.getByLabel("Username").jsFill("admin")
+page.getByLabel("Password").jsType("secret")
+page.getByRole("button", name = "Login").jsClick()
 
-// Extract accessibility tree (AXTree)
+// AXTree extraction
 val tree = page.getRawAxTree().getCleanedAxTree()
 println("Visible nodes: ${tree.visibleElements}")
 
-// Screenshot — CSS pixel output, aligned with AXTree coordinates
+// Screenshot
 val png = page.screenshot()
 
 page.close()
 ```
+
+### Threading Notes
+
+- All `suspend` methods of `KBPage` internally switch to `Dispatchers.Main` via `withContext`, so they can be called from any coroutine context.
+- The `KBPage` node cache uses `Mutex` for write serialization and `@Volatile` for read visibility. Read operations (e.g., `click`) will never deadlock with write operations (e.g., `getRawAxTree`).
+- CPU-intensive operations (`getCleanedAxTree`, `getViewportAxTree`) are pure Kotlin extension functions that execute in the caller's coroutine context without switching threads.
+
+---
+
+## Headless Mode (JVM Desktop)
+
+`KBrowser.newPage()` creates a headless page by instantiating `JvmWebView` with `isHeadless = true`. The implementation creates a transparent `JFrame` (opacity = 0, 1280×800) and mounts the JCEF component on it.
+
+**Limitations**:
+- This is not a true headless browser. A UI framework window is still created (with zero opacity).
+- Requires OSR mode (`useOsr = true`).
+- On Linux servers, a virtual display (e.g., `Xvfb`) is required.
+- This mode has not been thoroughly tested.
+
+---
+
+## Documentation
+
+- [Architecture Design](docs/KBrowser_Architecture_Design.md) — Coordinate system, platform internals, threading model
+- [API Reference](docs/KBrowser_API_Reference.md) — All APIs with descriptions and usage examples
+- [Selector Guide](docs/KBrowser_Selector_Guide.md) — CSS selector generation strategy and usage
+- [Snapshot Format](docs/KBrowser_Snapshot_Format.md) — KBrowser YAML Snapshot format for programmatic consumption
 
 ---
 

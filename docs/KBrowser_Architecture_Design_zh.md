@@ -10,7 +10,11 @@
 
 KBrowser 是一个 Compose Multiplatform (KMP) 库，提供跨平台的 WebView 组件与编程式浏览器自动化能力。所有公开类与接口统一使用 `KB` 前缀。
 
-框架分为两层：**UI 组件层**（`KBWebView` 接口 + `@Composable KBWebView`）负责网页渲染与展示；**自动化控制层**（`object KBrowser` 单例 + `KBPage`）负责协程化的编程式控制，屏蔽底层线程细节，可在任意后台协程中安全调用。JVM/Desktop 平台底层使用 JetBrains CEF (JCEF) Remote 模式，所有交互通过 Chrome DevTools Protocol (CDP) 完成，不依赖 AWT 鼠标事件。
+框架分为两层：
+- **UI 组件层**（`KBWebView` 接口 + `@Composable KBWebView`）：纯净的 WebView 组件，负责网页渲染与展示。
+- **自动化控制层**（`object KBrowser` 单例 + `KBPage`）：基于协程的 `KBWebView` 自动化封装，屏蔽底层线程细节，可在任意协程上下文中安全调用。
+
+JVM/Desktop 平台底层使用 JetBrains CEF (JCEF) Remote 模式，所有交互通过 Chrome DevTools Protocol (CDP) 完成，不依赖 AWT 鼠标事件。
 
 ## 2. 核心架构图
 
@@ -20,10 +24,9 @@ classDiagram
 
     class KBrowser {
         <<object Singleton>>
-        +BrowserConfig config
-        +StateFlow~List~KBPage~~ pages
-        +configure(config: BrowserConfig)
-        +newPage(url: String?, profile: KBProfile?) KBPage
+        +initializeConfig(storageDir: String?, useOsr: Boolean)
+        +newPage(url: String?) KBPage
+        +pages: StateFlow~List~KBPage~~
         +getPages() List~KBPage~
         +registerPage(page: KBPage)
         +unregisterPage(page: KBPage)
@@ -106,69 +109,73 @@ classDiagram
     KBLocator ..> KBPage
 ```
 
-## 3. 坐标系统说明
+## 3. 坐标系统
 
-**全局统一使用 CSS 文档像素（CSS document pixels）。**
+**全局统一使用 CSS 文档像素。**
 
-| 场景 | 实现 | 坐标说明 |
-|------|------|----------|
+| 场景 | 实现 | 说明 |
+|------|------|------|
 | 点击 / 悬停 | CDP `Input.dispatchMouseEvent` | 传入视口坐标：`viewportX = docX - scrollX`，`viewportY = docY - scrollY` |
-| 截图 | CDP `Page.captureScreenshot` → 按 DPR 缩小 | 输出图像尺寸 = CSS 像素尺寸，与坐标 1:1 对齐，无黑屏问题 |
+| 截图 | CDP `Page.captureScreenshot` → 按 DPR 缩小 | 输出图像尺寸 = CSS 像素尺寸，与坐标 1:1 对齐 |
 | AXTree 节点坐标 | CDP `Accessibility.getFullAXTree` + `DOM.getBoxModel` | `x/y/centerX/centerY` 均为 CSS 文档像素 |
-| Locator 定位 | JVM: CDP `DOM.querySelectorAll` / `DOM.performSearch` / `Accessibility.getFullAXTree`（无 JS 注入，CSP 安全）；Android/iOS: JS fallback | 返回坐标同为 CSS 文档像素 |
+| Locator 定位 | JVM: CDP `DOM.querySelectorAll` / `DOM.performSearch` / `Accessibility.getFullAXTree`（无 JS 注入，CSP 安全）；Android/iOS: JS 降级 | 返回坐标同为 CSS 文档像素 |
 
-> **注意**：不存在 DPR 缩放歧义。截图坐标与交互坐标完全一致，可直接用截图像素坐标驱动点击。
+> 不存在 DPR 缩放歧义。截图坐标与交互坐标完全一致。
 
-## 4. 交互模式与执行路径
+## 4. 渲染模式（JVM Desktop）
 
-KBrowser 提供两套并行的交互模式，在 `KBPage` 和 `KBLocator` 中均以不同的命名清晰区分：
+在 JVM 上，JCEF 支持两种渲染模式，初始化时确定：
+
+### 非 OSR 模式（原生窗口，`useOsr = false`）
+
+JCEF 创建原生重量级窗口组件。浏览器通过原生窗口系统直接渲染，性能更优。但重量级组件渲染在所有轻量级 Swing/Compose 组件之上，无法在其上方叠加 Compose UI。
+
+### OSR 模式（离屏渲染，`useOsr = true`）
+
+JCEF 渲染到离屏缓冲区，结果作为轻量级组件绘制。这允许 Compose UI 层叠在 JCEF 视图之上。但鼠标和键盘事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应用户输入。
+
+这是已知问题，优先级较低。如不需要在浏览器上方叠加 Compose UI，应使用非 OSR 模式以获得更好的性能和正确的事件处理。
+
+### 自动降级
+
+若 OSR 初始化失败（如缺少原生库），`OsrMode` 会自动降级到非 OSR 模式，整个应用生命周期内不再重试。对调用方透明。
+
+## 5. 交互模式与执行路径
+
+KBrowser 提供两套并行的交互模型，通过命名约定清晰区分：
 
 ### 坐标模式（物理事件）
 * **API 示例**：`page.click(refid)`，`locator.click()`，`page.clickByCoordinates(x, y)`
-* **机制**：
-  1. 通过缓存 (`refid`) 或选择器查询，获取目标节点中心点的 **CSS 文档坐标 (x, y)**。
-  2. 转换坐标为视口像素，通过 CDP 或平台 Touch 事件，向浏览器内核分发真实的物理指针事件 (Mouse/Touch Event)。
-* **优势**：
-  * 最真实的物理指针模拟，容易通过反爬虫检测。
-  * 适用于不需要/不支持 DOM 访问的纯像素交互（例如 Canvas/Flash 内部元素，基于截图坐标的交互）。
-* **劣势**：
-  * 容易受页面元素遮挡（如弹出框、侧边广告栏）或元素移出视口的影响。
+* **机制**：从缓存或定位器解析元素坐标，转换为视口坐标，通过 CDP 分发物理指针事件。
+* **优势**：真实物理指针模拟，可通过基本反爬虫检测。
+* **劣势**：容易受元素遮挡或元素移出视口的影响。
 
 ### JS 模式（DOM 事件模拟）
 * **API 示例**：`page.jsClick(refid)`，`locator.jsClick()`，`locator.jsFill("val")`
-* **机制**：
-  1. 根据缓存在 `nodeCache` 中的 `selector` 或 Locator 链式解析出的 `selector`，直接向页面注入执行 Javascript 代码。
-  2. JVM 端（JCEF）使用 CDP `Runtime.callFunctionOn` / `Runtime.evaluate` 触发事件，Android/iOS 平台通过 `evaluateJavascript` 触发。
-* **优势**：
-  * **高稳定性**：完全无视遮挡、视口外问题，直达 DOM 目标。
-  * **精准填充**：在 `jsFill`、`jsCheck`、`jsSelectOption` 场景下，绕过坐标点击聚焦过程，直接修改 DOM 属性并分发 change 事件。
-  * **混合能力**：`jsType` 和 `jsPress` 采用 "JS 精准聚焦 + 物理键盘输入" 的策略，兼顾定位稳定性和输入真实性。
-* **劣势**：
-  * 某些极严格的反爬虫系统可能会通过检测 `.isTrusted` 标志来拦截 JS 派发的事件。
+* **机制**：解析元素的 CSS 选择器，直接在 DOM 中执行 JavaScript。
+* **优势**：无视遮挡、视口外问题，精准修改值。
+* **劣势**：高级反爬虫系统可能通过 `.isTrusted` 标志检测合成事件。
 
----
-
-## 4. 平台要求
+## 6. 平台要求
 
 | 平台 | 最低版本 | WebView 实现 | 备注 |
 |------|----------|-------------|------|
-| JVM/Desktop | JBR 25 with JCEF | `JvmWebView` 包装 `JBCefBrowser` | 必须使用 JetBrains Runtime 25，框架不内置 JCEF 下载器 |
-| Android | API 34 (Android 14) | `AndroidWebView` 包装系统 `WebView` | 使用 androidx.webkit Multi-Profile API 实现沙盒隔离 |
-| iOS | iOS 17.0+ | `IosWebView` 包装 `WKWebView` | 使用 `WKWebsiteDataStore(forIdentifier:)` 实现持久化隔离 |
-
-**JVM 无头模式**：`JvmWebView` 在无头场景下自动创建透明 `JFrame`（1280×800）并将 JCEF 组件挂载其上，无需在 Compose 树中手动挂载。Linux 服务器需配置虚拟显示器（如 `Xvfb`）。
+| JVM/Desktop | 包含 JCEF 的 JBR | `JvmWebView` 封装 JCEF | 必须使用包含 JCEF 的 JetBrains Runtime，库不内置 JCEF |
+| Android | API 34 (Android 14) | `AndroidWebView` 封装系统 `WebView` | 使用 androidx.webkit Multi-Profile API |
+| iOS | iOS 17.0+ | `IosWebView` 封装 `WKWebView` | 使用 `WKWebsiteDataStore(forIdentifier:)` 实现隔离 |
 
 **初始化顺序（JVM 必须严格遵守）**：
 ```kotlin
-KBrowser.configure(BrowserConfig(storageDir = "/path/to/cache"))
-initializeKBrowser()   // 必须在 application{} 之前调用
+KBrowser.initializeConfig(storageDir = "/path/to/cache", useOsr = false)
+runBlocking { initializeKBrowser() }
 application { /* Compose UI */ }
 ```
 
-## 5. 线程模型
+## 7. 线程模型
 
-- `KBPage` 的所有 `suspend` 方法内部通过 `withContext(Dispatchers.Main)` 切回主线程执行，调用方可在任意协程上下文中使用。
+- `KBPage` 的所有 `suspend` 方法内部通过 `withContext(Dispatchers.Main)` 切换到主线程执行，可在任意协程上下文中安全调用。
 - 异步回调（JS 执行结果、页面加载完成）通过 `suspendCancellableCoroutine` 转为挂起，不阻塞线程。
-- CPU 密集型操作（AXTree 清洗 `getCleanedAxTree`、视口裁剪 `getViewportAxTree`）是纯 Kotlin 扩展函数，在调用方协程上下文执行，不占用主线程。
-- `KBBrowser.pages` 使用 `MutableStateFlow` + `update {}` 原子更新，多协程并发安全。
-- `loadUrl` 协程取消时自动调用 `webView.stopLoading()`，防止残余加载干扰后续操作。
+- CPU 密集型操作（`getCleanedAxTree`、`getViewportAxTree`）是纯 Kotlin 扩展函数，在调用方协程上下文执行，不切换线程。
+- `KBrowser.pages` 使用 `MutableStateFlow` + `update {}` 原子更新，多协程并发安全。
+- `loadUrl` 协程取消时自动调用 `webView.stopLoading()`。
+- `KBPage` 节点缓存：写操作通过 `Mutex` 串行化，读操作使用 `@Volatile` 保证可见性。读操作不会因写操作持锁而死锁。

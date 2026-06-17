@@ -13,12 +13,21 @@ English | [简体中文](KBrowser_API_Reference_zh.md)
 JVM platform must be initialized before calling `application {}`:
 
 ```kotlin
-// main.kt
+import xyz.kbrowser.webview.KBrowser
+import xyz.kbrowser.webview.initializeKBrowser
+import androidx.compose.ui.window.application
+
 fun main() {
-    // 1. Configure storage path
-    KBrowser.setConfigPath("/path/to/cache")
+    // 1. Configure storage path and rendering mode
+    KBrowser.initializeConfig(
+        storageDir = "/path/to/cache",
+        useOsr = false  // Set to true only if Compose UI overlay on JCEF is needed
+    )
+
     // 2. Initialize JCEF engine (must be called before any UI initialization)
-    initializeKBrowser()
+    kotlinx.coroutines.runBlocking {
+        initializeKBrowser()
+    }
 
     // 3. Start Compose application
     application {
@@ -29,31 +38,47 @@ fun main() {
 }
 ```
 
+### Required JVM Arguments
+
+The following JVM arguments must be added to the `compose.desktop` configuration. Without them, OSR mode will not support Chinese input:
+
+```kotlin
+compose.desktop {
+    application {
+        jvmArgs += listOf(
+            "--enable-native-access=jcef",
+            "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+            "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+        )
+    }
+}
+```
+
 ### KBrowser Object
 
 | Method / Property | Description |
-|------|------|
-| `KBrowser.setConfigPath(path: String)` | Sets the root directory for KBrowser data. KBrowser creates a `kbrowser_profile` subdirectory inside for its own data (cookies, cache). Must be called before `initializeKBrowser()` and `newPage()`. |
-| `KBrowser.newPage(url: String? = null): KBPage` | Creates a new headless browser page, optionally navigating to `url` on creation. KBrowser manages its own profile internally — no profile parameter needed. |
-| `KBrowser.pages: StateFlow<List<KBPage>>` | Reactive stream of all currently open pages. Collect with `collectAsState()` to observe page list changes. |
+|-------------------|-------------|
+| `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | Configures storage directory and rendering mode. Must be called before `initializeKBrowser()` and `newPage()`. `useOsr` determines the rendering mode (see Rendering Modes section in README) and cannot be changed after initialization. |
+| `KBrowser.newPage(url: String? = null): KBPage` | Creates a new headless browser page (see Headless Mode section). Optionally navigates to `url` on creation. |
+| `KBrowser.pages: StateFlow<List<KBPage>>` | Reactive stream of all currently open pages. |
 | `KBrowser.getPages(): List<KBPage>` | Synchronously returns a snapshot of all currently open pages. |
-| `KBrowser.shutdown()` | Closes all pages and performs global resource cleanup. Call on application exit. |
-| `KBrowser.registerPage(page: KBPage)` | Manually registers a `KBPage` into KBrowser's page list. Normally not needed — `newPage()` registers automatically. |
-| `KBrowser.unregisterPage(page: KBPage)` | Removes a page from KBrowser's page list. Normally not needed — `page.close()` handles this automatically. |
+| `KBrowser.shutdown()` | Closes all pages and performs global resource cleanup. |
+| `KBrowser.registerPage(page: KBPage)` | Manually registers a `KBPage`. Normally not needed — `newPage()` registers automatically. |
+| `KBrowser.unregisterPage(page: KBPage)` | Removes a page from the list. Normally not needed — `page.close()` handles this. |
 
 ---
 
 ## 2. KBWebView — UI Component Layer
 
-`KBWebView` is a platform-independent interface representing a web page rendering instance. It is created using `rememberKBWebView(initialUrl, profile?)` and rendered using the `@Composable KBWebView` component. The optional `profile` parameter accepts a `KBProfile` to isolate cookies and cache for that WebView instance.
+`KBWebView` is a platform-independent interface representing a pure WebView rendering instance. It is created using `rememberKBWebView(initialUrl, profile?)` and rendered using the `@Composable KBWebView` component. The optional `profile` parameter accepts a `KBProfile` to isolate cookies and cache for that WebView instance.
 
 ### StateFlows
 
 | Property | Type | Description |
-|------|------|------|
+|----------|------|-------------|
 | `currentUrl` | `StateFlow<String?>` | Current page URL |
 | `currentTitle` | `StateFlow<String?>` | Current page title |
-| `loadingState` | `StateFlow<LoadingState>` | Loading state — a sealed interface with subtypes: `Initializing` / `Loading` / `Finished` / `Error(errorCode, description, failingUrl)` |
+| `loadingState` | `StateFlow<LoadingState>` | Loading state — sealed interface: `Initializing` / `Loading` / `Finished` / `Error(errorCode, description, failingUrl)` |
 | `progress` | `StateFlow<Float>` | Loading progress (0.0f to 1.0f) |
 | `canGoBack` | `StateFlow<Boolean>` | Whether backward navigation is available |
 | `canGoForward` | `StateFlow<Boolean>` | Whether forward navigation is available |
@@ -61,60 +86,41 @@ fun main() {
 ### Navigation Methods
 
 | Method | Description |
-|------|------|
-| `loadUrl(url: String)` | Loads the specified network URL |
+|--------|-------------|
+| `loadUrl(url: String)` | Loads the specified URL |
 | `loadHtml(html: String)` | Loads the HTML string |
 | `reload()` | Reloads the current page |
-| `stopLoading()` | Stops current loading operations |
+| `stopLoading()` | Stops current loading |
 | `goBack()` | Navigates backward |
 | `goForward()` | Navigates forward |
 
 ### JS Interaction (Native <-> Web)
 
-KBrowser provides two ways for Web-to-Native communication: one-way callbacks and two-way handlers with Promise support.
+KBrowser provides two Web-to-Native communication mechanisms:
 
 | Method | Description |
-|------|------|
+|--------|-------------|
 | `evaluateJavascript(script, callback?)` | Evaluates Javascript from Kotlin, optionally returning the result via callback. |
-| `registerJsCallback(name, callback)` | **One-way (Fire-and-Forget)**: Registers a callback in Kotlin. JS calls it via `window.<name>(data)`. Ideal for logging or events where JS doesn't need a response. |
+| `registerJsCallback(name, callback)` | **One-way (Fire-and-Forget)**: Registers a callback. JS calls it via `window.<name>(data)`. No return value. |
 | `unregisterJsCallback(name)` | Unregisters a JS callback. |
-| `registerJsHandler(name, handler)` | **Two-way (Request-Response)**: Registers a handler that returns a String. KBrowser injects it as a Promise-based function in JS. JS can call `await window.<name>(data)` to get the result from Kotlin. |
+| `registerJsHandler(name, handler)` | **Two-way (Request-Response)**: Registers a handler that returns a String. Injected as a Promise-based function in JS. JS can call `await window.<name>(data)`. |
 | `unregisterJsHandler(name)` | Unregisters a JS handler. |
 
-**Example: Two-way Promise Handler**
-```kotlin
-// In Kotlin: Register the handler
-webView.registerJsHandler("getConfig") { jsonString ->
-    // Process request and return a string
-    """{"theme":"dark","version":"1.0"}"""
-}
-```
-```javascript
-// In JS: Await the result
-async function fetchConfig() {
-    try {
-        const configStr = await window.getConfig(JSON.stringify({ key: "theme" }));
-        console.log(JSON.parse(configStr).theme); // "dark"
-    } catch (e) {
-        console.error("Handler failed", e);
-    }
-}
-```
+> **Note**: Handlers execute on background threads. Do not operate UI directly inside handlers.
 
 ### Lifecycle & Others
 
 | Method | Description |
-|------|------|
-| `clearCacheAndCookies()` | Clears the cache and cookies of the current Profile |
+|--------|-------------|
+| `clearCacheAndCookies()` | Clears cache and cookies of the current Profile |
 | `destroy()` | Destroys the WebView and releases resources |
 | `setWebViewClient(client?)` | Sets callback for page loading events |
 | `setWebChromeClient(client?)` | Sets callback for JS dialogs / permissions |
-| `suspend takeScreenshot(): ByteArray?` | Takes screenshot via CDP, returning PNG in CSS pixel size. Solves black-screen issues |
+| `suspend takeScreenshot(): ByteArray?` | Takes screenshot via CDP, returning PNG in CSS pixel size |
 | `var onNewWindowRequest: ((url: String) -> Unit)?` | Callback for new tab/window requests; silently discarded if null |
-| `setInteractionLocked(locked: Boolean)` | Locks/unlocks user interaction. When `true`, overlays an AWT intercept layer on the browser component that blocks all user mouse/keyboard input; automation (CDP) is unaffected. The overlay renders a mouse trail and click ripple animations as visual feedback during automation. **JVM only; no-op on Android/iOS.** |
-| `updateMouseTrail(viewportX: Int, viewportY: Int)` | Updates the mouse trail position on the lock overlay (viewport CSS pixels). Normally no need to call manually — `clickByCoordinates`, `hoverByCoordinates`, and `dragByCoordinates` all call this automatically. **JVM only.** |
-
-> **Click ripple animation**: Regardless of whether `setInteractionLocked` is active, every coordinate-based automation click (`clickByCoordinates`, etc.) triggers a ripple animation at the click position as visual feedback. When locked, the animation renders on the overlay layer; when unlocked, the animation is invisible because the overlay is not mounted. To show the animation without blocking user input, call `setInteractionLocked(true)` first.
+| `setInteractionLocked(locked: Boolean)` | Locks/unlocks user interaction. When `true`, overlays an AWT intercept layer that blocks all user mouse/keyboard input; automation (CDP) is unaffected. The overlay renders mouse trail and click ripple animations. **JVM only; no-op on Android/iOS.** |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | Updates mouse trail position on the overlay (viewport CSS pixels). Called automatically by coordinate-based automation methods. **JVM only.** |
+| `var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)?` | Callback for file dialog requests. When set, file selection is delegated to the caller; when not set, file dialogs are silently cancelled. |
 
 ### Composable Usage Example
 
@@ -125,24 +131,19 @@ fun BrowserScreen() {
 
     LaunchedEffect(webView) {
         webView.setWebViewClient(object : KBWebViewClient {
-            override fun onPageStarted(url: String) { println("Start loading: $url") }
-            override fun onPageFinished(url: String) { println("Page finished: $url") }
-            override fun onReceivedError(error: Diagnostics) { println("Page failed: ${error.description}") }
+            override fun onPageStarted(url: String) {}
+            override fun onPageFinished(url: String) {}
+            override fun onReceivedError(error: Diagnostics) {}
         })
-        // Intercept new window requests
-        webView.onNewWindowRequest = { url -> println("New window: $url") }
+        webView.onNewWindowRequest = { url -> webView.loadUrl(url) }
     }
 
     Column(Modifier.fillMaxSize()) {
-        val url by webView.currentUrl.collectAsState()
-        Text("Current page: $url")
-
         KBWebView(webView = webView, modifier = Modifier.weight(1f))
-
         Row {
-            Button(onClick = { webView.goBack() }) { Text("Back") }
-            Button(onClick = { webView.goForward() }) { Text("Forward") }
-            Button(onClick = { webView.reload() }) { Text("Reload") }
+            Button(onClick = { webView.goBack() }) { Text("←") }
+            Button(onClick = { webView.goForward() }) { Text("→") }
+            Button(onClick = { webView.reload() }) { Text("↺") }
         }
     }
 }
@@ -152,13 +153,14 @@ fun BrowserScreen() {
 
 ## 3. KBPage — Automation Layer
 
-`KBPage` is a coroutine-based wrapper around `KBWebView`. All its methods are `suspend` functions and can be safely called from any coroutine context. It is created using `KBrowser.newPage()`.
+`KBPage` is a coroutine-based wrapper around `KBWebView`. All its `suspend` methods internally switch to `Dispatchers.Main`, so they can be safely called from any coroutine context. Created via `KBrowser.newPage()`.
 
 ### Properties
 
 | Property | Type | Description |
-|------|------|------|
-| `uuid` | `String` | Unique string ID auto-generated when the `KBPage` instance is created. Useful for identifying and tracking pages in multi-page scenarios. |
+|----------|------|-------------|
+| `uuid` | `String` | Unique string ID generated at creation |
+| `webView` | `KBWebView` | The underlying WebView instance |
 
 ### StateFlows
 
@@ -167,166 +169,154 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 ### Navigation
 
 | Method | Description |
-|------|------|
-| `suspend loadUrl(url: String)` | Loads the URL and suspends until `onPageFinished` is received. Automatically calls `stopLoading()` if cancelled. |
-| `suspend evaluateJavascript(script: String): String` | Evaluates Javascript, returning the result as a JSON string. |
-| `suspend clearCacheAndCookies()` | Clears cache and cookies. |
-| `suspend setCookieViaJs(cookieString: String)` | Injects cookie string via `document.cookie`. |
-| `suspend screenshot(): ByteArray?` | Takes screenshot via CDP, returning PNG bytes in CSS pixel size. |
-| `close()` | Destroys the underlying WebView. |
+|--------|-------------|
+| `suspend loadUrl(url: String)` | Loads the URL and suspends until `onPageFinished`. Cancelling calls `stopLoading()`. |
+| `suspend evaluateJavascript(script: String): String` | Evaluates Javascript, returns result as string |
+| `suspend clearCacheAndCookies()` | Clears cache and cookies |
+| `suspend setCookieViaJs(cookieString: String)` | Injects cookie via `document.cookie` |
+| `suspend screenshot(): ByteArray?` | CDP screenshot, PNG bytes in CSS pixel size |
+| `close()` | Destroys the underlying WebView |
 
 ### Interaction Lock & Visual Feedback
 
 | Method | Description |
-|------|------|
-| `setInteractionLocked(locked: Boolean)` | Locks/unlocks user interaction. When `true`, overlays an AWT intercept layer on the browser that blocks all user mouse/keyboard input while automation (CDP) continues to work normally. The overlay also renders mouse trail and click ripple animations. JVM only; no-op on Android/iOS. |
-| `updateMouseTrail(viewportX: Int, viewportY: Int)` | Updates the mouse trail position on the overlay (viewport CSS pixels). Called automatically by `clickByCoordinates`, `hoverByCoordinates`, and `dragByCoordinates`. |
+|--------|-------------|
+| `setInteractionLocked(locked: Boolean)` | Locks/unlocks user interaction. JVM only; no-op on Android/iOS. |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | Updates mouse trail position. Called automatically by coordinate-based methods. |
 
 ### AXTree (Accessibility Tree)
 
 | Method | Description |
-|------|------|
-| `suspend getRawAxTree(): AxTreeData` | Retrieves the full accessibility tree and updates the internal coordinates cache `nodeCache`. |
-| `suspend snapshot(): String` | Returns the current page as a KBrowser YAML Snapshot string. Fetches AXTree, applies minimal cleaning, converts to tree-structured YAML with text uplifted, coordinates, selectors, and occlusion info inline. Recommended for AI agents. |
-| `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension function to filter out technical noise (invisible elements, script/style tags, debug overlay). |
-| `AxTreeData.getViewportAxTree(): AxTreeData` | Extension function to crop nodes to the current viewport area. |
-| `AxTreeData.toYamlSnapshot(): String` | Converts the tree to KBrowser YAML Snapshot format — tree-structured, text-uplifted, with refid/selector/coordinates/occlusion inline. Recommended for AI agents. See [Snapshot Format Guide](KBrowser_Snapshot_Format.md). |
+|--------|-------------|
+| `suspend getRawAxTree(): AxTreeData` | Retrieves the full accessibility tree and updates the internal node cache |
+| `suspend snapshot(clean: Boolean = false): String` | Returns the current page as a KBrowser YAML Snapshot string |
+| `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension: filters out invisible elements, script/style tags, debug overlays |
+| `AxTreeData.getViewportAxTree(): AxTreeData` | Extension: crops nodes to the current viewport area |
+| `AxTreeData.toYamlSnapshot(): String` | Converts to KBrowser YAML Snapshot format. See [Snapshot Format](KBrowser_Snapshot_Format.md). |
 
-These two extension functions are pure Kotlin computations. They execute in the caller's coroutine context without switching threads.
+Extension functions are pure Kotlin computations that execute in the caller's coroutine context.
 
 ### Interaction (refid-based)
 
 Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNotFoundException` if the refid does not exist.
 
 #### Coordinate Mode (Physical System Events)
-These methods resolve the element's coordinates from the cache and dispatch real physical OS/CDP events.
 
 | Method | Description |
-|------|------|
-| `suspend click(refid: String)` | Resolves coordinates from the cache and dispatches a physical click event (may fail if the element is covered by an overlay). |
-| `suspend hover(refid: String)` | Resolves coordinates from the cache and dispatches a hover event. |
-| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | Resolves coordinates from the cache and dispatches a wheel scroll event. |
-| `suspend drag(startRefid: String, endRefid: String)` | Resolves start/end coordinates from the cache and dispatches a physical mouse drag event sequence. |
+|--------|-------------|
+| `suspend click(refid: String)` | Physical click on element coordinates |
+| `suspend hover(refid: String)` | Physical hover on element coordinates |
+| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | Physical scroll on element coordinates |
+| `suspend drag(startRefid: String, endRefid: String)` | Physical drag between start and end elements |
 
 #### JS Mode (DOM Event Simulation)
-These methods resolve the element's unique CSS selector and simulate actions directly inside the DOM via injected script. Bypasses coordinate calculation and overlays.
 
 | Method | Description |
-|------|------|
-| `suspend jsClick(refid: String)` | Locates element via selector and triggers `.click()`. |
-| `suspend jsHover(refid: String)` | Locates element via selector and dispatches `mouseover`, `mouseenter`, and `mousemove` DOM events. |
-| `suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)` | Locates element via selector and calls `.scrollBy(dx, dy)`. |
-| `suspend jsDrag(startRefid: String, endRefid: String)` | Locates start/end elements and simulates a `mousedown` -> `mousemove` -> `mouseup` drag event sequence. |
+|--------|-------------|
+| `suspend jsClick(refid: String)` | DOM `.click()` |
+| `suspend jsHover(refid: String)` | DOM `mouseover` / `mouseenter` / `mousemove` events |
+| `suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)` | DOM `.scrollBy(dx, dy)` |
+| `suspend jsDrag(startRefid: String, endRefid: String)` | DOM drag event sequence |
 
 ### Interaction (Coordinates-based, CSS document pixels)
-Dispatches physical system events based on raw coordinates.
 
 | Method | Description |
-|------|------|
-| `suspend clickByCoordinates(x: Int, y: Int)` | CDP `Input.dispatchMouseEvent` (automatically converts to viewport coordinates). |
-| `suspend hoverByCoordinates(x: Int, y: Int)` | CDP hover. |
-| `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)` | CDP wheel scroll. |
-| `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP simulated mouse drag event sequence. |
+|--------|-------------|
+| `suspend clickByCoordinates(x: Int, y: Int)` | CDP `Input.dispatchMouseEvent` |
+| `suspend hoverByCoordinates(x: Int, y: Int)` | CDP hover |
+| `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)` | CDP wheel scroll |
+| `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP drag sequence |
 
 ### Keyboard
 
 | Method | Description |
-|------|------|
-| `suspend press(key: KeyboardKey)` | Presses and releases a single key. |
-| `suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)` | Key combination, e.g. `Ctrl+A`. |
-| `suspend typeChar(char: Char)` | Types a single character. |
-| `suspend type(text: String)` | Types text character-by-character with a random delay of 30~150ms to simulate human typing. No focus management — caller is responsible for focusing the target element first. |
+|--------|-------------|
+| `suspend press(key: KeyboardKey)` | Presses and releases a single key |
+| `suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)` | Key combination, e.g. `Ctrl+A` |
+| `suspend typeChar(char: Char)` | Types a single character |
+| `suspend type(text: String)` | Types text character-by-character with 30~150ms random delay. Caller is responsible for focusing the target element first. |
+
+### File Upload
+
+| Method | Description |
+|--------|-------------|
+| `suspend uploadFile(refid: String, filePaths: List<String>)` | Sets files on `input[type=file]` via CDP `DOM.setFileInputFiles`. No dialog, no user gesture needed. **JVM only; throws `UnsupportedOperationException` on Android/iOS.** |
+| `suspend uploadFileBySelector(selector: String, filePaths: List<String>)` | Same as above but uses CSS selector directly, not dependent on AX tree cache. **JVM only.** |
 
 ### Locator Factory
 
 | Method | Description |
-|------|------|
-| `locator("css=...")` or `locator("xpath=...")` | CSS/XPath locator, defaults to CSS. |
-| `getByRole(role, name?)` | Locates by ARIA role, optional name filter. |
-| `getByText(text, exact)` | Locates by text content, `exact=true` for exact match. |
-| `getByLabel(label)` | Locates by associated label. |
-| `getByPlaceholder(text)` | Locates by placeholder attribute. |
-| `getByAltText(text)` | Locates by alt attribute. |
-| `getByTitle(title)` | Locates by title attribute. |
-| `getByTestId(testId)` | Locates by `data-testid` attribute. |
+|--------|-------------|
+| `locator("css=...")` or `locator("xpath=...")` | CSS/XPath locator, defaults to CSS |
+| `getByRole(role, name?)` | Locates by ARIA role, optional name filter |
+| `getByText(text, exact)` | Locates by text content |
+| `getByLabel(label)` | Locates by associated label |
+| `getByPlaceholder(text)` | Locates by placeholder attribute |
+| `getByAltText(text)` | Locates by alt attribute |
+| `getByTitle(title)` | Locates by title attribute |
+| `getByTestId(testId)` | Locates by `data-testid` attribute |
 
-### New Window
+### New Window & File Dialog
 
 | Property | Description |
-|------|------|
-| `var onNewPage: ((url: String) -> Unit)?` | Delegates to `webView.onNewWindowRequest`; triggered by both `target="_blank"` and `window.open()`. Silently discarded if null. |
+|----------|-------------|
+| `var onNewPage: ((url: String) -> Unit)?` | Delegates to `webView.onNewWindowRequest`. Silently discarded if null. |
+| `var onFileDialog: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)?` | Delegates to `webView.onFileDialogRequest`. JVM: set to handle file selection; not set: silently cancelled. Android/iOS: native file dialog. |
 
 ---
 
 ## 4. KBLocator — Declarative Locator
 
-`KBLocator` evaluates lazily, re-finding elements for every action. The JVM platform prefers CDP (no JS injection, CSP-safe), while Android/iOS fall back to JS.
+`KBLocator` evaluates lazily, re-finding elements for every action. JVM platform prefers CDP (no JS injection, CSP-safe); Android/iOS falls back to JS.
 
-To support various automation scenarios, `KBLocator` offers two distinct interaction families: **Coordinate Mode (Default)** and **JS Mode**.
-
-### Coordinate Mode (Default, Physical System Events)
-Locates the element and dispatches real physical events on its coordinates. May fail if elements are covered or out of view.
+### Coordinate Mode (Default)
 
 | Method | Description |
-|------|------|
-| `suspend click()` | Locates the element, computes its center coordinates, and dispatches a physical click. |
-| `suspend hover()` | Locates the element and dispatches a physical hover event. |
-| `suspend scroll(deltaX, deltaY)` | Locates the element and dispatches a physical scroll event. |
-| `suspend fill(value: String)` | Physical click to focus → waits 100ms → sets value via JS and fires DOM input/change events (fast fill). |
-| `suspend type(text: String)` | Physical click to focus → sends `Ctrl+A` → sends `Delete` → simulates physical keystrokes with delays (highest anti-detection input). |
-| `suspend focus()` | Physical click to focus on the element. |
-| `suspend check()` | Physical click on a checkbox or radio button. |
-| `suspend selectOption(value: String)` | Physical click to expand select dropdown → physical click on matching option. |
-| `suspend press(key: KeyboardKey)` | Physical click to focus → dispatches a physical keystroke. |
-| `suspend pressKeyCombination(modifier, key)` | Physical click to focus → dispatches physical modifier+key combination. |
+|--------|-------------|
+| `suspend click()` | Physical click on element center |
+| `suspend hover()` | Physical hover |
+| `suspend scroll(deltaX, deltaY)` | Physical scroll |
+| `suspend fill(value: String)` | Click to focus → wait 100ms → set value via JS and fire events |
+| `suspend type(text: String)` | Click to focus → Ctrl+A → Delete → character-by-character physical input |
+| `suspend focus()` | Click to focus |
+| `suspend check()` | Click on checkbox/radio |
+| `suspend selectOption(value: String)` | Click dropdown → click matching option |
+| `suspend press(key: KeyboardKey)` | Click to focus → physical keystroke |
+| `suspend pressKeyCombination(modifier, key)` | Click to focus → physical modifier+key |
 
-### JS Mode (DOM Event Simulation)
-Performs actions directly in the DOM using the element's unique CSS selector. Bypasses coordinate calculation and works even if elements are obscured.
+### JS Mode
 
 | Method | Description |
-|------|------|
-| `suspend jsClick()` | Triggers DOM node `.click()`. |
-| `suspend jsHover()` | Dispatches DOM `mouseover`, `mouseenter`, and `mousemove` events. |
-| `suspend jsScroll(deltaX, deltaY)` | Triggers DOM node `.scrollBy(dx, dy)`. |
-| `suspend jsFill(value: String)` | JS focus `.focus()` → waits 100ms → sets value via JS (no physical click, immune to overlays). |
-| `suspend jsType(text: String)` | JS focus `.focus()` → sends `Ctrl+A` → sends `Delete` → simulates physical keystrokes with delays (combines focus reliability with anti-detection typing). |
-| `suspend jsFocus()` | Triggers DOM node `.focus()`. |
-| `suspend jsCheck()` | Updates checkbox/radio state via JS, ensuring it is checked, and fires change event. |
-| `suspend jsSelectOption(value: String)` | Sets dropdown value directly via JS and fires change event. |
-| `suspend jsPress(key: KeyboardKey)` | JS focus `.focus()` → dispatches physical keystroke. |
-| `suspend jsPressKeyCombination(modifier, key)` | JS focus `.focus()` → dispatches physical modifier+key combination. |
+|--------|-------------|
+| `suspend jsClick()` | DOM `.click()` |
+| `suspend jsHover()` | DOM `mouseover`, `mouseenter`, `mousemove` events |
+| `suspend jsScroll(deltaX, deltaY)` | DOM `.scrollBy(dx, dy)` |
+| `suspend jsFill(value: String)` | JS `.focus()` → wait 100ms → set value via JS |
+| `suspend jsType(text: String)` | JS `.focus()` → Ctrl+A → Delete → physical keystrokes |
+| `suspend jsFocus()` | DOM `.focus()` |
+| `suspend jsCheck()` | JS: set checked + fire change event |
+| `suspend jsSelectOption(value: String)` | JS: set dropdown value + fire change event |
+| `suspend jsPress(key: KeyboardKey)` | JS focus → physical keystroke |
+| `suspend jsPressKeyCombination(modifier, key)` | JS focus → physical modifier+key |
 
 ### Query Methods
 
 | Method | Description |
-|------|------|
-| `suspend isVisible(): Boolean` | Whether the element is visible. |
-| `suspend getText(): String` | Gets text content of the element. |
-| `suspend getAttribute(name: String): String?` | Gets value of the specified attribute. |
-| `suspend count(): Int` | Number of matching elements. |
-| `suspend boundingBox(): Rect?` | Gets bounding box of the element (CSS document pixels). |
+|--------|-------------|
+| `suspend isVisible(): Boolean` | Whether the element is visible |
+| `suspend getText(): String` | Gets text content |
+| `suspend getAttribute(name: String): String?` | Gets attribute value |
+| `suspend count(): Int` | Number of matching elements |
+| `suspend boundingBox(): Rect?` | Bounding box in CSS document pixels |
 
 ### Chainable Filters
 
 | Method | Description |
-|------|------|
-| `filter(predicate: (LocateResult) -> Boolean): KBLocator` | Further filters the matched results. |
-| `nth(index: Int): KBLocator` | Selects the n-th match (0-indexed, -1 represents the last one). |
-| `first(): KBLocator` | Selects the first match. |
-| `last(): KBLocator` | Selects the last match. |
-
-### Chainable Examples
-
-```kotlin
-// Find the second of all visible "Submit" buttons and click it
-page.getByRole("button", name = "Submit")
-    .filter { it.isVisible }
-    .nth(1)
-    .click()
-
-// XPath locating + fill
-page.locator("xpath=//input[@name='email']").fill("user@example.com")
-```
+|--------|-------------|
+| `filter(predicate: (LocateResult) -> Boolean): KBLocator` | Further filters matched results |
+| `nth(index: Int): KBLocator` | Selects the n-th match (0-indexed, -1 = last) |
+| `first(): KBLocator` | Selects the first match |
+| `last(): KBLocator` | Selects the last match |
 
 ---
 
@@ -338,24 +328,24 @@ All coordinates are in **CSS document pixels**.
 
 ```kotlin
 data class AxNode(
-    val refid: String,          // Unique node ID for interactions like click(refid)
-    val tagName: String,        // HTML tag name, e.g. "button", "input"
-    val role: String,           // ARIA role, e.g. "button", "textbox"
+    val refid: String,          // Unique node ID for interactions
+    val tagName: String,        // HTML tag name
+    val role: String,           // ARIA role
     val id: String,             // DOM id attribute
     val className: String,      // CSS class
     val text: String,           // Node text content
-    val isVisible: Boolean,     // Whether it is visible in the viewport
-    val x: Int,                 // Node top-left X (CSS document pixels)
-    val y: Int,                 // Node top-left Y (CSS document pixels)
-    val width: Int,             // Node width
-    val height: Int,            // Node height
+    val isVisible: Boolean,     // Whether visible in viewport
+    val x: Int,                 // Top-left X (CSS document pixels)
+    val y: Int,                 // Top-left Y (CSS document pixels)
+    val width: Int,             // Width
+    val height: Int,            // Height
     val centerX: Int,           // Center X (CSS document pixels)
     val centerY: Int,           // Center Y (CSS document pixels)
-    val childCount: Int,        // Number of children nodes
-    val attributes: Map<String, String>, // Node attributes map
-    val iframeSrc: String?,     // Source URL if node is an iframe
-    val selector: String,       // Dynamically generated, unique CSS selector bound to this snapshot's DOM. Pass directly to page.locator(selector). Regenerated on every getRawAxTree() so it never goes stale. Resistant to anti-bot class-name obfuscation (falls back to structural nth-of-type path).
-    val occludedBy: String?     // refid of the element covering this node's center point, or null if unobstructed. When non-null, a coordinate click will hit the covering element instead. The AI agent should dismiss the covering element first (e.g. close an ad/modal), or use locator(selector).fill() to bypass coordinate hit-testing entirely.
+    val childCount: Int,        // Number of children
+    val attributes: Map<String, String>,
+    val iframeSrc: String?,
+    val selector: String,       // Dynamic unique CSS selector, regenerated per getRawAxTree()
+    val occludedBy: String?     // refid of covering element, or null
 )
 ```
 
@@ -363,14 +353,14 @@ data class AxNode(
 
 ```kotlin
 data class AxTreeData(
-    val url: String,            // Current page URL
-    val innerWidth: Int,        // Viewport width (CSS pixels)
-    val innerHeight: Int,       // Viewport height (CSS pixels)
-    val scrollX: Int,           // Horizontal scroll offset (CSS pixels)
-    val scrollY: Int,           // Vertical scroll offset (CSS pixels)
-    val documentWidth: Int,     // Total document width (CSS pixels)
-    val documentHeight: Int,    // Total document height (CSS pixels)
-    val devicePixelRatio: Double, // DPR, used internally for screenshots
+    val url: String,
+    val innerWidth: Int,
+    val innerHeight: Int,
+    val scrollX: Int,
+    val scrollY: Int,
+    val documentWidth: Int,
+    val documentHeight: Int,
+    val devicePixelRatio: Double,
     val totalElements: Int,
     val visibleElements: Int,
     val hiddenElements: Int,
@@ -383,17 +373,11 @@ data class AxTreeData(
 
 ```kotlin
 enum class KeyboardKey {
-    // Special Keys
     ENTER, TAB, ESCAPE, BACKSPACE, DELETE,
-    // Arrow Keys
     ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT,
-    // Modifiers
-    SHIFT, CONTROL, ALT, META,  // META = Mac Command
-    // Space & Navigation
+    SHIFT, CONTROL, ALT, META,
     SPACE, HOME, END, PAGE_UP, PAGE_DOWN, INSERT,
-    // Function Keys
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-    // Common Shortcut Letters
     A, C, V, X, S, Z
 }
 ```
@@ -412,74 +396,26 @@ data class Diagnostics(
 
 ### LoadingState
 
-`loadingState` is a `sealed interface`. Use `is` checks to handle each state:
-
 ```kotlin
 sealed interface LoadingState {
-    data object Initializing : LoadingState  // WebView just created, not yet loading
-    data object Loading : LoadingState       // Currently loading
-    data object Finished : LoadingState      // Load complete
-    data class Error(                        // Load failed
+    data object Initializing : LoadingState
+    data object Loading : LoadingState
+    data object Finished : LoadingState
+    data class Error(
         val errorCode: Int,
         val description: String,
         val failingUrl: String
     ) : LoadingState
 }
-
-// Usage example
-val state by webView.loadingState.collectAsState()
-when (state) {
-    is LoadingState.Loading  -> LinearProgressIndicator()
-    is LoadingState.Finished -> Text("Loaded")
-    is LoadingState.Error    -> Text("Error: ${(state as LoadingState.Error).description}")
-    else -> {}
-}
-```
-
-### KBSelectorType
-
-The selector type enum used internally by `KBLocator`. Set automatically by `KBPage` factory methods — normally no need to use directly:
-
-```kotlin
-enum class KBSelectorType {
-    CSS,         // CSS selector, e.g. ".btn-login"
-    XPATH,       // XPath, e.g. "//button[@id='submit']"
-    TEXT,        // Match by text content
-    ROLE,        // Match by ARIA role
-    LABEL,       // Match by associated label text
-    PLACEHOLDER, // Match by placeholder attribute
-    ALT_TEXT,    // Match by alt attribute
-    TITLE,       // Match by title attribute
-    TEST_ID      // Match by data-testid attribute
-}
-```
-
-### LocateResult
-
-The parameter type in `KBLocator.filter { }` callbacks, containing basic info about a located element:
-
-```kotlin
-data class LocateResult(
-    val centerX: Int,                        // Element center X (CSS document pixels)
-    val centerY: Int,                        // Element center Y (CSS document pixels)
-    val width: Int,                          // Element width
-    val height: Int,                         // Element height
-    val tagName: String,                     // HTML tag name, e.g. "button"
-    val role: String,                        // ARIA role
-    val text: String,                        // Element text content
-    val isVisible: Boolean,                  // Whether the element is visible
-    val attributes: Map<String, String>,     // Element attributes map
-    val selector: String = ""                // Unique CSS selector of the element, used for JS mode (e.g. jsClick)
-)
 ```
 
 ### KBProfile
 
-`KBProfile` is for use with `KBWebView` when you need isolated browser data (separate cookies/cache per WebView instance). `KBBrowser` manages its own profile internally — you don't need to pass `KBProfile` to `newPage()`.
-
 ```kotlin
 data class KBProfile(val profileId: String, val storageDir: String)
 ```
+
+Used with `KBWebView` for isolated browser data per instance. `KBrowser.newPage()` manages its own profile internally.
 
 ---
 
@@ -504,164 +440,11 @@ interface KBWebChromeClient {
     fun onJsPrompt(url: String, message: String, defaultValue: String?, callback: JsPromptResultCallback)
     fun onPermissionRequest(request: PermissionRequest)
 }
-
-interface JsResultCallback {
-    fun confirm()
-    fun cancel()
-}
-
-interface JsPromptResultCallback {
-    fun confirm(value: String?)
-    fun cancel()
-}
-
-// Permission request interface
-interface PermissionRequest {
-    val origin: String                       // Requesting origin domain
-    val resources: List<PermissionResource>  // List of requested permissions
-    fun grant()                              // Grant the permission
-    fun deny()                               // Deny the permission
-}
-
-enum class PermissionResource {
-    CAMERA,
-    MICROPHONE,
-    GEOLOCATION,
-    PROTECTED_MEDIA_IDENTIFIER,
-    AUDIO_CAPTURE,
-    VIDEO_CAPTURE
-}
 ```
 
 ---
 
-## 7. Full Examples
-
-### Example 1: UI Browser (KBWebView Composable)
-
-```kotlin
-@Composable
-fun BrowserApp() {
-    val webView = rememberKBWebView(initialUrl = "https://example.com")
-    val url by webView.currentUrl.collectAsState()
-    val loading by webView.loadingState.collectAsState()
-    var inputUrl by remember { mutableStateOf("") }
-
-    LaunchedEffect(webView) {
-        webView.setWebViewClient(object : KBWebViewClient {
-            override fun onPageStarted(url: String) {}
-            override fun onPageFinished(url: String) {}
-            override fun onReceivedError(error: Diagnostics) {
-                println("Error ${error.errorCode}: ${error.description}")
-            }
-        })
-        webView.onNewWindowRequest = { newUrl ->
-            // Load in the current webview instead of opening a new window
-            webView.loadUrl(newUrl)
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp)) {
-            TextField(
-                value = inputUrl,
-                onValueChange = { inputUrl = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Enter URL") }
-            )
-            Button(onClick = { webView.loadUrl(inputUrl) }) { Text("Go") }
-        }
-
-        if (loading == LoadingState.Loading) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-
-        KBWebView(webView = webView, modifier = Modifier.weight(1f))
-
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Button(onClick = { webView.goBack() }) { Text("←") }
-            Button(onClick = { webView.goForward() }) { Text("→") }
-            Button(onClick = { webView.reload() }) { Text("Reload") }
-        }
-    }
-}
-```
-
-### Example 2: Headless Automation (KBPage Coroutine Pipeline)
-
-```kotlin
-suspend fun runAutomation() {
-    // Initialization (done in main.kt, shown here for illustration)
-    // KBrowser.setConfigPath("/tmp/kbrowser")
-    // initializeKBrowser()
-
-    val page = KBrowser.newPage(url = "https://example.com/login")
-
-    try {
-        // Intercept new window requests
-        page.onNewPage = { url ->
-            println("New page request: $url")
-            // To handle: val newPage = KBrowser.newPage(url)
-        }
-
-        // Wait for page loading to complete
-        page.loadUrl("https://example.com/login")
-
-        // Option 1: Use Locator (Recommended, CSP-safe)
-        page.getByLabel("Username").fill("admin")
-        page.getByLabel("Password").type("secret123")  // Physical typing, anti-detection
-        page.getByRole("button", name = "Login").click()
-
-        // Wait for dashboard loading
-        page.loadUrl("https://example.com/dashboard")
-
-        // Option 2: Use AXTree (Accessibility Tree)
-        val rawTree = page.getRawAxTree()
-        val cleanTree = rawTree.getCleanedAxTree()
-        val viewportTree = cleanTree.getViewportAxTree()
-
-        println("Visible elements in viewport: ${viewportTree.visibleElements}")
-
-        // Find the first link and click it
-        val firstLink = viewportTree.nodes.firstOrNull { it.role == "link" }
-        if (firstLink != null) {
-            // Option A: refid coordinate click
-            page.click(firstLink.refid)
-
-            // Option B: use the node's dynamically-generated selector (anti-bot resistant)
-            // page.locator(firstLink.selector).click()
-        }
-
-        // Find an input and fill it via its selector
-        val searchInput = viewportTree.nodes.firstOrNull { it.role == "textbox" }
-        if (searchInput != null) {
-            page.locator(searchInput.selector).type("search terms")
-        }
-
-        // Take a screenshot (CSS pixels, aligned with coordinate system)
-        val png = page.screenshot()
-        if (png != null) {
-            File("/tmp/screenshot.png").writeBytes(png)
-            println("Screenshot saved, matches coordinates 1:1")
-        }
-
-        // Keyboard operations example
-        page.locator("css=.search-input").click()
-        page.press(KeyboardKey.CONTROL)  // Press modifier key
-        page.pressKeyCombination(KeyboardKey.CONTROL, KeyboardKey.A)  // Select all (Ctrl+A)
-        page.type("New search terms")
-
-    } catch (e: ElementNotFoundException) {
-        println("Element not found: ${e.message}")
-    } finally {
-        page.close()
-    }
-}
-```
-
----
-
-## 8. Debug Utilities
+## 7. Debug Utilities
 
 ### showScreenshotPreview
 
@@ -669,14 +452,7 @@ suspend fun runAutomation() {
 fun showScreenshotPreview(bytes: ByteArray)
 ```
 
-On JVM, opens a standalone Swing preview window displaying the screenshot. Moving the mouse over the window shows real-time 1:1 CSS document pixel coordinates in the title bar — useful for debugging click coordinates. **JVM only; no-op on Android/iOS.**
-
-```kotlin
-val png = page.screenshot()
-if (png != null) {
-    showScreenshotPreview(png)  // Opens preview window with live coordinate display
-}
-```
+On JVM, opens a standalone Swing preview window displaying the screenshot. Mouse movement shows real-time CSS document pixel coordinates in the title bar. **JVM only; no-op on Android/iOS.**
 
 ### JcefChecker
 
@@ -686,10 +462,4 @@ object JcefChecker {
 }
 ```
 
-Checks whether the current JDK is a JetBrains Runtime (JBR) with JCEF support. The `KBWebView` Composable checks this internally and shows an error message instead of crashing when `false`. You can also check it at startup to show a friendly prompt:
-
-```kotlin
-if (!JcefChecker.isJcefAvailable) {
-    println("Please switch the SDK to JBR 25 with JCEF")
-}
-```
+Checks whether the current JDK is JetBrains Runtime with JCEF support. The `KBWebView` Composable checks this internally and shows an error message when `false`.

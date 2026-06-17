@@ -6,7 +6,7 @@
 
 ## 概述
 
-`AxTreeData.toYamlSnapshot()` 将 AXTree 转换为人类和 AI 都易读的文本格式。
+`AxTreeData.toYamlSnapshot()` 将 AXTree 转换为人类可读的文本格式。
 
 相比原始 JSON，这个格式：
 - **token 更少**：树形结构天然压缩，子节点文本上浮后节点数大幅减少
@@ -69,7 +69,7 @@
 
 ---
 
-## AI 使用指南
+## 程序化使用指南
 
 ### 操作节点
 
@@ -120,7 +120,7 @@ page.locator(targetNode.selector).jsClick()
 ```kotlin
 val tree = page.getRawAxTree()
 
-// 获取 YAML snapshot（推荐给 AI 使用）
+// 获取 YAML snapshot
 val snapshot = tree.toYamlSnapshot()
 println(snapshot)
 
@@ -135,11 +135,11 @@ val json = Json { prettyPrint = true }.encodeToString(AxTreeData.serializer(), t
 | | 原始 JSON | YAML Snapshot |
 |--|--|--|
 | token 量 | ~4000（76节点） | ~800（树形合并后） |
-| 图标按钮语义 | `"text": ""` 空，AI 看不懂 | 子节点文本上浮，显示 `"APP扫码登录"` |
+| 图标按钮语义 | `"text": ""` 空，无法理解 | 子节点文本上浮，显示 `"APP扫码登录"` |
 | placeholder | 藏在 `attributes` 里 | 直接显示 `[placeholder:手机号]` |
-| 父子关系 | 无，AI 靠坐标猜 | 缩进直接表达 |
+| 父子关系 | 无，需靠坐标推断 | 缩进直接表达 |
 | 遮挡信息 | `"occludedBy": "r88"` | `[occludedBy:@r88]` 内联显示 |
 | 机器解析 | 方便 | 不适合 |
-| AI 理解 | 需要推断 | 直接读懂 |
+| 可读性 | 需要推断 | 直接读懂 |
 
-两种格式都保留，按需使用：AI 决策用 `toYamlSnapshot()`，精确坐标查询用原始 JSON。
+两种格式都保留，按需使用：程序化消费用 `toYamlSnapshot()`，精确坐标查询用原始 JSON。

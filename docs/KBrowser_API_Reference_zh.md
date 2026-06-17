@@ -4,7 +4,7 @@
 
 [English](KBrowser_API_Reference.md) | 简体中文
 
-> **坐标系统**：全文所有坐标均为 **CSS 文档像素** (CSS document pixels)，截图与交互坐标完全一致。
+> **坐标系统**：全文所有坐标均为 **CSS 文档像素**，截图与交互坐标完全一致。
 
 ---
 
@@ -13,12 +13,21 @@
 JVM 平台必须在 `application {}` 之前完成初始化：
 
 ```kotlin
-// main.kt
+import xyz.kbrowser.webview.KBrowser
+import xyz.kbrowser.webview.initializeKBrowser
+import androidx.compose.ui.window.application
+
 fun main() {
-    // 1. 配置存储路径
-    KBrowser.setConfigPath("/path/to/cache")
+    // 1. 配置存储路径与渲染模式
+    KBrowser.initializeConfig(
+        storageDir = "/path/to/cache",
+        useOsr = false  // 仅在需要在 JCEF 上叠加 Compose UI 时设为 true
+    )
+
     // 2. 初始化 JCEF 引擎（必须在任何 UI 初始化之前调用）
-    initializeKBrowser()
+    kotlinx.coroutines.runBlocking {
+        initializeKBrowser()
+    }
 
     // 3. 启动 Compose 应用
     application {
@@ -29,31 +38,47 @@ fun main() {
 }
 ```
 
+### 必需的 JVM 参数
+
+必须在 `compose.desktop` 配置中添加以下 JVM 参数。不加这些参数，OSR 模式下无法输入中文：
+
+```kotlin
+compose.desktop {
+    application {
+        jvmArgs += listOf(
+            "--enable-native-access=jcef",
+            "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+            "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+        )
+    }
+}
+```
+
 ### KBrowser 对象
 
 | 方法 / 属性 | 说明 |
-|------|------|
-| `KBrowser.setConfigPath(path: String)` | 设置 KBrowser 数据的根目录。KBrowser 会在该目录下自动创建 `kbrowser_profile` 子目录，用于存储自身数据（Cookie、缓存）。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。 |
-| `KBrowser.newPage(url: String? = null): KBPage` | 创建一个新的无头浏览器页面，可选在创建时导航到 `url`。KBrowser 内部自动管理 Profile，无需传入 Profile 参数。 |
-| `KBrowser.pages: StateFlow<List<KBPage>>` | 当前所有打开页面的响应式流，可用 `collectAsState()` 监听页面列表变化。 |
-| `KBrowser.getPages(): List<KBPage>` | 同步获取当前所有打开页面的快照列表。 |
-| `KBrowser.shutdown()` | 关闭所有页面并执行全局资源清理。应用退出时调用。 |
-| `KBrowser.registerPage(page: KBPage)` | 手动将一个 `KBPage` 注册到 KBrowser 的页面列表。通常无需手动调用，`newPage()` 会自动注册。 |
-| `KBrowser.unregisterPage(page: KBPage)` | 从 KBrowser 的页面列表中移除指定页面。通常无需手动调用，`page.close()` 会自动处理。 |
+|------------|------|
+| `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | 配置存储目录与渲染模式。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。`useOsr` 决定渲染模式（见 README 渲染模式章节），初始化后不可更改。 |
+| `KBrowser.newPage(url: String? = null): KBPage` | 创建无头浏览器页面（见无头模式章节），可选在创建时导航到 `url`。 |
+| `KBrowser.pages: StateFlow<List<KBPage>>` | 当前所有打开页面的响应式流 |
+| `KBrowser.getPages(): List<KBPage>` | 同步获取当前所有打开页面的快照 |
+| `KBrowser.shutdown()` | 关闭所有页面并执行全局资源清理 |
+| `KBrowser.registerPage(page: KBPage)` | 手动注册页面。通常无需调用，`newPage()` 自动注册。 |
+| `KBrowser.unregisterPage(page: KBPage)` | 从列表移除页面。通常无需调用，`page.close()` 自动处理。 |
 
 ---
 
 ## 2. KBWebView — UI 组件层
 
-`KBWebView` 是平台无关的接口，代表一个网页渲染实例。通过 `rememberKBWebView(initialUrl, profile?)` 创建，通过 `@Composable KBWebView` 挂载展示。`profile` 参数可选，传入 `KBProfile` 可为该 WebView 实例隔离独立的 Cookie/缓存存储。
+`KBWebView` 是平台无关的纯净 WebView 接口。通过 `rememberKBWebView(initialUrl, profile?)` 创建，通过 `@Composable KBWebView` 挂载。`profile` 参数可选，传入 `KBProfile` 可为该实例隔离 Cookie/缓存。
 
-### 状态流 (StateFlow)
+### 状态流
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
 | `currentUrl` | `StateFlow<String?>` | 当前页面 URL |
 | `currentTitle` | `StateFlow<String?>` | 当前页面标题 |
-| `loadingState` | `StateFlow<LoadingState>` | 加载状态，值为 `LoadingState` 的子类型：`Initializing`（初始化中）/ `Loading`（加载中）/ `Finished`（加载完成）/ `Error(errorCode, description, failingUrl)`（加载失败） |
+| `loadingState` | `StateFlow<LoadingState>` | 加载状态：`Initializing` / `Loading` / `Finished` / `Error(errorCode, description, failingUrl)` |
 | `progress` | `StateFlow<Float>` | 加载进度 0.0f ~ 1.0f |
 | `canGoBack` | `StateFlow<Boolean>` | 是否可后退 |
 | `canGoForward` | `StateFlow<Boolean>` | 是否可前进 |
@@ -62,44 +87,24 @@ fun main() {
 
 | 方法 | 说明 |
 |------|------|
-| `loadUrl(url: String)` | 加载网络地址 |
+| `loadUrl(url: String)` | 加载 URL |
 | `loadHtml(html: String)` | 加载 HTML 字符串 |
-| `reload()` | 刷新当前页面 |
+| `reload()` | 刷新 |
 | `stopLoading()` | 停止加载 |
 | `goBack()` | 后退 |
 | `goForward()` | 前进 |
 
-### JS 交互 (Native <-> Web)
-
-KBrowser 提供了两种从 Web 前端调用 Native (Kotlin) 的方式：单向通知与双向 Promise 请求。
+### JS 交互（Native <-> Web）
 
 | 方法 | 说明 |
 |------|------|
-| `evaluateJavascript(script, callback?)` | 从 Kotlin 主动执行 JS，结果可选地通过 callback 返回 |
-| `registerJsCallback(name, callback)` | **单向通知 (Fire-and-Forget)**：注册后 JS 通过 `window.<name>(data)` 调用，无返回值。适用于埋点、日志、事件触发等场景。 |
+| `evaluateJavascript(script, callback?)` | 从 Kotlin 执行 JS，结果可选通过 callback 返回 |
+| `registerJsCallback(name, callback)` | **单向通知**：注册后 JS 通过 `window.<name>(data)` 调用，无返回值 |
 | `unregisterJsCallback(name)` | 注销 JS 单向回调 |
-| `registerJsHandler(name, handler)` | **双向请求 (Request-Response)**：注册一个有返回值的 Handler。底层封装了 Promise，JS 可直接 `await window.<name>(data)` 获取 Kotlin 返回的结果。 |
+| `registerJsHandler(name, handler)` | **双向请求**：注册有返回值的 Handler。JS 可 `await window.<name>(data)` 获取结果 |
 | `unregisterJsHandler(name)` | 注销 JS 双向请求 Handler |
 
-**使用示例：双向 Promise 请求**
-```kotlin
-// Kotlin 端：注册一个有返回值的处理函数
-webView.registerJsHandler("getConfig") { jsonString ->
-    // 解析前端参数并返回结果
-    """{"theme":"dark","version":"1.0"}"""
-}
-```
-```javascript
-// JS 前端侧：像调现代 API 一样优雅地获取结果
-async function fetchConfig() {
-    try {
-        const configStr = await window.getConfig(JSON.stringify({ key: "theme" }));
-        console.log(JSON.parse(configStr).theme); // "dark"
-    } catch (e) {
-        console.error("请求失败", e);
-    }
-}
-```
+> **注意**：Handler 在后台线程执行，不要在其中直接操作 UI。
 
 ### 生命周期与其他
 
@@ -109,12 +114,11 @@ async function fetchConfig() {
 | `destroy()` | 销毁 WebView，释放资源 |
 | `setWebViewClient(client?)` | 设置页面加载回调 |
 | `setWebChromeClient(client?)` | 设置 JS 对话框 / 权限回调 |
-| `suspend takeScreenshot(): ByteArray?` | CDP 截图，输出 CSS 像素大小的 PNG，无黑屏问题 |
+| `suspend takeScreenshot(): ByteArray?` | CDP 截图，输出 CSS 像素大小的 PNG |
 | `var onNewWindowRequest: ((url: String) -> Unit)?` | 新标签页/新窗口请求回调；不设置时静默丢弃 |
-| `setInteractionLocked(locked: Boolean)` | 锁定/解锁用户交互。`true` 时在浏览器组件上覆盖 AWT 拦截层，阻止用户所有鼠标/键盘输入；自动化操作（CDP）不受影响。遮罩层同时渲染鼠标轨迹和点击扩散动画，提供自动化过程的视觉反馈。**仅 JVM 有效，Android/iOS 为空实现。** |
-| `updateMouseTrail(viewportX: Int, viewportY: Int)` | 在锁定遮罩上更新鼠标轨迹位置，坐标为视口 CSS 像素。通常无需手动调用——`clickByCoordinates`、`hoverByCoordinates`、`dragByCoordinates` 均会自动调用。**仅 JVM 有效。** |
-
-> **点击扩散动画**：无论是否调用 `setInteractionLocked`，只要通过坐标执行自动化点击（`clickByCoordinates` 等），都会在点击位置触发圆圈扩散动画，作为操作的视觉反馈。锁定状态下动画渲染在遮罩层上；未锁定时动画不可见（遮罩层未挂载）。如需在未锁定状态下也显示动画，可先调用 `setInteractionLocked(true)`。
+| `setInteractionLocked(locked: Boolean)` | 锁定/解锁用户交互。`true` 时覆盖 AWT 拦截层，阻止用户输入；自动化操作不受影响。渲染鼠标轨迹和点击动画。**仅 JVM 有效。** |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | 更新鼠标轨迹位置。坐标自动化方法自动调用。**仅 JVM 有效。** |
+| `var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)?` | 文件对话框回调。设置后由调用方处理文件选择；不设置时静默取消。 |
 
 ### Composable 用法示例
 
@@ -125,24 +129,19 @@ fun BrowserScreen() {
 
     LaunchedEffect(webView) {
         webView.setWebViewClient(object : KBWebViewClient {
-            override fun onPageStarted(url: String) { println("开始加载: $url") }
-            override fun onPageFinished(url: String) { println("加载完成: $url") }
-            override fun onReceivedError(error: Diagnostics) { println("加载失败: ${error.description}") }
+            override fun onPageStarted(url: String) {}
+            override fun onPageFinished(url: String) {}
+            override fun onReceivedError(error: Diagnostics) {}
         })
-        // 拦截新窗口请求
-        webView.onNewWindowRequest = { url -> println("新窗口: $url") }
+        webView.onNewWindowRequest = { url -> webView.loadUrl(url) }
     }
 
     Column(Modifier.fillMaxSize()) {
-        val url by webView.currentUrl.collectAsState()
-        Text("当前页面: $url")
-
         KBWebView(webView = webView, modifier = Modifier.weight(1f))
-
         Row {
-            Button(onClick = { webView.goBack() }) { Text("后退") }
-            Button(onClick = { webView.goForward() }) { Text("前进") }
-            Button(onClick = { webView.reload() }) { Text("刷新") }
+            Button(onClick = { webView.goBack() }) { Text("←") }
+            Button(onClick = { webView.goForward() }) { Text("→") }
+            Button(onClick = { webView.reload() }) { Text("↺") }
         }
     }
 }
@@ -152,13 +151,14 @@ fun BrowserScreen() {
 
 ## 3. KBPage — 自动化控制层
 
-`KBPage` 是对 `KBWebView` 的协程封装，所有方法均为 `suspend`，可在任意协程上下文中安全调用。通过 `KBrowser.newPage()` 创建。
+`KBPage` 是基于协程的 `KBWebView` 自动化封装。所有 `suspend` 方法内部通过 `withContext(Dispatchers.Main)` 切换到主线程，可在任意协程上下文中安全调用。通过 `KBrowser.newPage()` 创建。
 
 ### 属性
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `uuid` | `String` | 每个 `KBPage` 实例创建时自动生成的唯一字符串 ID，可用于多页面场景下的标识与追踪。 |
+| `uuid` | `String` | 创建时自动生成的唯一 ID |
+| `webView` | `KBWebView` | 底层 WebView 实例 |
 
 ### 状态流
 
@@ -168,133 +168,134 @@ fun BrowserScreen() {
 
 | 方法 | 说明 |
 |------|------|
-| `suspend loadUrl(url: String)` | 加载 URL，挂起直到 `onPageFinished`；协程取消时自动 `stopLoading()` |
-| `suspend evaluateJavascript(script: String): String` | 执行 JS，返回 JSON 字符串结果 |
+| `suspend loadUrl(url: String)` | 加载 URL，挂起直到 `onPageFinished`；取消时自动 `stopLoading()` |
+| `suspend evaluateJavascript(script: String): String` | 执行 JS，返回结果字符串 |
 | `suspend clearCacheAndCookies()` | 清除缓存与 Cookie |
-| `suspend setCookieViaJs(cookieString: String)` | 通过 `document.cookie` 注入 Cookie 字符串 |
-| `suspend screenshot(): ByteArray?` | CDP 截图，返回 CSS 像素大小的 PNG 字节数组 |
+| `suspend setCookieViaJs(cookieString: String)` | 通过 `document.cookie` 注入 Cookie |
+| `suspend screenshot(): ByteArray?` | CDP 截图，返回 CSS 像素大小的 PNG |
 | `close()` | 销毁底层 WebView |
 
 ### 交互锁定与视觉反馈
 
 | 方法 | 说明 |
 |------|------|
-| `setInteractionLocked(locked: Boolean)` | 锁定/解锁用户交互。`true` 时在浏览器上覆盖 AWT 拦截层，阻止用户所有鼠标/键盘输入，自动化操作（CDP）正常工作。遮罩同时渲染鼠标轨迹和点击扩散动画。仅 JVM 有效，Android/iOS 为空实现。 |
-| `updateMouseTrail(viewportX: Int, viewportY: Int)` | 更新遮罩上的鼠标轨迹位置（视口 CSS 像素）。`clickByCoordinates`、`hoverByCoordinates`、`dragByCoordinates` 会自动调用。 |
+| `setInteractionLocked(locked: Boolean)` | 锁定/解锁用户交互。仅 JVM 有效。 |
+| `updateMouseTrail(viewportX: Int, viewportY: Int)` | 更新鼠标轨迹位置。坐标方法自动调用。 |
 
 ### AXTree 语义树
 
 | 方法 | 说明 |
 |------|------|
-| `suspend getRawAxTree(): AxTreeData` | 获取完整语义树，同时刷新内部坐标缓存 `nodeCache` |
-| `suspend snapshot(): String` | 返回当前页面的 KBrowser YAML Snapshot 字符串。获取 AXTree，进行最小化清理，转换为树形结构 YAML，包含文本上浮、坐标、选择器和遮挡信息内联。推荐给 AI Agent 使用。 |
-| `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展函数，过滤技术噪音（不可见节点、script/style 标签、调试 overlay） |
-| `AxTreeData.getViewportAxTree(): AxTreeData` | 扩展函数，裁剪到当前视口范围内的节点 |
-| `AxTreeData.toYamlSnapshot(): String` | 转换为 KBrowser YAML Snapshot 格式——树形结构、文本上浮、refid/选择器/坐标/遮挡信息内联。推荐给 AI Agent 使用。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
+| `suspend getRawAxTree(): AxTreeData` | 获取完整语义树，刷新内部节点缓存 |
+| `suspend snapshot(clean: Boolean = false): String` | 返回 KBrowser YAML Snapshot 字符串 |
+| `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展：过滤不可见元素、script/style 标签、调试 overlay |
+| `AxTreeData.getViewportAxTree(): AxTreeData` | 扩展：裁剪到当前视口范围内的节点 |
+| `AxTreeData.toYamlSnapshot(): String` | 转换为 KBrowser YAML Snapshot 格式。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
 
-两个扩展函数是纯 Kotlin 计算，不切线程，在调用方协程上下文执行。
+扩展函数是纯 Kotlin 计算，在调用方协程上下文执行，不切换线程。
 
 ### 交互（基于 refid）
 
 调用前需先执行 `getRawAxTree()` 刷新缓存。若 refid 不存在则抛出 `ElementNotFoundException`。
 
 #### 坐标模式（物理事件）
-这些方法通过取 `nodeCache` 中元素的坐标，并分发物理系统事件（如 CDP MouseEvent / iOS 触控事件）。
 
 | 方法 | 说明 |
 |------|------|
-| `suspend click(refid: String)` | 从缓存获取坐标，分发物理点击事件（物理点击可能会受元素遮挡影响） |
-| `suspend hover(refid: String)` | 从缓存获取坐标，分发物理悬停事件 |
-| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | 从缓存获取坐标，分发物理滚动/滚轮事件 |
-| `suspend drag(startRefid: String, endRefid: String)` | 从缓存获取起止坐标，分发物理鼠标拖拽（Drag & Drop）事件 |
+| `suspend click(refid: String)` | 物理点击元素坐标 |
+| `suspend hover(refid: String)` | 物理悬停元素坐标 |
+| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | 物理滚动元素坐标 |
+| `suspend drag(startRefid: String, endRefid: String)` | 物理拖拽 |
 
 #### JS 模式（DOM 事件模拟）
-这些方法通过取 `nodeCache` 中元素的 CSS 选择器（`selector`），直接向页面注入并触发 DOM 事件。不受坐标或元素被遮挡的影响。
 
 | 方法 | 说明 |
 |------|------|
-| `suspend jsClick(refid: String)` | 查找 CSS 选择器，触发 DOM 节点的 `.click()` |
-| `suspend jsHover(refid: String)` | 查找 CSS 选择器，分发 DOM 的 `mouseover` / `mouseenter` / `mousemove` 事件 |
-| `suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)` | 查找 CSS 选择器，调用 DOM 节点的 `.scrollBy(dx, dy)` |
-| `suspend jsDrag(startRefid: String, endRefid: String)` | 查找起止 CSS 选择器，模拟并分发 `mousedown` -> `mousemove` -> `mouseup` 拖拽事件流 |
+| `suspend jsClick(refid: String)` | DOM `.click()` |
+| `suspend jsHover(refid: String)` | DOM `mouseover` / `mouseenter` / `mousemove` 事件 |
+| `suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)` | DOM `.scrollBy(dx, dy)` |
+| `suspend jsDrag(startRefid: String, endRefid: String)` | DOM 拖拽事件序列 |
 
 ### 交互（基于坐标，CSS 文档像素）
-基于底层系统的物理指针事件，保持不变。
 
 | 方法 | 说明 |
 |------|------|
-| `suspend clickByCoordinates(x: Int, y: Int)` | CDP `Input.dispatchMouseEvent`，自动转换为视口坐标 |
+| `suspend clickByCoordinates(x: Int, y: Int)` | CDP `Input.dispatchMouseEvent` |
 | `suspend hoverByCoordinates(x: Int, y: Int)` | CDP 悬停 |
 | `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)` | CDP 滚轮 |
-| `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP 模拟鼠标拖拽 |
+| `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP 拖拽 |
 
 ### 键盘
 
 | 方法 | 说明 |
 |------|------|
 | `suspend press(key: KeyboardKey)` | 按下并释放单个按键 |
-| `suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)` | 组合键，如 `Ctrl+A` |
+| `suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)` | 组合键 |
 | `suspend typeChar(char: Char)` | 键入单个字符 |
-| `suspend type(text: String)` | 逐字符键入，每字符间随机延迟 30~150ms 模拟真人输入。不管理焦点，调用方需自行确保目标元素已聚焦。 |
+| `suspend type(text: String)` | 逐字符键入，30~150ms 随机延迟。不管理焦点，调用方需确保目标已聚焦。 |
+
+### 文件上传
+
+| 方法 | 说明 |
+|------|------|
+| `suspend uploadFile(refid: String, filePaths: List<String>)` | 通过 CDP `DOM.setFileInputFiles` 设置文件。不弹对话框，不需要用户手势。**仅 JVM；Android/iOS 抛 `UnsupportedOperationException`。** |
+| `suspend uploadFileBySelector(selector: String, filePaths: List<String>)` | 同上，使用 CSS 选择器，不依赖 AX tree 缓存。**仅 JVM。** |
 
 ### Locator 工厂
 
 | 方法 | 说明 |
 |------|------|
 | `locator("css=...")` 或 `locator("xpath=...")` | CSS/XPath 选择器，默认 CSS |
-| `getByRole(role, name?)` | 按 ARIA role 定位，可附加 name 过滤 |
-| `getByText(text, exact)` | 按文本内容定位，`exact=true` 精确匹配 |
+| `getByRole(role, name?)` | 按 ARIA role 定位 |
+| `getByText(text, exact)` | 按文本内容定位 |
 | `getByLabel(label)` | 按关联 label 定位 |
-| `getByPlaceholder(text)` | 按 placeholder 属性定位 |
+| `getByPlaceholder(text)` | 按 placeholder 定位 |
 | `getByAltText(text)` | 按 alt 属性定位 |
 | `getByTitle(title)` | 按 title 属性定位 |
-| `getByTestId(testId)` | 按 `data-testid` 属性定位 |
+| `getByTestId(testId)` | 按 `data-testid` 定位 |
 
-### 新窗口
+### 新窗口与文件对话框
 
 | 属性 | 说明 |
 |------|------|
-| `var onNewPage: ((url: String) -> Unit)?` | 代理到 `webView.onNewWindowRequest`；`target="_blank"` 和 `window.open()` 均触发；不设置时静默丢弃 |
+| `var onNewPage: ((url: String) -> Unit)?` | 代理到 `webView.onNewWindowRequest`。不设置时静默丢弃。 |
+| `var onFileDialog: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)?` | 代理到 `webView.onFileDialogRequest`。JVM：设置后由调用方处理；不设置时静默取消。Android/iOS：原生文件对话框。 |
 
 ---
 
 ## 4. KBLocator — 声明式定位器
 
-`KBLocator` 延迟解析，每次操作时重新查找元素。JVM 平台优先使用 CDP（无 JS 注入，CSP 安全），Android/iOS fallback 到 JS。
+`KBLocator` 延迟解析，每次操作时重新查找元素。JVM 优先使用 CDP（无 JS 注入，CSP 安全）；Android/iOS 降级为 JS。
 
-为了满足不同场景下的定位策略，`KBLocator` 提供了两套独立的方法家族：**坐标模式（默认）** 和 **JS 模式**。
-
-### 坐标模式（默认，基于物理事件）
-定位元素并基于其物理坐标派发真实系统事件。如果元素被遮挡或在视口外，坐标点击可能会失效。
+### 坐标模式（默认）
 
 | 方法 | 说明 |
 |------|------|
-| `suspend click()` | 查找元素，计算物理坐标，分发物理点击。 |
-| `suspend hover()` | 查找元素，分发物理悬停事件。 |
-| `suspend scroll(deltaX, deltaY)` | 查找元素，分发物理滚动。 |
-| `suspend fill(value: String)` | 坐标点击聚焦 → 等待 100ms → 注入 JS 改变其 `value` 并触发事件（快速填充）。 |
-| `suspend type(text: String)` | 坐标点击聚焦 → 发送 `Ctrl+A` → 发送 `Delete` → 逐字符物理按键模拟输入（最安全的防自动化检测输入）。 |
-| `suspend focus()` | 坐标点击该元素以使其聚焦。 |
-| `suspend check()` | 坐标点击复选框/单选框元素。 |
-| `suspend selectOption(value: String)` | 坐标点击下拉框展开 → 坐标点击对应的 option 元素。 |
-| `suspend press(key: KeyboardKey)` | 坐标点击聚焦 → 发送单个物理按键。 |
-| `suspend pressKeyCombination(modifier, key)` | 坐标点击聚焦 → 发送物理组合键。 |
+| `suspend click()` | 物理点击元素中心 |
+| `suspend hover()` | 物理悬停 |
+| `suspend scroll(deltaX, deltaY)` | 物理滚动 |
+| `suspend fill(value: String)` | 点击聚焦 → 等待 100ms → JS 设值并触发事件 |
+| `suspend type(text: String)` | 点击聚焦 → Ctrl+A → Delete → 逐字符物理输入 |
+| `suspend focus()` | 点击聚焦 |
+| `suspend check()` | 点击复选框/单选框 |
+| `suspend selectOption(value: String)` | 点击下拉框 → 点击匹配项 |
+| `suspend press(key: KeyboardKey)` | 点击聚焦 → 物理按键 |
+| `suspend pressKeyCombination(modifier, key)` | 点击聚焦 → 物理组合键 |
 
-### JS 模式（基于 DOM 事件模拟）
-通过定位到的元素的唯一 CSS 选择器，在 DOM 树中执行 JS 事件。免去坐标计算，即使元素被遮蔽或在视口外也能稳定触发。
+### JS 模式
 
 | 方法 | 说明 |
 |------|------|
-| `suspend jsClick()` | 触发 DOM 节点的 `.click()`。 |
-| `suspend jsHover()` | 派发 DOM `mouseover`、`mouseenter`、`mousemove` 事件。 |
-| `suspend jsScroll(deltaX, deltaY)` | 触发 DOM 节点的 `.scrollBy(dx, dy)`。 |
-| `suspend jsFill(value: String)` | JS 聚焦 `.focus()` → 等待 100ms → 注入 JS 改变值（不触发物理点击，无视遮挡）。 |
-| `suspend jsType(text: String)` | JS 聚焦 `.focus()` → 发送 `Ctrl+A` → 发送 `Delete` → 物理键盘逐字键入（高精度定位与键盘输入的完美结合）。 |
-| `suspend jsFocus()` | 触发 DOM 节点的 `.focus()`。 |
-| `suspend jsCheck()` | 通过 JS 改变 checkbox/radio 状态，确保被选中并触发 change 事件。 |
-| `suspend jsSelectOption(value: String)` | 通过 JS 直接触发下拉框选中对应的 option 值。 |
-| `suspend jsPress(key: KeyboardKey)` | JS 聚焦 `.focus()` → 发送物理按键。 |
-| `suspend jsPressKeyCombination(modifier, key)` | JS 聚焦 `.focus()` → 发送物理组合键。 |
+| `suspend jsClick()` | DOM `.click()` |
+| `suspend jsHover()` | DOM `mouseover`、`mouseenter`、`mousemove` 事件 |
+| `suspend jsScroll(deltaX, deltaY)` | DOM `.scrollBy(dx, dy)` |
+| `suspend jsFill(value: String)` | JS `.focus()` → 等待 100ms → JS 设值 |
+| `suspend jsType(text: String)` | JS `.focus()` → Ctrl+A → Delete → 物理按键 |
+| `suspend jsFocus()` | DOM `.focus()` |
+| `suspend jsCheck()` | JS 设 checked + 触发 change 事件 |
+| `suspend jsSelectOption(value: String)` | JS 设下拉框值 + 触发 change 事件 |
+| `suspend jsPress(key: KeyboardKey)` | JS 聚焦 → 物理按键 |
+| `suspend jsPressKeyCombination(modifier, key)` | JS 聚焦 → 物理组合键 |
 
 ### 查询方法
 
@@ -302,31 +303,18 @@ fun BrowserScreen() {
 |------|------|
 | `suspend isVisible(): Boolean` | 元素是否可见 |
 | `suspend getText(): String` | 获取元素文本 |
-| `suspend getAttribute(name: String): String?` | 获取指定属性值 |
+| `suspend getAttribute(name: String): String?` | 获取属性值 |
 | `suspend count(): Int` | 匹配元素数量 |
-| `suspend boundingBox(): Rect?` | 获取元素包围盒（CSS 文档像素） |
+| `suspend boundingBox(): Rect?` | 包围盒（CSS 文档像素） |
 
 ### 链式过滤
 
 | 方法 | 说明 |
 |------|------|
-| `filter(predicate: (LocateResult) -> Boolean): KBLocator` | 在匹配结果中进一步过滤 |
-| `nth(index: Int): KBLocator` | 取第 n 个匹配项（0-indexed，-1 表示最后一个） |
+| `filter(predicate: (LocateResult) -> Boolean): KBLocator` | 过滤匹配结果 |
+| `nth(index: Int): KBLocator` | 取第 n 个（0-indexed，-1 = 最后一个） |
 | `first(): KBLocator` | 取第一个 |
 | `last(): KBLocator` | 取最后一个 |
-
-### 链式示例
-
-```kotlin
-// 找到所有可见的"提交"按钮中的第二个，点击
-page.getByRole("button", name = "提交")
-    .filter { it.isVisible }
-    .nth(1)
-    .click()
-
-// XPath 定位 + 填充
-page.locator("xpath=//input[@name='email']").fill("user@example.com")
-```
 
 ---
 
@@ -338,24 +326,24 @@ page.locator("xpath=//input[@name='email']").fill("user@example.com")
 
 ```kotlin
 data class AxNode(
-    val refid: String,          // 节点唯一 ID，用于 click(refid) 等交互
-    val tagName: String,        // HTML 标签名，如 "button"、"input"
-    val role: String,           // ARIA role，如 "button"、"textbox"
+    val refid: String,          // 节点唯一 ID
+    val tagName: String,        // HTML 标签名
+    val role: String,           // ARIA role
     val id: String,             // DOM id 属性
     val className: String,      // CSS class
     val text: String,           // 节点文本内容
     val isVisible: Boolean,     // 是否在视口中可见
-    val x: Int,                 // 节点左上角 X（CSS 文档像素）
-    val y: Int,                 // 节点左上角 Y（CSS 文档像素）
-    val width: Int,             // 节点宽度
-    val height: Int,            // 节点高度
+    val x: Int,                 // 左上角 X（CSS 文档像素）
+    val y: Int,                 // 左上角 Y（CSS 文档像素）
+    val width: Int,             // 宽度
+    val height: Int,            // 高度
     val centerX: Int,           // 中心点 X（CSS 文档像素）
     val centerY: Int,           // 中心点 Y（CSS 文档像素）
     val childCount: Int,        // 子节点数量
-    val attributes: Map<String, String>, // 节点属性字典
-    val iframeSrc: String?,     // 若为 iframe，则为其 src URL
-    val selector: String,       // 动态生成的唯一 CSS 选择器，与本次快照 DOM 绑定。可直接传给 page.locator(selector)。每次 getRawAxTree() 重新生成，不会过期。抗 anti-bot class 名混淆（兜底使用结构化 nth-of-type 路径）。
-    val occludedBy: String?     // 遮挡该节点中心点的元素的 refid，无遮挡时为 null。非 null 表示坐标点击会打到遮挡物而非该节点。AI 应先处理遮挡物（关闭弹窗/广告），或改用 locator(selector).fill() 绕过坐标 hit-test。
+    val attributes: Map<String, String>,
+    val iframeSrc: String?,
+    val selector: String,       // 动态生成的唯一 CSS 选择器，每次 getRawAxTree() 重新生成
+    val occludedBy: String?     // 遮挡该节点的元素 refid，无遮挡时为 null
 )
 ```
 
@@ -363,14 +351,14 @@ data class AxNode(
 
 ```kotlin
 data class AxTreeData(
-    val url: String,            // 当前页面 URL
-    val innerWidth: Int,        // 视口宽度（CSS 像素）
-    val innerHeight: Int,       // 视口高度（CSS 像素）
-    val scrollX: Int,           // 横向滚动偏移（CSS 像素）
-    val scrollY: Int,           // 纵向滚动偏移（CSS 像素）
-    val documentWidth: Int,     // 文档总宽度（CSS 像素）
-    val documentHeight: Int,    // 文档总高度（CSS 像素）
-    val devicePixelRatio: Double, // DPR，截图时内部使用，调用方无需关心
+    val url: String,
+    val innerWidth: Int,
+    val innerHeight: Int,
+    val scrollX: Int,
+    val scrollY: Int,
+    val documentWidth: Int,
+    val documentHeight: Int,
+    val devicePixelRatio: Double,
     val totalElements: Int,
     val visibleElements: Int,
     val hiddenElements: Int,
@@ -383,17 +371,11 @@ data class AxTreeData(
 
 ```kotlin
 enum class KeyboardKey {
-    // 特殊键
     ENTER, TAB, ESCAPE, BACKSPACE, DELETE,
-    // 方向键
     ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT,
-    // 修饰键
-    SHIFT, CONTROL, ALT, META,  // META = Mac Command
-    // 空格与导航
+    SHIFT, CONTROL, ALT, META,
     SPACE, HOME, END, PAGE_UP, PAGE_DOWN, INSERT,
-    // 功能键
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-    // 常用组合键字母
     A, C, V, X, S, Z
 }
 ```
@@ -412,12 +394,10 @@ data class Diagnostics(
 
 ### LoadingState
 
-`loadingState` 的实际类型为 `sealed interface`，使用时用 `is` 判断：
-
 ```kotlin
 sealed interface LoadingState {
-    data object Initializing : LoadingState  // WebView 刚创建，尚未开始加载
-    data object Loading : LoadingState       // 正在加载中
+    data object Initializing : LoadingState  // WebView 刚创建
+    data object Loading : LoadingState       // 加载中
     data object Finished : LoadingState      // 加载完成
     data class Error(                        // 加载失败
         val errorCode: Int,
@@ -425,61 +405,15 @@ sealed interface LoadingState {
         val failingUrl: String
     ) : LoadingState
 }
-
-// 使用示例
-val state by webView.loadingState.collectAsState()
-when (state) {
-    is LoadingState.Loading  -> LinearProgressIndicator()
-    is LoadingState.Finished -> Text("加载完成")
-    is LoadingState.Error    -> Text("失败: ${(state as LoadingState.Error).description}")
-    else -> {}
-}
-```
-
-### KBSelectorType
-
-`KBLocator` 内部使用的选择器类型枚举，通过 `KBPage` 的工厂方法自动设置，通常无需直接使用：
-
-```kotlin
-enum class KBSelectorType {
-    CSS,         // CSS 选择器，如 ".btn-login"
-    XPATH,       // XPath，如 "//button[@id='submit']"
-    TEXT,        // 按文本内容匹配
-    ROLE,        // 按 ARIA role 匹配
-    LABEL,       // 按关联 label 文本匹配
-    PLACEHOLDER, // 按 placeholder 属性匹配
-    ALT_TEXT,    // 按 alt 属性匹配
-    TITLE,       // 按 title 属性匹配
-    TEST_ID      // 按 data-testid 属性匹配
-}
-```
-
-### LocateResult
-
-`KBLocator.filter { }` 回调中的参数类型，包含定位到的元素的基本信息：
-
-```kotlin
-data class LocateResult(
-    val centerX: Int,                        // 元素中心点 X（CSS 文档像素）
-    val centerY: Int,                        // 元素中心点 Y（CSS 文档像素）
-    val width: Int,                          // 元素宽度
-    val height: Int,                         // 元素高度
-    val tagName: String,                     // HTML 标签名，如 "button"
-    val role: String,                        // ARIA role
-    val text: String,                        // 元素文本内容
-    val isVisible: Boolean,                  // 是否可见
-    val attributes: Map<String, String>,     // 元素属性字典
-    val selector: String = ""                // 元素唯一 CSS 选择器，用于 JS 模式定位（如 jsClick）
-)
 ```
 
 ### KBProfile
 
-`KBProfile` 用于 `KBWebView`，当你需要为每个 WebView 实例隔离浏览器数据（独立的 Cookie/缓存）时使用。`KBBrowser` 内部自动管理自己的 Profile，无需向 `newPage()` 传入 `KBProfile`。
-
 ```kotlin
 data class KBProfile(val profileId: String, val storageDir: String)
 ```
+
+用于 `KBWebView`，为每个实例隔离浏览器数据。`KBrowser.newPage()` 内部自动管理 Profile。
 
 ---
 
@@ -504,164 +438,11 @@ interface KBWebChromeClient {
     fun onJsPrompt(url: String, message: String, defaultValue: String?, callback: JsPromptResultCallback)
     fun onPermissionRequest(request: PermissionRequest)
 }
-
-interface JsResultCallback {
-    fun confirm()
-    fun cancel()
-}
-
-interface JsPromptResultCallback {
-    fun confirm(value: String?)
-    fun cancel()
-}
-
-// 权限请求接口
-interface PermissionRequest {
-    val origin: String                       // 请求来源域名
-    val resources: List<PermissionResource>  // 请求的权限列表
-    fun grant()                              // 授予权限
-    fun deny()                               // 拒绝权限
-}
-
-enum class PermissionResource {
-    CAMERA,
-    MICROPHONE,
-    GEOLOCATION,
-    PROTECTED_MEDIA_IDENTIFIER,
-    AUDIO_CAPTURE,
-    VIDEO_CAPTURE
-}
 ```
 
 ---
 
-## 7. 完整使用示例
-
-### 示例 1：UI 浏览器（KBWebView Composable）
-
-```kotlin
-@Composable
-fun BrowserApp() {
-    val webView = rememberKBWebView(initialUrl = "https://example.com")
-    val url by webView.currentUrl.collectAsState()
-    val loading by webView.loadingState.collectAsState()
-    var inputUrl by remember { mutableStateOf("") }
-
-    LaunchedEffect(webView) {
-        webView.setWebViewClient(object : KBWebViewClient {
-            override fun onPageStarted(url: String) {}
-            override fun onPageFinished(url: String) {}
-            override fun onReceivedError(error: Diagnostics) {
-                println("Error ${error.errorCode}: ${error.description}")
-            }
-        })
-        webView.onNewWindowRequest = { newUrl ->
-            // 在当前页面打开，而不是弹出新窗口
-            webView.loadUrl(newUrl)
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp)) {
-            TextField(
-                value = inputUrl,
-                onValueChange = { inputUrl = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("输入网址") }
-            )
-            Button(onClick = { webView.loadUrl(inputUrl) }) { Text("跳转") }
-        }
-
-        if (loading == LoadingState.Loading) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-
-        KBWebView(webView = webView, modifier = Modifier.weight(1f))
-
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Button(onClick = { webView.goBack() }) { Text("←") }
-            Button(onClick = { webView.goForward() }) { Text("→") }
-            Button(onClick = { webView.reload() }) { Text("刷新") }
-        }
-    }
-}
-```
-
-### 示例 2：无头自动化（KBPage 协程流水线）
-
-```kotlin
-suspend fun runAutomation() {
-    // 初始化（main.kt 中已完成，此处仅示意）
-    // KBrowser.setConfigPath("/tmp/kbrowser")
-    // initializeKBrowser()
-
-    val page = KBrowser.newPage(url = "https://example.com/login")
-
-    try {
-        // 拦截新窗口请求
-        page.onNewPage = { url ->
-            println("新窗口请求: $url")
-            // 如需处理：val newPage = KBrowser.newPage(url)
-        }
-
-        // 等待页面加载完成
-        page.loadUrl("https://example.com/login")
-
-        // 方式一：使用 Locator（推荐，CSP 安全）
-        page.getByLabel("用户名").fill("admin")
-        page.getByLabel("密码").type("secret123")  // 物理键入，高防检测
-        page.getByRole("button", name = "登录").click()
-
-        // 等待跳转后的页面加载
-        page.loadUrl("https://example.com/dashboard")
-
-        // 方式二：使用 AXTree 语义树
-        val rawTree = page.getRawAxTree()
-        val cleanTree = rawTree.getCleanedAxTree()
-        val viewportTree = cleanTree.getViewportAxTree()
-
-        println("视口内可见元素数: ${viewportTree.visibleElements}")
-
-        // 找到第一个链接并点击
-        val firstLink = viewportTree.nodes.firstOrNull { it.role == "link" }
-        if (firstLink != null) {
-            // 方式 A：refid 坐标点击
-            page.click(firstLink.refid)
-
-            // 方式 B：用节点动态生成的选择器（抗 anti-bot 混淆）
-            // page.locator(firstLink.selector).click()
-        }
-
-        // 找到输入框，用其选择器输入
-        val searchInput = viewportTree.nodes.firstOrNull { it.role == "textbox" }
-        if (searchInput != null) {
-            page.locator(searchInput.selector).type("搜索词")
-        }
-
-        // 截图（CSS 像素，与坐标系一致）
-        val png = page.screenshot()
-        if (png != null) {
-            File("/tmp/screenshot.png").writeBytes(png)
-            println("截图已保存，尺寸与坐标系 1:1 对齐")
-        }
-
-        // 键盘操作示例
-        page.locator("css=.search-input").click()
-        page.press(KeyboardKey.CONTROL)  // 单独按修饰键
-        page.pressKeyCombination(KeyboardKey.CONTROL, KeyboardKey.A)  // Ctrl+A 全选
-        page.type("新的搜索词")
-
-    } catch (e: ElementNotFoundException) {
-        println("元素未找到: ${e.message}")
-    } finally {
-        page.close()
-    }
-}
-```
-
----
-
-## 8. 调试工具
+## 7. 调试工具
 
 ### showScreenshotPreview
 
@@ -669,14 +450,7 @@ suspend fun runAutomation() {
 fun showScreenshotPreview(bytes: ByteArray)
 ```
 
-在 JVM 平台弹出一个独立的 Swing 预览窗口展示截图。移动鼠标时，窗口标题栏会实时显示当前鼠标位置对应的 1:1 CSS 文档像素坐标，方便调试点击坐标。**仅 JVM 有效，Android/iOS 为空操作。**
-
-```kotlin
-val png = page.screenshot()
-if (png != null) {
-    showScreenshotPreview(png)  // 弹出预览窗口，鼠标移动时显示坐标
-}
-```
+在 JVM 弹出独立 Swing 预览窗口展示截图，鼠标移动时标题栏实时显示 CSS 文档像素坐标。**仅 JVM 有效，Android/iOS 为空操作。**
 
 ### JcefChecker
 
@@ -686,10 +460,4 @@ object JcefChecker {
 }
 ```
 
-在 JVM 平台检测当前 JDK 是否为包含 JCEF 的 JetBrains Runtime（JBR）。`KBWebView` Composable 内部会检查此值，若为 `false` 则显示提示文字而非崩溃。可在应用启动时提前检查并给出友好提示：
-
-```kotlin
-if (!JcefChecker.isJcefAvailable) {
-    println("请将 SDK 切换为包含 JCEF 的 JBR 25")
-}
-```
+检测当前 JDK 是否为包含 JCEF 的 JetBrains Runtime。`KBWebView` Composable 内部检查此值，若为 `false` 则显示提示文字。
