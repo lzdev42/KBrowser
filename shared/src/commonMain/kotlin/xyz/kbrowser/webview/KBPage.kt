@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
+import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 class KBPage(val webView: KBWebView) {
@@ -107,9 +108,11 @@ class KBPage(val webView: KBWebView) {
      *
      * @throws ElementNotFoundException if [refid] is not found in the cache
      */
-    suspend fun click(refid: String) {
+    suspend fun click(refid: String): OperationResult {
         val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
         clickByCoordinates(node.centerX, node.centerY)
+        delay(200)
+        return verifyClickAt(node.centerX, node.centerY, node)
     }
 
     /**
@@ -147,9 +150,21 @@ class KBPage(val webView: KBWebView) {
      *
      * @throws ElementNotFoundException if [refid] is not found in the cache
      */
-    suspend fun scroll(refid: String, deltaX: Int, deltaY: Int) {
+    suspend fun scroll(refid: String, deltaX: Int, deltaY: Int): OperationResult {
         val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
+        val scrollTopBefore = evaluateJavascript(
+            "(function(){var e=document.querySelector('${node.selector.replace("'", "\\'")}');return String(e?e.scrollTop:window.scrollY)})()"
+        ).trim().toDoubleOrNull() ?: 0.0
         scrollByCoordinates(node.centerX, node.centerY, deltaX, deltaY)
+        delay(300)
+        val scrollTopAfter = evaluateJavascript(
+            "(function(){var e=document.querySelector('${node.selector.replace("'", "\\'")}');return String(e?e.scrollTop:window.scrollY)})()"
+        ).trim().toDoubleOrNull() ?: 0.0
+        return if (scrollTopAfter != scrollTopBefore) {
+            OperationResult.Success("scroll", detail = "scrollTop: $scrollTopBefore → $scrollTopAfter")
+        } else {
+            OperationResult.Failure("scroll", "scrollTop unchanged ($scrollTopBefore)")
+        }
     }
 
     /**
@@ -184,16 +199,38 @@ class KBPage(val webView: KBWebView) {
         performDragByJs(webView, startNode.selector, endNode.selector)
     }
 
-    suspend fun clickByCoordinates(x: Int, y: Int) {
+    suspend fun clickByCoordinates(x: Int, y: Int): OperationResult {
         performClickByCoordinates(webView, x, y)
+        delay(200)
+        return verifyClickAt(x, y, null)
     }
 
     suspend fun hoverByCoordinates(x: Int, y: Int) {
         performHoverByCoordinates(webView, x, y)
     }
 
-    suspend fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int) {
+    suspend fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int): OperationResult {
+        // Read scroll position: walk up from element at coords to find scroll container
+        val readScrollJs = """
+            (function() {
+                var vx = $x - window.scrollX, vy = $y - window.scrollY;
+                var el = document.elementFromPoint(vx, vy);
+                while (el) {
+                    if (el.scrollHeight > el.clientHeight) return String(el.scrollTop);
+                    el = el.parentElement;
+                }
+                return String(window.scrollY);
+            })()
+        """.trimIndent()
+        val scrollBefore = evaluateJavascript(readScrollJs).trim().toDoubleOrNull() ?: 0.0
         performScrollByCoordinates(webView, x, y, deltaX, deltaY)
+        delay(300)
+        val scrollAfter = evaluateJavascript(readScrollJs).trim().toDoubleOrNull() ?: 0.0
+        return if (scrollAfter != scrollBefore) {
+            OperationResult.Success("scroll", detail = "scroll: $scrollBefore → $scrollAfter")
+        } else {
+            OperationResult.Failure("scroll", "scroll position unchanged ($scrollBefore)")
+        }
     }
 
     suspend fun dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int) {
@@ -372,5 +409,74 @@ class KBPage(val webView: KBWebView) {
 
     fun close() {
         webView.destroy()
+    }
+
+    // ===== Operation Verification Helpers =====
+
+    /**
+     * 验证坐标点击是否命中目标元素。
+     * 使用只读 JS API（elementFromPoint），零 anti-bot 检测风险。
+     *
+     * @param docX 文档 X 坐标
+     * @param docY 文档 Y 坐标
+     * @param targetNode 目标 AxNode（可选，提供更精确的匹配）
+     */
+    private suspend fun verifyClickAt(docX: Int, docY: Int, targetNode: AxNode?): OperationResult {
+        val targetId = targetNode?.id ?: ""
+        val targetTag = targetNode?.tagName ?: ""
+
+        val js = """
+            (function() {
+                var scrollX = window.scrollX, scrollY = window.scrollY;
+                var vx = $docX - scrollX, vy = $docY - scrollY;
+                var el = document.elementFromPoint(vx, vy);
+                while (el && el.shadowRoot) {
+                    el = el.shadowRoot.elementFromPoint(vx, vy) || el;
+                }
+                if (!el) return 'NO_ELEMENT';
+                var tag = el.tagName.toLowerCase();
+                var id = el.id || '';
+                var matched = false;
+                var cur = el;
+                for (var i = 0; i < 8 && cur; i++) {
+                    ${if (targetId.isNotEmpty()) "if (cur.id === '$targetId') { matched = true; break; }" else ""}
+                    ${if (targetTag.isNotEmpty()) "if (cur.tagName.toLowerCase() === '$targetTag') { matched = true; break; }" else ""}
+                    cur = cur.parentElement;
+                }
+                return JSON.stringify({tag: tag, id: id, matched: matched});
+            })()
+        """.trimIndent()
+
+        val result = evaluateJavascript(js).trim()
+        if (result == "NO_ELEMENT") {
+            return OperationResult.Failure("click", "no element at viewport coords")
+        }
+
+        return try {
+            val jsonObj = kotlinx.serialization.json.Json.parseToJsonElement(result)
+                .let { it as kotlinx.serialization.json.JsonObject }
+            val matched = jsonObj["matched"]?.let {
+                it as kotlinx.serialization.json.JsonPrimitive
+            }?.content?.toBoolean() ?: false
+            val elId = jsonObj["id"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content } ?: ""
+            val elTag = jsonObj["tag"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content } ?: ""
+
+            if (matched) {
+                val detail = if (elId.isNotEmpty()) "hit #$elId" else "hit <$elTag>"
+                OperationResult.Success("click", detail = detail)
+            } else if (targetNode == null) {
+                // No target info — can't verify identity, just confirm element exists
+                val detail = if (elId.isNotEmpty()) "hit #$elId" else "hit <$elTag>"
+                OperationResult.Success("click", verified = false, detail = detail)
+            } else {
+                val hitDesc = if (elId.isNotEmpty()) "#$elId" else "<$elTag>"
+                val expectedDesc = if (targetId.isNotEmpty()) "#$targetId"
+                    else if (targetTag.isNotEmpty()) "<$targetTag>" else "($docX,$docY)"
+                OperationResult.Failure("click",
+                    "hit $hitDesc, expected $expectedDesc (occluded?)")
+            }
+        } catch (e: Exception) {
+            OperationResult.Success("click", verified = false)
+        }
     }
 }

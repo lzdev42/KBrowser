@@ -202,9 +202,9 @@ fun BrowserScreen() {
 
 | 方法 | 说明 |
 |------|------|
-| `suspend click(refid: String)` | 物理点击元素坐标 |
+| `suspend click(refid: String): OperationResult` | 物理点击元素坐标。操作后通过 `elementFromPoint` 验证是否命中目标。 |
 | `suspend hover(refid: String)` | 物理悬停元素坐标 |
-| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | 物理滚动元素坐标 |
+| `suspend scroll(refid: String, deltaX: Int, deltaY: Int): OperationResult` | 物理滚动元素坐标。通过 `scrollTop` 前后对比验证。 |
 | `suspend drag(startRefid: String, endRefid: String)` | 物理拖拽 |
 
 #### JS 模式（DOM 事件模拟）
@@ -220,9 +220,9 @@ fun BrowserScreen() {
 
 | 方法 | 说明 |
 |------|------|
-| `suspend clickByCoordinates(x: Int, y: Int)` | CDP `Input.dispatchMouseEvent` |
+| `suspend clickByCoordinates(x: Int, y: Int): OperationResult` | CDP `Input.dispatchMouseEvent`。操作后验证坐标处是否存在元素。 |
 | `suspend hoverByCoordinates(x: Int, y: Int)` | CDP 悬停 |
-| `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)` | CDP 滚轮 |
+| `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int): OperationResult` | CDP 滚轮。验证滚动位置是否变化。 |
 | `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP 拖拽 |
 
 ### 键盘
@@ -271,11 +271,11 @@ fun BrowserScreen() {
 
 | 方法 | 说明 |
 |------|------|
-| `suspend click()` | 物理点击元素中心 |
+| `suspend click(): OperationResult` | 物理点击元素中心。返回验证结果。 |
 | `suspend hover()` | 物理悬停 |
-| `suspend scroll(deltaX, deltaY)` | 物理滚动 |
-| `suspend fill(value: String)` | 点击聚焦 → 等待 100ms → JS 设值并触发事件 |
-| `suspend type(text: String)` | 点击聚焦 → Ctrl+A → Delete → 逐字符物理输入 |
+| `suspend scroll(deltaX, deltaY): OperationResult` | 物理滚动。返回验证结果。 |
+| `suspend fill(value: String): OperationResult` | 点击聚焦 → 等待 100ms → JS 设值并触发事件。验证 `el.value` 是否匹配。 |
+| `suspend type(text: String): OperationResult` | 点击聚焦 → Ctrl+A → Delete → 逐字符物理输入。验证 `el.value` 是否匹配。 |
 | `suspend focus()` | 点击聚焦 |
 | `suspend check()` | 点击复选框/单选框 |
 | `suspend selectOption(value: String)` | 点击下拉框 → 点击匹配项 |
@@ -289,8 +289,8 @@ fun BrowserScreen() {
 | `suspend jsClick()` | DOM `.click()` |
 | `suspend jsHover()` | DOM `mouseover`、`mouseenter`、`mousemove` 事件 |
 | `suspend jsScroll(deltaX, deltaY)` | DOM `.scrollBy(dx, dy)` |
-| `suspend jsFill(value: String)` | JS `.focus()` → 等待 100ms → JS 设值 |
-| `suspend jsType(text: String)` | JS `.focus()` → Ctrl+A → Delete → 物理按键 |
+| `suspend jsFill(value: String): OperationResult` | JS `.focus()` → 等待 100ms → JS 设值。验证 `el.value` 是否匹配。 |
+| `suspend jsType(text: String): OperationResult` | JS `.focus()` → Ctrl+A → Delete → 物理按键。验证 `el.value` 是否匹配。 |
 | `suspend jsFocus()` | DOM `.focus()` |
 | `suspend jsCheck()` | JS 设 checked + 触发 change 事件 |
 | `suspend jsSelectOption(value: String)` | JS 设下拉框值 + 触发 change 事件 |
@@ -318,7 +318,83 @@ fun BrowserScreen() {
 
 ---
 
-## 5. 数据结构
+## 5. 操作验证
+
+交互方法（`click`、`fill`、`type`、`scroll`）返回 `OperationResult`，程序化验证操作是否成功。调用方（尤其是 AI Agent）无需重新获取完整页面快照即可检测失败。
+
+> **反检测安全**：所有验证手段均为只读 JS API（`elementFromPoint`、`el.value`、`scrollTop`），零检测风险。
+
+### OperationResult
+
+```kotlin
+sealed class OperationResult {
+    abstract val success: Boolean
+
+    data class Success(
+        val action: String,       // "click", "fill", "type", "scroll"
+        val verified: Boolean,    // true = 已程序化验证; false = 事件已发送但未确认身份
+        val detail: String = ""   // 如 "hit #submitBtn", "value='hello'", "scrollTop: 0 → 150"
+    ) : OperationResult()
+
+    data class Failure(
+        val action: String,
+        val reason: String,       // 如 "hit #overlay, expected #submitBtn (occluded?)"
+        val recoverable: Boolean = true
+    ) : OperationResult()
+
+    data object Acknowledged : OperationResult()  // 已发送但无法验证（如 hover）
+}
+```
+
+### 验证策略
+
+| 操作 | 策略 | 说明 |
+|------|------|------|
+| **click**（带 refid） | `document.elementFromPoint()` 匹配目标 `id`/`tagName`，向上遍历 DOM 树 | 可检测遮挡物（弹窗/banner） |
+| **clickByCoordinates** | `elementFromPoint()` 确认坐标处存在元素 | 无目标信息时不做身份检查 |
+| **fill / type** | 读回 `el.value`（或 contenteditable 的 `el.innerText`）与期望值对比 | 检测静默输入失败 |
+| **scroll** | 对比前后 `scrollTop`（或 `window.scrollY`） | 检测无效滚动 |
+
+### 用法示例
+
+```kotlin
+// 检查结果
+val result = page.click("r12")
+if (!result.success) {
+    println("点击失败: $result")
+    // AI 可决策：关闭遮挡物后重试，或改用 jsClick
+}
+
+// 忽略结果（同样有效）
+page.click("r12")
+locator.fill("hello")
+
+// 遮挡检测
+val result = page.click("r15")
+if (result is OperationResult.Failure) {
+    println(result.reason)  // "hit #cookie-banner, expected #submitBtn (occluded?)"
+    // 关闭 banner，重新 snapshot，重试
+}
+
+// 填充验证
+val fillResult = locator.fill("user@email.com")
+if (fillResult is OperationResult.Success && fillResult.verified) {
+    println("已确认: ${fillResult.detail}")  // "value='user@email.com'"
+}
+```
+
+### 返回 OperationResult 的方法
+
+| 类 | 方法 |
+|----|------|
+| `KBPage` | `click(refid)`, `scroll(refid, dx, dy)`, `clickByCoordinates(x, y)`, `scrollByCoordinates(x, y, dx, dy)` |
+| `KBLocator` | `click()`, `scroll(dx, dy)`, `fill(value)`, `type(text)`, `jsFill(value)`, `jsType(text)` |
+
+无法验证的方法（`hover`、`drag`、键盘事件）保持原有 `Unit` 返回类型。
+
+---
+
+## 6. 数据结构
 
 ### AxNode
 
@@ -417,7 +493,7 @@ data class KBProfile(val profileId: String, val storageDir: String)
 
 ---
 
-## 6. 回调接口
+## 7. 回调接口
 
 ### KBWebViewClient
 
@@ -442,7 +518,7 @@ interface KBWebChromeClient {
 
 ---
 
-## 7. 调试工具
+## 8. 调试工具
 
 ### showScreenshotPreview
 

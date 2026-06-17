@@ -204,9 +204,9 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 
 | Method | Description |
 |--------|-------------|
-| `suspend click(refid: String)` | Physical click on element coordinates |
+| `suspend click(refid: String): OperationResult` | Physical click on element coordinates. Verifies via `elementFromPoint` after click. |
 | `suspend hover(refid: String)` | Physical hover on element coordinates |
-| `suspend scroll(refid: String, deltaX: Int, deltaY: Int)` | Physical scroll on element coordinates |
+| `suspend scroll(refid: String, deltaX: Int, deltaY: Int): OperationResult` | Physical scroll on element coordinates. Verifies via `scrollTop` comparison. |
 | `suspend drag(startRefid: String, endRefid: String)` | Physical drag between start and end elements |
 
 #### JS Mode (DOM Event Simulation)
@@ -222,9 +222,9 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 
 | Method | Description |
 |--------|-------------|
-| `suspend clickByCoordinates(x: Int, y: Int)` | CDP `Input.dispatchMouseEvent` |
+| `suspend clickByCoordinates(x: Int, y: Int): OperationResult` | CDP `Input.dispatchMouseEvent`. Verifies target exists at coordinates after click. |
 | `suspend hoverByCoordinates(x: Int, y: Int)` | CDP hover |
-| `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)` | CDP wheel scroll |
+| `suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int): OperationResult` | CDP wheel scroll. Verifies scroll position changed. |
 | `suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)` | CDP drag sequence |
 
 ### Keyboard
@@ -273,11 +273,11 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 
 | Method | Description |
 |--------|-------------|
-| `suspend click()` | Physical click on element center |
+| `suspend click(): OperationResult` | Physical click on element center. Returns verification result. |
 | `suspend hover()` | Physical hover |
-| `suspend scroll(deltaX, deltaY)` | Physical scroll |
-| `suspend fill(value: String)` | Click to focus → wait 100ms → set value via JS and fire events |
-| `suspend type(text: String)` | Click to focus → Ctrl+A → Delete → character-by-character physical input |
+| `suspend scroll(deltaX, deltaY): OperationResult` | Physical scroll. Returns verification result. |
+| `suspend fill(value: String): OperationResult` | Click to focus → wait 100ms → set value via JS and fire events. Verifies `el.value` matches. |
+| `suspend type(text: String): OperationResult` | Click to focus → Ctrl+A → Delete → character-by-character physical input. Verifies `el.value` matches. |
 | `suspend focus()` | Click to focus |
 | `suspend check()` | Click on checkbox/radio |
 | `suspend selectOption(value: String)` | Click dropdown → click matching option |
@@ -291,8 +291,8 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 | `suspend jsClick()` | DOM `.click()` |
 | `suspend jsHover()` | DOM `mouseover`, `mouseenter`, `mousemove` events |
 | `suspend jsScroll(deltaX, deltaY)` | DOM `.scrollBy(dx, dy)` |
-| `suspend jsFill(value: String)` | JS `.focus()` → wait 100ms → set value via JS |
-| `suspend jsType(text: String)` | JS `.focus()` → Ctrl+A → Delete → physical keystrokes |
+| `suspend jsFill(value: String): OperationResult` | JS `.focus()` → wait 100ms → set value via JS. Verifies `el.value` matches. |
+| `suspend jsType(text: String): OperationResult` | JS `.focus()` → Ctrl+A → Delete → physical keystrokes. Verifies `el.value` matches. |
 | `suspend jsFocus()` | DOM `.focus()` |
 | `suspend jsCheck()` | JS: set checked + fire change event |
 | `suspend jsSelectOption(value: String)` | JS: set dropdown value + fire change event |
@@ -320,7 +320,83 @@ Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNo
 
 ---
 
-## 5. Data Structures
+## 5. Operation Verification
+
+Interaction methods (`click`, `fill`, `type`, `scroll`) return an `OperationResult` that programmatically verifies whether the operation succeeded. This allows callers (especially AI agents) to detect failures without re-fetching a full page snapshot.
+
+> **Anti-bot safety**: All verification uses read-only JS APIs (`elementFromPoint`, `el.value`, `scrollTop`). Zero detection risk.
+
+### OperationResult
+
+```kotlin
+sealed class OperationResult {
+    abstract val success: Boolean
+
+    data class Success(
+        val action: String,       // "click", "fill", "type", "scroll"
+        val verified: Boolean,    // true = programmatically verified; false = event dispatched but identity not confirmed
+        val detail: String = ""   // e.g. "hit #submitBtn", "value='hello'", "scrollTop: 0 → 150"
+    ) : OperationResult()
+
+    data class Failure(
+        val action: String,
+        val reason: String,       // e.g. "hit #overlay, expected #submitBtn (occluded?)"
+        val recoverable: Boolean = true
+    ) : OperationResult()
+
+    data object Acknowledged : OperationResult()  // dispatched but not verifiable (e.g. hover)
+}
+```
+
+### Verification Strategies
+
+| Operation | Strategy | Detail |
+|-----------|----------|--------|
+| **click** (with refid) | `document.elementFromPoint()` matches target `id`/`tagName`, walking up DOM tree | Detects occlusion by overlays/modals |
+| **clickByCoordinates** | `elementFromPoint()` confirms an element exists at the click point | No identity check without target info |
+| **fill / type** | Reads back `el.value` (or `el.innerText` for contenteditable) and compares with expected value | Detects silent input failures |
+| **scroll** | Compares `scrollTop` (or `window.scrollY`) before and after | Detects no-op scrolls |
+
+### Usage
+
+```kotlin
+// Check result
+val result = page.click("r12")
+if (!result.success) {
+    println("Click failed: $result")
+    // AI can decide: close overlay and retry, or switch to jsClick
+}
+
+// Ignore result (also valid)
+page.click("r12")
+locator.fill("hello")
+
+// Occlusion detection
+val result = page.click("r15")
+if (result is OperationResult.Failure) {
+    println(result.reason)  // "hit #cookie-banner, expected #submitBtn (occluded?)"
+    // Close the banner, re-snapshot, retry
+}
+
+// Fill verification
+val fillResult = locator.fill("user@email.com")
+if (fillResult is OperationResult.Success && fillResult.verified) {
+    println("Confirmed: ${fillResult.detail}")  // "value='user@email.com'"
+}
+```
+
+### Methods Returning OperationResult
+
+| Class | Methods |
+|-------|--------|
+| `KBPage` | `click(refid)`, `scroll(refid, dx, dy)`, `clickByCoordinates(x, y)`, `scrollByCoordinates(x, y, dx, dy)` |
+| `KBLocator` | `click()`, `scroll(dx, dy)`, `fill(value)`, `type(text)`, `jsFill(value)`, `jsType(text)` |
+
+Methods that cannot be verified (`hover`, `drag`, keyboard events) retain their original `Unit` return type.
+
+---
+
+## 6. Data Structures
 
 ### AxNode
 
@@ -419,7 +495,7 @@ Used with `KBWebView` for isolated browser data per instance. `KBrowser.newPage(
 
 ---
 
-## 6. Callbacks
+## 7. Callbacks
 
 ### KBWebViewClient
 
@@ -444,7 +520,7 @@ interface KBWebChromeClient {
 
 ---
 
-## 7. Debug Utilities
+## 8. Debug Utilities
 
 ### showScreenshotPreview
 

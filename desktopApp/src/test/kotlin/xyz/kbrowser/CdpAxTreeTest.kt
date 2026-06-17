@@ -21,7 +21,7 @@ fun main() {
 
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
     KBrowser.setConfigPath(storageDir)
-    initializeKBrowser()
+    kotlinx.coroutines.runBlocking { initializeKBrowser() }
 
     // macOS 上 startupAsync 是异步的，initializeKBrowser 里的 10s 等待可能不够
     // 额外再等 5s 确保 CefApp 完全初始化

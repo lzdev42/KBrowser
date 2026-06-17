@@ -20,7 +20,7 @@ fun main() {
 
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
     KBrowser.setConfigPath(storageDir)
-    initializeKBrowser()
+    runBlocking { initializeKBrowser() }
 
     println("[Debugger] 额外等待 CefApp 完全初始化 (5s)...")
     Thread.sleep(5000)

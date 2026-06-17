@@ -25,7 +25,7 @@ fun main() {
 
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
     KBrowser.setConfigPath(storageDir)
-    initializeKBrowser()
+    runBlocking { initializeKBrowser() }
 
     // Create temporary test files
     val testFileA = File.createTempFile("upload_test_a", ".txt").apply {

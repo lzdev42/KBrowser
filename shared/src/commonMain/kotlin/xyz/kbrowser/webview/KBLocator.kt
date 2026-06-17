@@ -96,9 +96,9 @@ data class KBLocator(
 
     // ===== Interaction Operations =====
 
-    suspend fun click() {
+    suspend fun click(): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.clickByCoordinates(node.centerX, node.centerY)
+        return page.clickByCoordinates(node.centerX, node.centerY)
     }
 
     suspend fun hover() {
@@ -106,12 +106,12 @@ data class KBLocator(
         page.hoverByCoordinates(node.centerX, node.centerY)
     }
 
-    suspend fun scroll(deltaX: Int, deltaY: Int) {
+    suspend fun scroll(deltaX: Int, deltaY: Int): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        page.scrollByCoordinates(node.centerX, node.centerY, deltaX, deltaY)
+        return page.scrollByCoordinates(node.centerX, node.centerY, deltaX, deltaY)
     }
 
-    suspend fun fill(value: String) {
+    suspend fun fill(value: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         // 1. Click to focus
         page.clickByCoordinates(node.centerX, node.centerY)
@@ -125,6 +125,9 @@ data class KBLocator(
             .replace("__VALUE__", escapedValue)
             .replace("__SELECTOR_TYPE__", selectorType.name)
         page.evaluateJavascript(fillJs)
+        delay(100)
+        // 4. Verify: read back el.value
+        return verifyInputValue(node.selector, value, "fill")
     }
 
     /**
@@ -137,7 +140,7 @@ data class KBLocator(
      * 2. Clear existing value: Ctrl+A → Delete (native key events)
      * 3. Type each character via native key event API with random delay
      */
-    suspend fun type(text: String) {
+    suspend fun type(text: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         // 1. Click to focus
         page.clickByCoordinates(node.centerX, node.centerY)
@@ -152,6 +155,8 @@ data class KBLocator(
             page.typeChar(char)
             delay(Random.nextLong(30, 150))
         }
+        // 4. Verify: read back el.value
+        return verifyInputValue(node.selector, text, "type")
     }
 
     suspend fun focus() {
@@ -229,7 +234,7 @@ data class KBLocator(
         performScrollByJs(page.webView, node.selector, deltaX, deltaY)
     }
 
-    suspend fun jsFill(value: String) {
+    suspend fun jsFill(value: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         // 1. Focus via JS
         performFocusByJs(page.webView, node.selector)
@@ -243,9 +248,12 @@ data class KBLocator(
             .replace("__VALUE__", escapedValue)
             .replace("__SELECTOR_TYPE__", "CSS")
         page.evaluateJavascript(fillJs)
+        delay(100)
+        // 4. Verify
+        return verifyInputValue(node.selector, value, "fill")
     }
 
-    suspend fun jsType(text: String) {
+    suspend fun jsType(text: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         // 1. Focus via JS
         performFocusByJs(page.webView, node.selector)
@@ -260,6 +268,8 @@ data class KBLocator(
             page.typeChar(char)
             delay(Random.nextLong(30, 150))
         }
+        // 4. Verify
+        return verifyInputValue(node.selector, text, "type")
     }
 
     suspend fun jsFocus() {
@@ -427,4 +437,44 @@ data class KBLocator(
 
     fun first(): KBLocator = nth(0)
     fun last(): KBLocator = nth(-1)
+
+    // ===== Verification Helpers =====
+
+    /**
+     * 验证输入框的值是否与期望值匹配。
+     * 使用只读 JS API（el.value / el.innerText），零 anti-bot 检测风险。
+     */
+    private suspend fun verifyInputValue(cssSelector: String, expected: String, action: String): OperationResult {
+        val escapedSel = escapeJs(cssSelector)
+        val js = """
+            (function() {
+                var el = document.querySelector("$escapedSel");
+                if (!el) return JSON.stringify({found: false, value: null});
+                var val = ('value' in el) ? el.value : (el.innerText || el.textContent || '');
+                return JSON.stringify({found: true, value: val});
+            })()
+        """.trimIndent()
+        val result = page.evaluateJavascript(js).trim()
+        return try {
+            val jsonObj = kotlinx.serialization.json.Json.parseToJsonElement(result)
+                .let { it as kotlinx.serialization.json.JsonObject }
+            val found = jsonObj["found"]?.let {
+                (it as kotlinx.serialization.json.JsonPrimitive).content.toBoolean()
+            } ?: false
+            if (!found) {
+                return OperationResult.Failure(action, "element not found for verification", recoverable = false)
+            }
+            val actual = jsonObj["value"]?.let {
+                (it as kotlinx.serialization.json.JsonPrimitive).content
+            } ?: ""
+            if (actual == expected) {
+                OperationResult.Success(action, detail = "value='$actual'")
+            } else {
+                OperationResult.Failure(action,
+                    "expected '$expected', got '$actual'")
+            }
+        } catch (e: Exception) {
+            OperationResult.Success(action, verified = false)
+        }
+    }
 }
