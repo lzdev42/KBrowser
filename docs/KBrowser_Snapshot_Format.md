@@ -6,12 +6,19 @@
 
 ## 概述
 
-`AxTreeData.toYamlSnapshot()` 将 AXTree 转换为人类可读的文本格式。
+`AxTreeData.toYamlSnapshot(mode)` 将 AXTree 转换为人类可读的文本格式。
 
 相比原始 JSON，这个格式：
 - **token 更少**：树形结构天然压缩，子节点文本上浮后节点数大幅减少
 - **语义更清晰**：图标按钮的文字自动上浮，placeholder 直接显示，一眼看懂
 - **信息完整**：坐标、选择器、遮挡信息全部保留
+
+通过 `SnapshotMode` 枚举控制序列化模式：
+
+| 模式 | 视口外节点 | StaticText / 伪元素 | 空容器 | 适用场景 |
+|------|----------|-------------------|--------|---------|
+| `VIEWPORT` | 过滤 | 过滤 | 过滤 | AI 消费，token 最少 |
+| `CLEAN` | 保留 | 过滤 | 过滤 | 需要完整页面结构但去除冗余 |
 
 ---
 
@@ -118,11 +125,19 @@ page.locator(targetNode.selector).jsClick()
 ## 用法
 
 ```kotlin
+// 通过 KBPage.snapshot() 获取（推荐，一次调用同时拿到 YAML 和原始数据）
+val result = page.snapshot(SnapshotMode.VIEWPORT)
+val snapshot = result.yaml          // YAML 字符串，给 AI
+val rawTree = result.rawTree        // 原始 AxTreeData，refid 与 yaml 一致
+
+// 或直接从 AxTreeData 转换
 val tree = page.getRawAxTree()
 
-// 获取 YAML snapshot
-val snapshot = tree.toYamlSnapshot()
-println(snapshot)
+// 视口内紧凑 YAML（默认，适合 AI 消费）
+val viewportYaml = tree.toYamlSnapshot(SnapshotMode.VIEWPORT)
+
+// 全页面紧凑 YAML（保留视口外节点）
+val cleanYaml = tree.toYamlSnapshot(SnapshotMode.CLEAN)
 
 // 原始 JSON 仍然可用（机器处理、精确坐标查询）
 val json = Json { prettyPrint = true }.encodeToString(AxTreeData.serializer(), tree)

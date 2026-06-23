@@ -191,6 +191,11 @@ page.getByRole("button", name = "登录").jsClick()
 val tree = page.getRawAxTree().getCleanedAxTree()
 println("可见节点数: ${tree.visibleElements}")
 
+// 获取页面 Snapshot（一次调用同时拿到 YAML 和原始数据）
+val result = page.snapshot(SnapshotMode.VIEWPORT)
+val yaml = result.yaml          // 给 AI
+val rawTree = result.rawTree    // 原始数据，refid 与 yaml 一致
+
 // 截图
 val png = page.screenshot()
 

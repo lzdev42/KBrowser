@@ -106,8 +106,8 @@ class AxTreeSnapshotTest {
             nodes = listOf(rootNode, bodyNode, divNode, buttonNode, textNode, outOfViewportButton, outOfViewportText)
         )
 
-        println("=== 运行 toYamlSnapshot(clean = true) ===")
-        val cleanYaml = axTreeData.toYamlSnapshot(clean = true)
+        println("=== 运行 toYamlSnapshot(SnapshotMode.VIEWPORT) ===")
+        val cleanYaml = axTreeData.toYamlSnapshot(SnapshotMode.VIEWPORT)
         println(cleanYaml)
 
         // 验证：
@@ -218,8 +218,8 @@ class AxTreeSnapshotTest {
             nodes = listOf(rootNode, bodyNode, divNode, buttonNode1, textNode1, buttonNode2, textNode2)
         )
 
-        println("=== 运行 toYamlSnapshot(clean = true) 验证分组保护 ===")
-        val cleanYaml = axTreeData.toYamlSnapshot(clean = true)
+        println("=== 运行 toYamlSnapshot(SnapshotMode.VIEWPORT) 验证分组保护 ===")
+        val cleanYaml = axTreeData.toYamlSnapshot(SnapshotMode.VIEWPORT)
         println(cleanYaml)
 
         // 验证：

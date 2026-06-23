@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import xyz.kbrowser.webview.KBPage
 import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.AxTreeData
+import xyz.kbrowser.webview.SnapshotMode
 import xyz.kbrowser.webview.getCleanedAxTree
 import xyz.kbrowser.webview.toYamlSnapshot
 
@@ -216,8 +217,9 @@ class BrowserViewModel : ViewModel() {
                 log("开始抓取 Snapshot（YAML 格式 & 原始 JSON）...")
                 viewModelScope.launch {
                     try {
-                        val rawTree = page.getRawAxTree()
-                        val yaml = page.snapshot(true)
+                        val result = page.snapshot(SnapshotMode.VIEWPORT)
+                        val yaml = result.yaml
+                        val rawTree = result.rawTree
                         
                         val jsonParser = kotlinx.serialization.json.Json { 
                             prettyPrint = true
@@ -357,8 +359,9 @@ class BrowserViewModel : ViewModel() {
                     log("启动一键自动化测试流程...")
                     try {
                         log("[步骤 1] 正在提取 Aria 语义快照树...")
-                        val rawAxTree = page.getRawAxTree()
-                        val snapshot = rawAxTree.toYamlSnapshot(clean = true)
+                        val snapshotResult = page.snapshot(SnapshotMode.VIEWPORT)
+                        val rawAxTree = snapshotResult.rawTree
+                        val snapshot = snapshotResult.yaml
                         log("[步骤 1] 语义树提取成功（原始节点数: ${rawAxTree.nodes.size}）")
 
                         log("[步骤 2] 正在抓取 CSS 选择器...")

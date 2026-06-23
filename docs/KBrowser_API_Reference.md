@@ -189,12 +189,49 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 | Method | Description |
 |--------|-------------|
 | `suspend getRawAxTree(): AxTreeData` | Retrieves the full accessibility tree and updates the internal node cache |
-| `suspend snapshot(clean: Boolean = false): String` | Returns the current page as a KBrowser YAML Snapshot string |
+| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | Returns a `SnapshotResult` containing both the YAML string and the raw `AxTreeData` from the same fetch, guaranteeing refid consistency |
 | `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension: filters out invisible elements, script/style tags, debug overlays |
 | `AxTreeData.getViewportAxTree(): AxTreeData` | Extension: crops nodes to the current viewport area |
-| `AxTreeData.toYamlSnapshot(): String` | Converts to KBrowser YAML Snapshot format. See [Snapshot Format](KBrowser_Snapshot_Format.md). |
+| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | Converts to KBrowser YAML Snapshot format. See [Snapshot Format](KBrowser_Snapshot_Format.md). |
 
 Extension functions are pure Kotlin computations that execute in the caller's coroutine context.
+
+#### SnapshotMode Enum
+
+```kotlin
+enum class SnapshotMode {
+    VIEWPORT,  // Viewport-only compact serialization, suitable for AI consumption
+    CLEAN      // Full-page compact serialization, noise removed but all nodes preserved (including off-viewport)
+}
+```
+
+| Mode | Off-viewport Nodes | StaticText / Pseudo-elements | Empty Containers | Use Case |
+|------|-------------------|------------------------------|-----------------|----------|
+| `VIEWPORT` | Filtered out | Filtered out | Filtered out | AI consumption, minimal tokens |
+| `CLEAN` | Preserved | Filtered out | Filtered out | Full page structure needed, minus noise |
+
+#### SnapshotResult Data Class
+
+```kotlin
+data class SnapshotResult(
+    val yaml: String,       // KBrowser YAML Snapshot string, for AI consumption
+    val rawTree: AxTreeData // Raw data from the same fetch, refids consistent with yaml
+)
+```
+
+> **Important**: The `yaml` and `rawTree` in `SnapshotResult` come from the same `getRawAxTree()` call, guaranteeing refid consistency. Do not call `snapshot()` and `getRawAxTree()` separately, as refids may change between calls.
+
+#### Usage Example
+
+```kotlin
+// Get viewport-only YAML for AI, with raw data preserved
+val result = page.snapshot(SnapshotMode.VIEWPORT)
+val yaml = result.yaml          // For AI
+val rawTree = result.rawTree    // Raw data for further processing
+
+// Get full-page YAML (includes off-viewport nodes)
+val fullResult = page.snapshot(SnapshotMode.CLEAN)
+```
 
 ### Interaction (refid-based)
 
@@ -442,6 +479,24 @@ data class AxTreeData(
     val hiddenElements: Int,
     val iframeCount: Int,
     val nodes: List<AxNode>
+)
+```
+
+### SnapshotMode Enum
+
+```kotlin
+enum class SnapshotMode {
+    VIEWPORT,  // Viewport-only compact serialization, suitable for AI consumption
+    CLEAN      // Full-page compact serialization, noise removed but all nodes preserved (including off-viewport)
+}
+```
+
+### SnapshotResult
+
+```kotlin
+data class SnapshotResult(
+    val yaml: String,       // KBrowser YAML Snapshot string
+    val rawTree: AxTreeData // Raw data from the same fetch
 )
 ```
 

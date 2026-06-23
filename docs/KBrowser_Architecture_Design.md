@@ -43,6 +43,7 @@ classDiagram
         +suspend loadUrl(url: String)
         +suspend evaluateJavascript(script: String) String
         +suspend getRawAxTree() AxTreeData
+        +suspend snapshot(mode: SnapshotMode) SnapshotResult
         +suspend click(refid: String)
         +suspend hover(refid: String)
         +suspend scroll(refid: String, deltaX: Int, deltaY: Int)

@@ -187,12 +187,49 @@ fun BrowserScreen() {
 | 方法 | 说明 |
 |------|------|
 | `suspend getRawAxTree(): AxTreeData` | 获取完整语义树，刷新内部节点缓存 |
-| `suspend snapshot(clean: Boolean = false): String` | 返回 KBrowser YAML Snapshot 字符串 |
+| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | 返回 `SnapshotResult`，包含 YAML 字符串和原始 `AxTreeData`，两者来自同一次 fetch，refid 保证一致 |
 | `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展：过滤不可见元素、script/style 标签、调试 overlay |
 | `AxTreeData.getViewportAxTree(): AxTreeData` | 扩展：裁剪到当前视口范围内的节点 |
-| `AxTreeData.toYamlSnapshot(): String` | 转换为 KBrowser YAML Snapshot 格式。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
+| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | 转换为 KBrowser YAML Snapshot 格式。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
 
 扩展函数是纯 Kotlin 计算，在调用方协程上下文执行，不切换线程。
+
+#### SnapshotMode 枚举
+
+```kotlin
+enum class SnapshotMode {
+    VIEWPORT,  // 视口内紧凑序列化，适合 AI 消费
+    CLEAN      // 全页面紧凑序列化，去除噪音但保留所有节点（含视口外）
+}
+```
+
+| 模式 | 视口外节点 | StaticText / 伪元素 | 空容器 | 适用场景 |
+|------|----------|-------------------|--------|---------|
+| `VIEWPORT` | 过滤 | 过滤 | 过滤 | AI 消费，token 最少 |
+| `CLEAN` | 保留 | 过滤 | 过滤 | 需要完整页面结构但去除冗余 |
+
+#### SnapshotResult 数据类
+
+```kotlin
+data class SnapshotResult(
+    val yaml: String,       // KBrowser YAML Snapshot 字符串，给 AI 使用
+    val rawTree: AxTreeData // 同一次 fetch 的完整原始数据，refid 与 yaml 一致
+)
+```
+
+> **重要**：`snapshot()` 返回的 `yaml` 和 `rawTree` 来自同一次 `getRawAxTree()` 调用，refid 保证一致。不应分别调用 `snapshot()` 和 `getRawAxTree()`，因为两次调用之间 refid 可能已变化。
+
+#### 使用示例
+
+```kotlin
+// 获取 AI 消费用的视口内 YAML，同时保留原始数据
+val result = page.snapshot(SnapshotMode.VIEWPORT)
+val yaml = result.yaml          // 给 AI
+val rawTree = result.rawTree    // 原始数据，用于后续处理
+
+// 获取完整页面 YAML（包含视口外节点）
+val fullResult = page.snapshot(SnapshotMode.CLEAN)
+```
 
 ### 交互（基于 refid）
 
@@ -440,6 +477,24 @@ data class AxTreeData(
     val hiddenElements: Int,
     val iframeCount: Int,
     val nodes: List<AxNode>
+)
+```
+
+### SnapshotMode 枚举
+
+```kotlin
+enum class SnapshotMode {
+    VIEWPORT,  // 视口内紧凑序列化，适合 AI 消费
+    CLEAN      // 全页面紧凑序列化，去除噪音但保留所有节点（含视口外）
+}
+```
+
+### SnapshotResult
+
+```kotlin
+data class SnapshotResult(
+    val yaml: String,       // KBrowser YAML Snapshot 字符串
+    val rawTree: AxTreeData // 同一次 fetch 的完整原始数据
 )
 ```
 

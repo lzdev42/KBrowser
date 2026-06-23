@@ -191,6 +191,11 @@ page.getByRole("button", name = "Login").jsClick()
 val tree = page.getRawAxTree().getCleanedAxTree()
 println("Visible nodes: ${tree.visibleElements}")
 
+// Get page snapshot (YAML + raw data from the same fetch)
+val result = page.snapshot(SnapshotMode.VIEWPORT)
+val yaml = result.yaml          // For AI
+val rawTree = result.rawTree    // Raw data, refids consistent with yaml
+
 // Screenshot
 val png = page.screenshot()
 

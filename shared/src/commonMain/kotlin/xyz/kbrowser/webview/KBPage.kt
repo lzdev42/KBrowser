@@ -323,27 +323,20 @@ class KBPage(val webView: KBWebView) {
     }
 
     /**
-     * Returns the current page state as a KBrowser YAML Snapshot string.
+     * Returns the current page state as a [SnapshotResult].
      *
-     * Pure JSON→YAML conversion of the AXTree — no filtering, no truncation.
-     * All node fields and attributes are preserved.
-     * Use [toYamlSnapshot] with `clean = true` for a cleaned version.
+     * [mode] controls the YAML serialization:
+     * - [SnapshotMode.VIEWPORT]: viewport-only compact YAML for AI consumption.
+     * - [SnapshotMode.CLEAN]: full-page compact YAML (all nodes, cleaned but no viewport filtering).
      *
-     * Example output:
-     * ```
-     * url: "https://example.com"
-     * innerWidth: 1920
-     * ...
-     * nodes:
-     *   - refid: "r1"
-     *     tagName: "html"
-     *     role: "document"
-     *     ...
-     * ```
+     * The returned [SnapshotResult] always contains both the YAML string ([SnapshotResult.yaml])
+     * and the raw [AxTreeData] ([SnapshotResult.rawTree]) from the same underlying fetch,
+     * so refids are guaranteed consistent between the two.
      */
-    suspend fun snapshot(clean: Boolean = false): String {
+    suspend fun snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult {
         val rawTree = getRawAxTree()
-        return rawTree.toYamlSnapshot(clean)
+        val yaml = rawTree.toYamlSnapshot(mode)
+        return SnapshotResult(yaml, rawTree)
     }
 
     /**
