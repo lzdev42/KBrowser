@@ -3,7 +3,6 @@ package xyz.kbrowser.webview
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
-import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.cef.network.CefCookieManager
@@ -319,9 +318,8 @@ class JvmWebView(
             SwingUtilities.invokeLater {
                 val frame = javax.swing.JFrame()
                 frame.isUndecorated = true
-                val screenSize = java.awt.Toolkit.getDefaultToolkit().screenSize
-                val vpW = viewportWidth ?: screenSize.width
-                val vpH = viewportHeight ?: screenSize.height
+                val vpW = viewportWidth ?: 1280
+                val vpH = viewportHeight ?: 800
                 frame.setSize(vpW, vpH)
                 try {
                     frame.opacity = 0.0f
@@ -1230,15 +1228,11 @@ object JcefWebViewRender {
     fun render(webView: KBWebView, modifier: Modifier) {
         val jvmWebView = webView as? JvmWebView ?: return
 
-        val sizeModifier = modifier.onSizeChanged { size ->
-            jvmWebView.resizeViewport(size.width, size.height)
-        }
-
         SwingPanel(
             factory = {
                 jvmWebView.browser.getComponent()
             },
-            modifier = sizeModifier
+            modifier = modifier
         )
     }
 }
