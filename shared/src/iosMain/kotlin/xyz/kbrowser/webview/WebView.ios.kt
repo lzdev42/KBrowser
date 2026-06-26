@@ -87,7 +87,7 @@ class IosWebView(
             val screenBounds = platform.UIKit.UIScreen.mainScreen.bounds
             val vpW = viewportWidth?.toDouble() ?: screenBounds.useContents { size.width }
             val vpH = viewportHeight?.toDouble() ?: screenBounds.useContents { size.height }
-            val frame = platform.CoreGraphics.CGRectMake(0.0, 0.0, vpW, vpH).readValue()
+            val frame = platform.CoreGraphics.CGRectMake(0.0, 0.0, vpW, vpH)
             w = WKWebView(frame = frame, configuration = config)
             
             webView = w
