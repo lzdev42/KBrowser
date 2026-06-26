@@ -59,7 +59,7 @@ compose.desktop {
 | Method / Property | Description |
 |-------------------|-------------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | Configures storage directory and rendering mode. Must be called before `initializeKBrowser()` and `newPage()`. `useOsr` determines the rendering mode (see Rendering Modes section in README) and cannot be changed after initialization. |
-| `KBrowser.newPage(url: String? = null): KBPage` | Creates a new headless browser page (see Headless Mode section). Optionally navigates to `url` on creation. |
+| `KBrowser.newPage(url: String? = null, viewportWidth: Int? = null, viewportHeight: Int? = null, headless: Boolean = true): KBPage` | Creates a new browser page. Optionally navigates to `url` on creation. `viewportWidth`/`viewportHeight` set the initial viewport size (defaults to screen size if null). `headless = true` creates a headless WebView with no UI container (JVM: transparent JFrame); `headless = false` creates a WebView for Compose display without a headless container. |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | Reactive stream of all currently open pages. |
 | `KBrowser.getPages(): List<KBPage>` | Synchronously returns a snapshot of all currently open pages. |
 | `KBrowser.shutdown()` | Closes all pages and performs global resource cleanup. |

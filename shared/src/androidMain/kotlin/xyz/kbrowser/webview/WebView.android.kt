@@ -20,7 +20,9 @@ import kotlin.coroutines.resume
 
 class AndroidWebView(
     private val initialUrl: String?,
-    val profile: KBProfile?
+    val profile: KBProfile?,
+    private val viewportWidth: Int? = null,
+    private val viewportHeight: Int? = null
 ) : KBWebView {
     override val currentUrl = MutableStateFlow<String?>(initialUrl)
     override val currentTitle = MutableStateFlow<String?>(null)
@@ -89,7 +91,10 @@ class AndroidWebView(
                 }
             }
 
-            w.layout(0, 0, 1280, 800)
+            val displayMetrics = context.resources.displayMetrics
+            val vpW = viewportWidth ?: displayMetrics.widthPixels
+            val vpH = viewportHeight ?: displayMetrics.heightPixels
+            w.layout(0, 0, vpW, vpH)
 
             webView = w
             if (initialUrl != null) {
@@ -284,7 +289,7 @@ actual fun rememberKBWebView(
 ): KBWebView {
     val context = androidx.compose.ui.platform.LocalContext.current
     val webView = remember(initialUrl, profile) {
-        AndroidWebView(initialUrl, profile).apply {
+        AndroidWebView(initialUrl, profile, viewportWidth = null, viewportHeight = null).apply {
             getOrCreateWebView(context)
         }
     }
@@ -298,9 +303,12 @@ actual fun rememberKBWebView(
 
 internal actual fun createHeadlessWebView(
     initialUrl: String?,
-    profile: KBProfile?
+    profile: KBProfile?,
+    viewportWidth: Int?,
+    viewportHeight: Int?,
+    headless: Boolean
 ): KBWebView {
-    return AndroidWebView(initialUrl, profile)
+    return AndroidWebView(initialUrl, profile, viewportWidth, viewportHeight)
 }
 
 internal actual suspend fun performClickByCoordinates(

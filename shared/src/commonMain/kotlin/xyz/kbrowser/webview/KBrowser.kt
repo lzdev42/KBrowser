@@ -44,11 +44,16 @@ object KBrowser {
         initializeConfig(path)
     }
 
-    suspend fun newPage(url: String? = null): KBPage {
+    suspend fun newPage(
+        url: String? = null,
+        viewportWidth: Int? = null,
+        viewportHeight: Int? = null,
+        headless: Boolean = true
+    ): KBPage {
         val path = storageDir
             ?: throw IllegalStateException("KBrowser.initializeConfig() must be called before newPage()")
         val webView = withContext(Dispatchers.Main) {
-            createHeadlessWebView(null, null)
+            createHeadlessWebView(null, null, viewportWidth, viewportHeight, headless)
         }
         val page = KBPage(webView)
         _pages.update { it + page }

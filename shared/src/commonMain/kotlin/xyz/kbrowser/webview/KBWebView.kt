@@ -124,7 +124,10 @@ expect fun rememberKBWebView(
 
 internal expect fun createHeadlessWebView(
     initialUrl: String? = null,
-    profile: KBProfile? = null
+    profile: KBProfile? = null,
+    viewportWidth: Int? = null,
+    viewportHeight: Int? = null,
+    headless: Boolean = true
 ): KBWebView
 
 internal expect suspend fun performClickByCoordinates(

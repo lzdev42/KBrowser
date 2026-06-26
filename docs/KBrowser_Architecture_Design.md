@@ -25,7 +25,7 @@ classDiagram
     class KBrowser {
         <<object Singleton>>
         +initializeConfig(storageDir: String?, useOsr: Boolean)
-        +newPage(url: String?) KBPage
+        +newPage(url: String?, viewportWidth: Int?, viewportHeight: Int?, headless: Boolean) KBPage
         +pages: StateFlow~List~KBPage~~
         +getPages() List~KBPage~
         +registerPage(page: KBPage)

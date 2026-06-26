@@ -3,6 +3,7 @@ package xyz.kbrowser.webview
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
+import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.cef.network.CefCookieManager
@@ -60,7 +61,9 @@ object OsrMode {
 class JvmWebView(
     initialUrl: String?,
     profile: KBProfile? = null,
-    val isHeadless: Boolean = false
+    val isHeadless: Boolean = false,
+    private val viewportWidth: Int? = null,
+    private val viewportHeight: Int? = null
 ) : KBWebView {
     private val isDestroyed = AtomicBoolean(false)
     private var headlessFrame: javax.swing.JFrame? = null
@@ -316,11 +319,13 @@ class JvmWebView(
             SwingUtilities.invokeLater {
                 val frame = javax.swing.JFrame()
                 frame.isUndecorated = true
-                frame.setSize(1280, 800)
+                val screenSize = java.awt.Toolkit.getDefaultToolkit().screenSize
+                val vpW = viewportWidth ?: screenSize.width
+                val vpH = viewportHeight ?: screenSize.height
+                frame.setSize(vpW, vpH)
                 try {
                     frame.opacity = 0.0f
                 } catch (e: Exception) {
-                    // 某些窗口管理器或 JDK 不支持半透明/透明窗口时忽略
                 }
                 frame.contentPane.add(browser.getComponent())
                 frame.isVisible = true
@@ -1018,6 +1023,17 @@ class JvmWebView(
         )
     }
 
+    fun resizeViewport(width: Int, height: Int) {
+        if (isDestroyed.get()) return
+        SwingUtilities.invokeLater {
+            val comp = cefBrowser.uiComponent ?: return@invokeLater
+            if (comp.width != width || comp.height != height) {
+                comp.setSize(width, height)
+                cefBrowser.wasResized(0, 0)
+            }
+        }
+    }
+
     override fun destroy() {
         if (isDestroyed.compareAndSet(false, true)) {
             jsCallbacks.values.forEach { it.dispose() }
@@ -1204,8 +1220,8 @@ class JvmWebView(
 }
 
 object JcefWebViewFactory {
-    fun create(initialUrl: String?, profile: KBProfile?): KBWebView {
-        return JvmWebView(initialUrl, profile)
+    fun create(initialUrl: String?, profile: KBProfile?, viewportWidth: Int? = null, viewportHeight: Int? = null, headless: Boolean = true): KBWebView {
+        return JvmWebView(initialUrl, profile, isHeadless = headless, viewportWidth = viewportWidth, viewportHeight = viewportHeight)
     }
 }
 
@@ -1214,11 +1230,15 @@ object JcefWebViewRender {
     fun render(webView: KBWebView, modifier: Modifier) {
         val jvmWebView = webView as? JvmWebView ?: return
 
+        val sizeModifier = modifier.onSizeChanged { size ->
+            jvmWebView.resizeViewport(size.width, size.height)
+        }
+
         SwingPanel(
             factory = {
                 jvmWebView.browser.getComponent()
             },
-            modifier = modifier
+            modifier = sizeModifier
         )
     }
 }
@@ -1255,7 +1275,7 @@ actual fun rememberKBWebView(
 ): KBWebView {
     val webView = androidx.compose.runtime.remember(initialUrl, profile) {
         if (JcefChecker.isJcefAvailable) {
-            JcefWebViewFactory.create(initialUrl, profile)
+            JcefWebViewFactory.create(initialUrl, profile, headless = false)
         } else {
             FallbackWebView(initialUrl ?: "about:blank")
         }
@@ -1271,10 +1291,13 @@ actual fun rememberKBWebView(
 
 internal actual fun createHeadlessWebView(
     initialUrl: String?,
-    profile: KBProfile?
+    profile: KBProfile?,
+    viewportWidth: Int?,
+    viewportHeight: Int?,
+    headless: Boolean
 ): KBWebView {
     if (JcefChecker.isJcefAvailable) {
-        return JvmWebView(initialUrl, profile = profile, isHeadless = true)
+        return JvmWebView(initialUrl, profile = profile, isHeadless = headless, viewportWidth = viewportWidth, viewportHeight = viewportHeight)
     } else {
         return FallbackWebView(initialUrl ?: "about:blank")
     }

@@ -212,7 +212,7 @@ page.close()
 
 ## Headless Mode (JVM Desktop)
 
-`KBrowser.newPage()` creates a headless page by instantiating `JvmWebView` with `isHeadless = true`. The implementation creates a transparent `JFrame` (opacity = 0, 1280×800) and mounts the JCEF component on it.
+`KBrowser.newPage(headless = true)` creates a headless page by instantiating `JvmWebView` with `isHeadless = true`. The implementation creates a transparent `JFrame` (opacity = 0) and mounts the JCEF component on it. The viewport size defaults to the screen size, or can be specified via `viewportWidth`/`viewportHeight` parameters. When `headless = false`, no transparent JFrame is created — the WebView is intended for Compose display and will auto-resize when mounted.
 
 **Limitations**:
 - This is not a true headless browser. A UI framework window is still created (with zero opacity).

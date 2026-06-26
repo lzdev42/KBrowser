@@ -1,5 +1,6 @@
 package xyz.kbrowser.webview
 
+import xyz.kbrowser.webview.SnapshotMode
 import java.io.File
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
@@ -68,7 +69,7 @@ fun main() {
 
                 // ── 获取 AX Tree ──
                 println("\n[Test] 获取 AX Tree snapshot...")
-                val snapshot = page.snapshot(clean = true)
+                val snapshot = page.snapshot(SnapshotMode.VIEWPORT).yaml
                 println("[Test] Snapshot 前 600 字符:\n${snapshot.take(600)}\n")
 
                 // ──────────────────────────────────────────────

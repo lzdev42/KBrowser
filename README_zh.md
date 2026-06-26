@@ -212,7 +212,7 @@ page.close()
 
 ## 无头模式（JVM Desktop）
 
-`KBrowser.newPage()` 通过创建 `isHeadless = true` 的 `JvmWebView` 实现无头页面。底层实现为创建一个透明 `JFrame`（opacity = 0，1280×800），将 JCEF 组件挂载其上。
+`KBrowser.newPage(headless = true)` 通过创建 `isHeadless = true` 的 `JvmWebView` 实现无头页面。底层实现为创建一个透明 `JFrame`（opacity = 0），将 JCEF 组件挂载其上。视口尺寸默认为屏幕尺寸，也可通过 `viewportWidth`/`viewportHeight` 参数指定。当 `headless = false` 时不创建透明 JFrame，WebView 用于 Compose 展示，挂载后会自动跟随布局尺寸调整视口。
 
 **限制**：
 - 这不是真正的无头浏览器，UI 框架窗口仍然存在（只是完全透明）。

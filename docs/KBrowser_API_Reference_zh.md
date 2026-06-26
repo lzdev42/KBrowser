@@ -59,7 +59,7 @@ compose.desktop {
 | 方法 / 属性 | 说明 |
 |------------|------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | 配置存储目录与渲染模式。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。`useOsr` 决定渲染模式（见 README 渲染模式章节），初始化后不可更改。 |
-| `KBrowser.newPage(url: String? = null): KBPage` | 创建无头浏览器页面（见无头模式章节），可选在创建时导航到 `url`。 |
+| `KBrowser.newPage(url: String? = null, viewportWidth: Int? = null, viewportHeight: Int? = null, headless: Boolean = true): KBPage` | 创建浏览器页面，可选在创建时导航到 `url`。`viewportWidth`/`viewportHeight` 设置初始视口尺寸（null 时默认使用屏幕尺寸）。`headless = true` 创建无 UI 容器的 headless WebView（JVM：透明 JFrame）；`headless = false` 创建用于 Compose 展示的 WebView，不创建 headless 容器。 |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | 当前所有打开页面的响应式流 |
 | `KBrowser.getPages(): List<KBPage>` | 同步获取当前所有打开页面的快照 |
 | `KBrowser.shutdown()` | 关闭所有页面并执行全局资源清理 |

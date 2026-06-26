@@ -18,7 +18,9 @@ import kotlin.coroutines.resume
 
 class IosWebView(
     private val initialUrl: String?,
-    val profile: KBProfile?
+    val profile: KBProfile?,
+    private val viewportWidth: Int? = null,
+    private val viewportHeight: Int? = null
 ) : KBWebView {
     override val currentUrl = MutableStateFlow<String?>(initialUrl)
     override val currentTitle = MutableStateFlow<String?>(null)
@@ -82,7 +84,10 @@ class IosWebView(
             )
             config.userContentController.addUserScript(userScript)
 
-            val frame = platform.CoreGraphics.CGRectZero.readValue()
+            val screenBounds = platform.UIKit.UIScreen.mainScreen.bounds
+            val vpW = viewportWidth?.toDouble() ?: screenBounds.useContents { size.width }
+            val vpH = viewportHeight?.toDouble() ?: screenBounds.useContents { size.height }
+            val frame = platform.CoreGraphics.CGRectMake(0.0, 0.0, vpW, vpH).readValue()
             w = WKWebView(frame = frame, configuration = config)
             
             webView = w
@@ -331,9 +336,12 @@ actual fun rememberKBWebView(
 
 internal actual fun createHeadlessWebView(
     initialUrl: String?,
-    profile: KBProfile?
+    profile: KBProfile?,
+    viewportWidth: Int?,
+    viewportHeight: Int?,
+    headless: Boolean
 ): KBWebView {
-    return IosWebView(initialUrl, profile)
+    return IosWebView(initialUrl, profile, viewportWidth, viewportHeight)
 }
 
 internal actual suspend fun performClickByCoordinates(
