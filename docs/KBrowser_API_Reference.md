@@ -59,12 +59,13 @@ compose.desktop {
 | Method / Property | Description |
 |-------------------|-------------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | Configures storage directory and rendering mode. Must be called before `initializeKBrowser()` and `newPage()`. `useOsr` determines the rendering mode (see Rendering Modes section in README) and cannot be changed after initialization. |
-| `KBrowser.newPage(url: String? = null, viewportWidth: Int? = null, viewportHeight: Int? = null, headless: Boolean = true): KBPage` | Creates a new browser page. Optionally navigates to `url` on creation. `viewportWidth`/`viewportHeight` set the initial viewport size (defaults to screen size if null). `headless = true` creates a headless WebView with no UI container (JVM: transparent JFrame); `headless = false` creates a WebView for Compose display without a headless container. |
+| `KBrowser.newPage(): KBPage` | Creates a **UI-mode** page for display in a Compose window via the `KBWebView` Composable. Render size is controlled by the Compose `modifier`. Navigation is done via `page.loadUrl(url)` (suspend, returns when loaded). |
+| `KBrowser.newHeadlessTab(viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | Creates a **headless-mode** page for background automation (screenshots, CDP, AX Tree). Render size is determined by a transparent `JFrame` (opacity = 0). Default viewport 1280×720, matching Playwright. **Never mount a headless page onto the `KBWebView` Composable.** Navigation is done via `page.loadUrl(url)`. |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | Reactive stream of all currently open pages. |
 | `KBrowser.getPages(): List<KBPage>` | Synchronously returns a snapshot of all currently open pages. |
 | `KBrowser.shutdown()` | Closes all pages and performs global resource cleanup. |
-| `KBrowser.registerPage(page: KBPage)` | Manually registers a `KBPage`. Normally not needed — `newPage()` registers automatically. |
-| `KBrowser.unregisterPage(page: KBPage)` | Removes a page from the list. Normally not needed — `page.close()` handles this. |
+| `KBrowser.registerPage(page: KBPage)` | @Deprecated. Manually registers a `KBPage`. `newPage()`/`newHeadlessTab()` register automatically. |
+| `KBrowser.unregisterPage(page: KBPage)` | @Deprecated. Removes a page from the list. Use `page.close()` instead. |
 
 ---
 
@@ -188,8 +189,7 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 
 | Method | Description |
 |--------|-------------|
-| `suspend getRawAxTree(): AxTreeData` | Retrieves the full accessibility tree and updates the internal node cache |
-| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | Returns a `SnapshotResult` containing both the YAML string and the raw `AxTreeData` from the same fetch, guaranteeing refid consistency |
+| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | Returns a `SnapshotResult` containing both the YAML string and the raw `AxTreeData` from the same fetch, guaranteeing refid consistency. Use this — `getRawAxTree()` is private and should not be called directly. |
 | `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension: filters out invisible elements, script/style tags, debug overlays |
 | `AxTreeData.getViewportAxTree(): AxTreeData` | Extension: crops nodes to the current viewport area |
 | `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | Converts to KBrowser YAML Snapshot format. See [Snapshot Format](KBrowser_Snapshot_Format.md). |

@@ -59,12 +59,13 @@ compose.desktop {
 | 方法 / 属性 | 说明 |
 |------------|------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | 配置存储目录与渲染模式。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。`useOsr` 决定渲染模式（见 README 渲染模式章节），初始化后不可更改。 |
-| `KBrowser.newPage(url: String? = null, viewportWidth: Int? = null, viewportHeight: Int? = null, headless: Boolean = true): KBPage` | 创建浏览器页面，可选在创建时导航到 `url`。`viewportWidth`/`viewportHeight` 设置初始视口尺寸（null 时默认使用屏幕尺寸）。`headless = true` 创建无 UI 容器的 headless WebView（JVM：透明 JFrame）；`headless = false` 创建用于 Compose 展示的 WebView，不创建 headless 容器。 |
+| `KBrowser.newPage(): KBPage` | 创建 **UI 模式** page，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。导航用 `page.loadUrl(url)`（suspend，返回时加载完成）。 |
+| `KBrowser.newHeadlessTab(viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | 创建 **无头模式** page，用于后台自动化（截图、CDP、AX Tree）。渲染尺寸由透明 `JFrame`（opacity = 0）决定。默认 viewport 1280×720，与 Playwright 一致。**禁止将无头 page 挂载到 `KBWebView` Composable。** 导航用 `page.loadUrl(url)`。 |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | 当前所有打开页面的响应式流 |
 | `KBrowser.getPages(): List<KBPage>` | 同步获取当前所有打开页面的快照 |
 | `KBrowser.shutdown()` | 关闭所有页面并执行全局资源清理 |
-| `KBrowser.registerPage(page: KBPage)` | 手动注册页面。通常无需调用，`newPage()` 自动注册。 |
-| `KBrowser.unregisterPage(page: KBPage)` | 从列表移除页面。通常无需调用，`page.close()` 自动处理。 |
+| `KBrowser.registerPage(page: KBPage)` | @Deprecated。手动注册页面。`newPage()`/`newHeadlessTab()` 自动注册。 |
+| `KBrowser.unregisterPage(page: KBPage)` | @Deprecated。从列表移除页面。请用 `page.close()`。 |
 
 ---
 
@@ -186,8 +187,7 @@ fun BrowserScreen() {
 
 | 方法 | 说明 |
 |------|------|
-| `suspend getRawAxTree(): AxTreeData` | 获取完整语义树，刷新内部节点缓存 |
-| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | 返回 `SnapshotResult`，包含 YAML 字符串和原始 `AxTreeData`，两者来自同一次 fetch，refid 保证一致 |
+| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | 返回 `SnapshotResult`，包含 YAML 字符串和原始 `AxTreeData`，两者来自同一次 fetch，refid 保证一致。请使用此方法 —— `getRawAxTree()` 已私有，不应直接调用。 |
 | `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展：过滤不可见元素、script/style 标签、调试 overlay |
 | `AxTreeData.getViewportAxTree(): AxTreeData` | 扩展：裁剪到当前视口范围内的节点 |
 | `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | 转换为 KBrowser YAML Snapshot 格式。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |

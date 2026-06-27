@@ -171,11 +171,11 @@ fun BrowserScreen() {
 - 线程安全的节点缓存（写入使用 `Mutex` 串行化，读取使用 `@Volatile` 保证可见性）
 
 ```kotlin
-val page = KBrowser.newPage(url = "https://example.com")
+val page = KBrowser.newPage()
 
 page.onNewPage = { url -> println("新窗口请求: $url") }
 
-page.loadUrl("https://example.com/login")
+page.loadUrl("https://example.com")
 
 // 坐标模式（物理事件，防检测）
 page.getByLabel("用户名").fill("admin")
@@ -188,7 +188,7 @@ page.getByLabel("密码").jsType("secret")
 page.getByRole("button", name = "登录").jsClick()
 
 // AXTree 语义树提取
-val tree = page.getRawAxTree().getCleanedAxTree()
+val tree = page.snapshot().rawTree.getCleanedAxTree()
 println("可见节点数: ${tree.visibleElements}")
 
 // 获取页面 Snapshot（一次调用同时拿到 YAML 和原始数据）
@@ -212,13 +212,23 @@ page.close()
 
 ## 无头模式（JVM Desktop）
 
-`KBrowser.newPage(headless = true)` 通过创建 `isHeadless = true` 的 `JvmWebView` 实现无头页面。底层实现为创建一个透明 `JFrame`（opacity = 0），将 JCEF 组件挂载其上。视口尺寸默认为屏幕尺寸，也可通过 `viewportWidth`/`viewportHeight` 参数指定。当 `headless = false` 时不创建透明 JFrame，WebView 用于 Compose 展示，挂载后会自动跟随布局尺寸调整视口。
+KBrowser 提供两个职责清晰的 page 创建 API：
+
+- `KBrowser.newPage()` — 创建 **UI 模式 page**，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。
+- `KBrowser.newHeadlessTab(viewportWidth = 1280, viewportHeight = 720)` — 创建 **无头模式 page**，用于后台自动化（截图、CDP 操作、AX Tree 提取）。渲染尺寸由承载 JCEF 组件的透明 `JFrame`（opacity = 0）决定。**禁止将无头 page 挂载到 `KBWebView` Composable** —— 会导致尺寸异常。
+
+两个 API 都只创建 page；导航通过 `page.loadUrl(url)` 完成，它是 `suspend` 函数，返回时即加载完成：
+
+```kotlin
+val page = KBrowser.newHeadlessTab()       // 创建
+page.loadUrl("https://example.com")        // 导航（suspend）
+val png = page.screenshot()                // 已就绪
+```
 
 **限制**：
 - 这不是真正的无头浏览器，UI 框架窗口仍然存在（只是完全透明）。
 - 必须使用 OSR 模式（`useOsr = true`）。
 - Linux 服务器需要虚拟显示器（如 `Xvfb`）。
-- 此模式未经充分测试。
 
 ---
 

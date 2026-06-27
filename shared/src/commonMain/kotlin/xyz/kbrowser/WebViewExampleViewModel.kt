@@ -87,9 +87,7 @@ class WebViewExampleViewModel : ViewModel() {
             try {
                 log("正在初始化示例 Web 页面...")
                 // 创建一个用于示例的独立 session 标签页
-                val newPage = KBrowser.newPage(
-                    url = null // 稍后手动加载
-                )
+                val newPage = KBrowser.newPage()
                 _state.update { it.copy(page = newPage) }
                 
                 // 监听底层的 StateFlow 并更新 UI 状态

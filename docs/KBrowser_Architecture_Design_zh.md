@@ -25,11 +25,10 @@ classDiagram
     class KBrowser {
         <<object Singleton>>
         +initializeConfig(storageDir: String?, useOsr: Boolean)
-        +newPage(url: String?, viewportWidth: Int?, viewportHeight: Int?, headless: Boolean) KBPage
+        +newPage() KBPage
+        +newHeadlessTab(viewportWidth: Int, viewportHeight: Int) KBPage
         +pages: StateFlow~List~KBPage~~
         +getPages() List~KBPage~
-        +registerPage(page: KBPage)
-        +unregisterPage(page: KBPage)
         +shutdown()
     }
 

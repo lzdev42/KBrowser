@@ -65,13 +65,13 @@ fun main() {
         var failed = 0
 
         try {
-            val page = KBrowser.newPage(htmlUrl)
-            delay(3000) // Wait for page to fully load
+            val page = KBrowser.newHeadlessTab()
+            page.loadUrl(htmlUrl) // suspend，返回时加载完成
 
             println("\n[INFO] Page loaded: ${page.currentUrl.value}")
 
             // Get AX tree to find elements
-            val tree = page.getRawAxTree()
+            val tree = page.snapshot().rawTree
             println("[INFO] AX tree nodes: ${tree.nodes.size}")
 
             // Print relevant nodes

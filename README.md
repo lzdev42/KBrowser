@@ -171,11 +171,11 @@ fun BrowserScreen() {
 - Thread-safe node caching with `Mutex` for writes and `@Volatile` for reads
 
 ```kotlin
-val page = KBrowser.newPage(url = "https://example.com")
+val page = KBrowser.newPage()
 
 page.onNewPage = { url -> println("New page request: $url") }
 
-page.loadUrl("https://example.com/login")
+page.loadUrl("https://example.com")
 
 // Coordinate mode (physical events, anti-detection)
 page.getByLabel("Username").fill("admin")
@@ -188,7 +188,7 @@ page.getByLabel("Password").jsType("secret")
 page.getByRole("button", name = "Login").jsClick()
 
 // AXTree extraction
-val tree = page.getRawAxTree().getCleanedAxTree()
+val tree = page.snapshot().rawTree.getCleanedAxTree()
 println("Visible nodes: ${tree.visibleElements}")
 
 // Get page snapshot (YAML + raw data from the same fetch)
@@ -212,13 +212,23 @@ page.close()
 
 ## Headless Mode (JVM Desktop)
 
-`KBrowser.newPage(headless = true)` creates a headless page by instantiating `JvmWebView` with `isHeadless = true`. The implementation creates a transparent `JFrame` (opacity = 0) and mounts the JCEF component on it. The viewport size defaults to the screen size, or can be specified via `viewportWidth`/`viewportHeight` parameters. When `headless = false`, no transparent JFrame is created — the WebView is intended for Compose display and will auto-resize when mounted.
+KBrowser provides two distinct page-creation APIs, each with a clear single responsibility:
+
+- `KBrowser.newPage()` — Creates a **UI page** for display in a Compose window via the `KBWebView` Composable. Render size is determined by the Compose `modifier`.
+- `KBrowser.newHeadlessTab(viewportWidth = 1280, viewportHeight = 720)` — Creates a **headless page** for background automation (screenshots, CDP operations, AX Tree extraction). Render size is determined by a transparent `JFrame` (opacity = 0) that hosts the JCEF component. **Never mount a headless page onto the `KBWebView` Composable** — it will cause size anomalies.
+
+Both APIs only create the page; navigation is done via `page.loadUrl(url)`, which is a `suspend` function that returns when loading completes:
+
+```kotlin
+val page = KBrowser.newHeadlessTab()       // create
+page.loadUrl("https://example.com")        // navigate (suspend)
+val png = page.screenshot()                // ready
+```
 
 **Limitations**:
 - This is not a true headless browser. A UI framework window is still created (with zero opacity).
 - Requires OSR mode (`useOsr = true`).
 - On Linux servers, a virtual display (e.g., `Xvfb`) is required.
-- This mode has not been thoroughly tested.
 
 ---
 

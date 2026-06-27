@@ -1,12 +1,10 @@
 package xyz.kbrowser.webview
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 object KBrowser {
@@ -44,11 +42,58 @@ object KBrowser {
         initializeConfig(path)
     }
 
+    /**
+     * 创建 UI 模式的 Page：可挂载到 KBWebView Composable 显示。
+     * 渲染尺寸由 Compose 的 modifier 决定。
+     *
+     * 导航请用 [KBPage.loadUrl]：`val page = KBrowser.newPage(); page.loadUrl(url)`。
+     *
+     * 使用场景：需要在应用窗口中显示网页内容。
+     */
+    suspend fun newPage(): KBPage =
+        baseNewPage(viewportWidth = null, viewportHeight = null, headless = false)
+
+    /**
+     * 创建无头模式的后台自动化 Page：不挂任何 UI，渲染尺寸由透明 JFrame 决定。
+     *
+     * 导航请用 [KBPage.loadUrl]：`val page = KBrowser.newHeadlessTab(); page.loadUrl(url)`。
+     *
+     * 使用场景：纯自动化任务（截图、CDP 操作、AX Tree 提取等）。
+     * **禁止**将返回的 page 挂载到 KBWebView Composable —— 会导致尺寸异常。
+     *
+     * 默认 viewport 1280×720，与 Playwright 默认值一致。
+     */
+    suspend fun newHeadlessTab(
+        viewportWidth: Int = 1280,
+        viewportHeight: Int = 720
+    ): KBPage = baseNewPage(viewportWidth, viewportHeight, headless = true)
+
+    /**
+     * @Deprecated 使用 [newPage]（UI 模式）或 [newHeadlessTab]（无头自动化）。
+     *
+     * 旧 API 把"创建 page"和"加载 url"混在一个 suspend 函数里，且 url 加载是
+     * fire-and-forget（GlobalScope.launch），与 suspend 语义不符。创建与导航
+     * 应分离：newPage/newHeadlessTab 只创建，导航用 [KBPage.loadUrl]。
+     */
+    @Deprecated(
+        "Use newPage() or newHeadlessTab() to create, then page.loadUrl(url) to navigate",
+        ReplaceWith("if (headless) newHeadlessTab(viewportWidth ?: 1280, viewportHeight ?: 720).also { if (url != null) it.loadUrl(url) } else newPage().also { if (url != null) it.loadUrl(url) }")
+    )
     suspend fun newPage(
         url: String? = null,
         viewportWidth: Int? = null,
         viewportHeight: Int? = null,
         headless: Boolean = true
+    ): KBPage {
+        val page = baseNewPage(viewportWidth, viewportHeight, headless)
+        if (url != null) page.loadUrl(url)
+        return page
+    }
+
+    private suspend fun baseNewPage(
+        viewportWidth: Int?,
+        viewportHeight: Int?,
+        headless: Boolean
     ): KBPage {
         val path = storageDir
             ?: throw IllegalStateException("KBrowser.initializeConfig() must be called before newPage()")
@@ -57,24 +102,24 @@ object KBrowser {
         }
         val page = KBPage(webView)
         _pages.update { it + page }
-        if (url != null) {
-            GlobalScope.launch(Dispatchers.Main) {
-                try {
-                    page.loadUrl(url)
-                } catch (e: Exception) {
-                    println("[KBrowser] Initial loadUrl failed: ${e.message}")
-                }
-            }
-        }
         return page
     }
 
     fun getPages(): List<KBPage> = _pages.value
 
+    /**
+     * @Deprecated newPage/newHeadlessTab 已自动注册，无需手动调用。
+     * 仅保留供需要绕过工厂方法、手动构造 JvmWebView 的特殊场景（如自定义容器测试）使用。
+     */
+    @Deprecated("newPage/newHeadlessTab 已自动注册，无需手动调用", level = DeprecationLevel.WARNING)
     fun registerPage(page: KBPage) {
         _pages.update { if (it.contains(page)) it else it + page }
     }
 
+    /**
+     * @Deprecated 通常配合 [registerPage] 使用，正常路径请用 KBPage.close()。
+     */
+    @Deprecated("通常配合 registerPage 使用，正常路径请用 KBPage.close()", level = DeprecationLevel.WARNING)
     fun unregisterPage(page: KBPage) {
         _pages.update { it - page }
     }

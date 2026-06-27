@@ -318,8 +318,9 @@ class JvmWebView(
             SwingUtilities.invokeLater {
                 val frame = javax.swing.JFrame()
                 frame.isUndecorated = true
+                // 默认 1280×720，与 Playwright 默认 viewport 一致
                 val vpW = viewportWidth ?: 1280
-                val vpH = viewportHeight ?: 800
+                val vpH = viewportHeight ?: 720
                 frame.setSize(vpW, vpH)
                 try {
                     frame.opacity = 0.0f

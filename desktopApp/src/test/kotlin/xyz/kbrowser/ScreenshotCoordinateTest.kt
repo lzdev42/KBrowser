@@ -113,20 +113,19 @@ private suspend fun testSite(site: TestSite): SiteResult {
     var colorTransparent = 0
 
     val page = try {
-        KBrowser.newPage(site.url)
+        KBrowser.newHeadlessTab().also { it.loadUrl(site.url) }
     } catch (e: Exception) {
         println("  ❌ Failed to create page: ${e.message}")
         return SiteResult(site.label, site.url, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, details)
     }
 
-    println("  Waiting for page load...")
-    delay(8000)
+    println("  Page loaded (suspend returned).")
 
     // Step 1: AX tree + screenshot (as close together as possible)
     println("  Getting AX tree...")
     val tree: AxTreeData
     try {
-        tree = page.getRawAxTree()
+        tree = page.snapshot().rawTree
         axTreeNodes = tree.nodes.size
         visibleNodes = tree.nodes.count { it.isVisible && it.width > 0 && it.height > 0 }
         println("  AX Tree: $axTreeNodes total, $visibleNodes visible")

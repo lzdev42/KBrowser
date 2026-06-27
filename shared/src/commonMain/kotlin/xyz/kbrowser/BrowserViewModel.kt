@@ -121,15 +121,17 @@ class BrowserViewModel : ViewModel() {
             try {
                 println("[DEBUG] BrowserViewModel: 开始初始化默认浏览器标签页")
                 log("正在初始化默认浏览器标签页...")
-                val newPage = KBrowser.newPage(
-                    url = _state.value.navigateUrlInput
-                )
+                val newPage = KBrowser.newPage()
                 println("[DEBUG] BrowserViewModel: KBrowser.newPage 返回成功")
                 _state.update { it.copy(page = newPage) }
                 // 监听新窗口请求，print URL
                 newPage.onNewPage = { url ->
                     println("[NEW_WINDOW] 页面请求打开新窗口: $url")
                     log("🔗 新窗口请求: $url")
+                }
+                val initialUrl = _state.value.navigateUrlInput
+                if (!initialUrl.isNullOrBlank()) {
+                    newPage.loadUrl(initialUrl)
                 }
                 log("默认标签页加载完成")
             } catch (e: Exception) {
@@ -247,7 +249,7 @@ class BrowserViewModel : ViewModel() {
                 log("开始抓取选择器（全量DOM）...")
                 viewModelScope.launch {
                     try {
-                        val rawAxTree = page.getRawAxTree()
+                        val rawAxTree = page.snapshot().rawTree
                         val nodesWithSelector = rawAxTree.nodes.filter { it.id.isNotEmpty() || it.className.isNotEmpty() }
                         
                         log("抓取选择器成功！包含 id/class 的节点数: ${nodesWithSelector.size}")
@@ -827,7 +829,7 @@ class BrowserViewModel : ViewModel() {
                     try {
                         // 并行抓截图和 AXTree
                         val bytes = page.screenshot()
-                        val axTree = try { page.getRawAxTree() } catch (e: Exception) { null }
+                        val axTree = try { page.snapshot().rawTree } catch (e: Exception) { null }
                         if (bytes != null) {
                             _state.update { it.copy(screenshotBytes = bytes, screenshotAxTree = axTree) }
                             log("截图成功！大小: ${bytes.size} 字节，AXTree 节点数: ${axTree?.nodes?.size ?: 0}")
@@ -845,7 +847,7 @@ class BrowserViewModel : ViewModel() {
                 log("正在抓取原始 AXTree 并画框...")
                 viewModelScope.launch {
                     try {
-                        val axTree = page.getRawAxTree()
+                        val axTree = page.snapshot().rawTree
                         log("原始节点数: ${axTree.nodes.size}，注入画框 JS...")
                         page.evaluateJavascript(buildOverlayJs(axTree.nodes, cleaned = false))
                         log("✅ 原始 AXTree 框框已画出（蓝色=可见，灰色=不可见）")
@@ -859,7 +861,7 @@ class BrowserViewModel : ViewModel() {
                 log("正在抓取清洗后 AXTree 并画框...")
                 viewModelScope.launch {
                     try {
-                        val axTree = page.getRawAxTree().getCleanedAxTree()
+                        val axTree = page.snapshot().rawTree.getCleanedAxTree()
                         log("清洗后节点数: ${axTree.nodes.size}，注入画框 JS...")
                         page.evaluateJavascript(buildOverlayJs(axTree.nodes, cleaned = true))
                         log("✅ 清洗后 AXTree 框框已画出（绿色=可见，灰色=不可见）")
