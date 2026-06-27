@@ -29,6 +29,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -69,7 +70,7 @@ class JvmWebView(
 
     val browser: KBCefBrowser
 
-    private val cefBrowser: CefBrowser
+    internal val cefBrowser: CefBrowser
         get() = browser.getCefBrowser()
 
     override val currentUrl = MutableStateFlow<String?>(initialUrl ?: "about:blank")
@@ -655,6 +656,185 @@ class JvmWebView(
         if (CDP_DEBUG) println("[KB-COORD] $msg")
     }
 
+    private suspend fun getScrollAndViewportInfo(devTools: org.cef.browser.CefDevToolsClient): List<Double>? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val expr = "window.scrollX + ',' + window.scrollY + ',' + window.innerWidth + ',' + window.innerHeight"
+                val escapedExpr = kotlinx.serialization.json.Json.encodeToString(
+                    kotlinx.serialization.json.JsonPrimitive(expr)
+                )
+                val resultJson = devTools.executeDevToolsMethod(
+                    "Runtime.evaluate",
+                    """{"expression":$escapedExpr,"returnByValue":true}"""
+                ).get(5, java.util.concurrent.TimeUnit.SECONDS)
+                if (resultJson != null) {
+                    val root = Json.parseToJsonElement(resultJson)
+                    val value = root.jsonObject["result"]?.jsonObject?.get("result")
+                        ?.jsonObject?.get("value")?.jsonPrimitive?.content
+                        ?: root.jsonObject["result"]?.jsonObject?.get("value")?.jsonPrimitive?.content
+                        ?: root.jsonObject["value"]?.jsonPrimitive?.content
+                    value?.split(',')?.mapNotNull { it.trim().toDoubleOrNull() }
+                        ?.takeIf { it.size >= 4 }
+                } else null
+            } catch (e: Exception) {
+                logCoord("getScrollAndViewportInfo: failed: ${e.message}")
+                null
+            }
+        }
+    }
+
+    internal suspend fun evaluateJsViaCdp(devTools: org.cef.browser.CefDevToolsClient, expr: String): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val escapedExpr = kotlinx.serialization.json.Json.encodeToString(
+                    kotlinx.serialization.json.JsonPrimitive(expr)
+                )
+                val resultJson = devTools.executeDevToolsMethod(
+                    "Runtime.evaluate",
+                    """{"expression":$escapedExpr,"returnByValue":true}"""
+                ).get(5, java.util.concurrent.TimeUnit.SECONDS)
+                if (resultJson != null) {
+                    val root = Json.parseToJsonElement(resultJson)
+                    root.jsonObject["result"]?.jsonObject?.get("result")
+                        ?.jsonObject?.get("value")?.jsonPrimitive?.content
+                        ?: root.jsonObject["result"]?.jsonObject?.get("value")?.jsonPrimitive?.content
+                        ?: root.jsonObject["value"]?.jsonPrimitive?.content
+                } else null
+            } catch (e: Exception) {
+                logCoord("evaluateJsViaCdp: failed: ${e.message}")
+                null
+            }
+        }
+    }
+
+    /**
+     * Smart scroll-into-view: given a document-coordinate target (x, y), ensure it is
+     * visible in the viewport. Handles:
+     *   1. Main-page elements outside the viewport  →  window.scrollTo
+     *   2. Elements inside scrollable popups/floats  →  scroll the container
+     *   3. Elements hidden in a scrollable container  →  traverse containers and scroll them
+     *
+     * Returns [newClientX, newClientY] (viewport coords after scrolling), or null if no scrolling was needed.
+     * When a container is scrolled, the viewport coords of elements inside it change,
+     * so we must return the updated viewport coords for accurate click dispatch.
+     */
+    private suspend fun smartScrollIntoView(
+        devTools: org.cef.browser.CefDevToolsClient,
+        x: Int, y: Int,
+        scrollX: Double, scrollY: Double,
+        viewW: Double, viewH: Double,
+        popupSelector: String? = null
+    ): DoubleArray? {
+        val clientX = (x - scrollX).toInt()
+        val clientY = (y - scrollY).toInt()
+
+        logCoord("smartScrollIntoView: doc=($x,$y) client=($clientX,$clientY) viewport=(${viewW}x${viewH}) popupSelector=$popupSelector")
+
+        if (popupSelector == null) {
+            val outOfViewport = clientX < 0 || clientX > viewW || clientY < 0 || clientY > viewH
+
+            if (outOfViewport) {
+                val targetScrollX = (x - viewW / 2).coerceAtLeast(0.0)
+                val targetScrollY = (y - viewH / 2).coerceAtLeast(0.0)
+                logCoord("smartScrollIntoView: window.scrollTo($targetScrollX, $targetScrollY)")
+                cefBrowser.executeJavaScript("window.scrollTo($targetScrollX, $targetScrollY);", "", 0)
+                evaluateJsViaCdp(devTools, "window.scrollTo($targetScrollX, $targetScrollY);")
+                delay(150)
+            }
+
+            val scrollInfoAfter = getScrollAndViewportInfo(devTools)
+            val actualScrollX = scrollInfoAfter?.get(0) ?: scrollX
+            val actualScrollY = scrollInfoAfter?.get(1) ?: scrollY
+            val cx = (x - actualScrollX).toInt()
+            val cy = (y - actualScrollY).toInt()
+
+            logCoord("smartScrollIntoView: after window.scrollTo client=($cx,$cy)")
+
+            val inViewport = cx >= 0 && cx <= viewW && cy >= 0 && cy <= viewH
+            return if (inViewport) doubleArrayOf(cx.toDouble(), cy.toDouble()) else null
+        } else {
+            val escapedSelector = popupSelector.replace("'", "\\'")
+            val popupContainerJs = """
+                (function() {
+                    try {
+                    var cx = $clientX, cy = $clientY;
+                    var popup = document.querySelector('$escapedSelector');
+                    if (!popup) return 'noContainer:' + Math.round(cx) + ',' + Math.round(cy);
+                    var containers = popup.querySelectorAll('*');
+                    var bestContainer = null;
+                    var bestDepth = -1;
+                    for (var i = 0; i < containers.length; i++) {
+                        var c = containers[i];
+                        var style = window.getComputedStyle(c);
+                        var oY = style.overflowY, oX = style.overflowX;
+                        var isScrollableY = (oY === 'auto' || oY === 'scroll') && c.scrollHeight > c.clientHeight;
+                        var isScrollableX = (oX === 'auto' || oX === 'scroll') && c.scrollWidth > c.clientWidth;
+                        if (!isScrollableY && !isScrollableX) continue;
+
+                        var rect = c.getBoundingClientRect();
+                        if (cx < rect.left || cx > rect.right) continue;
+
+                        var relY = cy - rect.top;
+                        if (relY < -c.clientHeight || relY > c.clientHeight * 2) continue;
+
+                        var targetOffset = relY + c.scrollTop;
+                        var alreadyVisible = targetOffset >= c.scrollTop && targetOffset <= c.scrollTop + c.clientHeight;
+                        if (alreadyVisible) continue;
+
+                        var depth = 0, p = c;
+                        while (p.parentElement) { depth++; p = p.parentElement; }
+                        if (depth > bestDepth) {
+                            bestDepth = depth;
+                            bestContainer = c;
+                        }
+                    }
+
+                    if (bestContainer) {
+                        var rect = bestContainer.getBoundingClientRect();
+                        var relY = cy - rect.top;
+                        var targetOffset = relY + bestContainer.scrollTop;
+                        var newScrollTop = Math.max(0, Math.min(targetOffset - bestContainer.clientHeight / 2, bestContainer.scrollHeight - bestContainer.clientHeight));
+                        bestContainer.scrollTop = newScrollTop;
+
+                        var relX = cx - rect.left;
+                        var targetOffsetX = relX + bestContainer.scrollLeft;
+                        var newScrollLeft = Math.max(0, Math.min(targetOffsetX - bestContainer.clientWidth / 2, bestContainer.scrollWidth - bestContainer.clientWidth));
+                        bestContainer.scrollLeft = newScrollLeft;
+
+                        var newCy = rect.top + targetOffset - newScrollTop;
+                        var newCx = rect.left + targetOffsetX - newScrollLeft;
+
+                        return 'scrolled:' + Math.round(newCx) + ',' + Math.round(newCy);
+                    }
+
+                    return 'noContainer:' + Math.round(cx) + ',' + Math.round(cy);
+                    } catch(e) { return 'error:' + e.message; }
+                })()
+            """.trimIndent()
+
+            val result = evaluateJsViaCdp(devTools, popupContainerJs)
+            if (result != null) {
+                logCoord("smartScrollIntoView: popup container result=$result")
+                val parts = result.split(':')
+                if (parts.size >= 2) {
+                    val prefix = parts[0]
+                    val coords = parts[1].split(',').mapNotNull { it.trim().toDoubleOrNull() }
+                    if (coords.size >= 2) {
+                        if (prefix == "scrolled") {
+                            return doubleArrayOf(coords[0], coords[1])
+                        } else if (prefix == "noContainer") {
+                            val inViewport = coords[0] >= 0 && coords[0] <= viewW && coords[1] >= 0 && coords[1] <= viewH
+                            return if (inViewport) doubleArrayOf(coords[0], coords[1]) else null
+                        }
+                    }
+                }
+            }
+
+            val inViewport = clientX >= 0 && clientX <= viewW && clientY >= 0 && clientY <= viewH
+            return if (inViewport) doubleArrayOf(clientX.toDouble(), clientY.toDouble()) else null
+        }
+    }
+
     /**
      * 获取设备像素比 (DPR)。
      * 使用 AWT 组件的 graphics configuration 获取实际显示缩放比例。
@@ -756,79 +936,31 @@ class JvmWebView(
      * 3. Compute viewport coords: clientX = x - scrollX, clientY = y - scrollY
      * 4. Dispatch mouseMoved → mousePressed → mouseReleased via CDP
      */
-    suspend fun clickByCoordinates(x: Int, y: Int) {
-        if (isDestroyed.get()) return
-        val devTools = cefBrowser.devToolsClient ?: return
-        if (devTools.isClosed) return
+    suspend fun clickByCoordinates(x: Int, y: Int, popupSelector: String? = null): Pair<Int, Int>? {
+        if (isDestroyed.get()) return null
+        val devTools = cefBrowser.devToolsClient ?: return null
+        if (devTools.isClosed) return null
 
         // Step 1: get scroll + viewport info
-        val scrollInfo = withContext(Dispatchers.IO) {
-            try {
-                val expr = "window.scrollX + ',' + window.scrollY + ',' + window.innerWidth + ',' + window.innerHeight"
-                val escapedExpr = kotlinx.serialization.json.Json.encodeToString(
-                    kotlinx.serialization.json.JsonPrimitive(expr)
-                )
-                val resultJson = devTools.executeDevToolsMethod(
-                    "Runtime.evaluate",
-                    """{"expression":$escapedExpr,"returnByValue":true}"""
-                ).get(5, java.util.concurrent.TimeUnit.SECONDS)
-                if (resultJson != null) {
-                    val root = Json.parseToJsonElement(resultJson)
-                    val value = root.jsonObject["result"]?.jsonObject?.get("result")
-                        ?.jsonObject?.get("value")?.jsonPrimitive?.content
-                        ?: root.jsonObject["result"]?.jsonObject?.get("value")?.jsonPrimitive?.content
-                        ?: root.jsonObject["value"]?.jsonPrimitive?.content
-                    value?.split(',')?.mapNotNull { it.trim().toDoubleOrNull() }
-                        ?.takeIf { it.size >= 4 }
-                } else null
-            } catch (e: Exception) {
-                logCoord("clickByCoordinates: failed to get scroll info: ${e.message}")
-                null
-            }
-        } ?: return
-
-        var scrollX = scrollInfo[0]
-        var scrollY = scrollInfo[1]
+        val scrollInfo = getScrollAndViewportInfo(devTools) ?: return null
+        val scrollX = scrollInfo[0]
+        val scrollY = scrollInfo[1]
         val viewW = scrollInfo[2]
         val viewH = scrollInfo[3]
 
-        // Step 2: scroll into view if needed
-        val clientXCheck = x - scrollX
-        val clientYCheck = y - scrollY
-        if (clientXCheck < 0 || clientXCheck > viewW || clientYCheck < 0 || clientYCheck > viewH) {
-            val targetScrollX = (x - viewW / 2).coerceAtLeast(0.0)
-            val targetScrollY = (y - viewH / 2).coerceAtLeast(0.0)
-            withContext(Dispatchers.IO) {
-                try {
-                    val scrollExpr = "window.scrollTo($targetScrollX, $targetScrollY); window.scrollX + ',' + window.scrollY"
-                    val escapedExpr = kotlinx.serialization.json.Json.encodeToString(
-                        kotlinx.serialization.json.JsonPrimitive(scrollExpr)
-                    )
-                    val resultJson = devTools.executeDevToolsMethod(
-                        "Runtime.evaluate",
-                        """{"expression":$escapedExpr,"returnByValue":true}"""
-                    ).get(5, java.util.concurrent.TimeUnit.SECONDS)
-                    if (resultJson != null) {
-                        val root = Json.parseToJsonElement(resultJson)
-                        val value = root.jsonObject["result"]?.jsonObject?.get("result")
-                            ?.jsonObject?.get("value")?.jsonPrimitive?.content
-                            ?: root.jsonObject["result"]?.jsonObject?.get("value")?.jsonPrimitive?.content
-                            ?: root.jsonObject["value"]?.jsonPrimitive?.content
-                        val parts = value?.split(',')?.mapNotNull { it.trim().toDoubleOrNull() }
-                        if (parts != null && parts.size >= 2) {
-                            scrollX = parts[0]
-                            scrollY = parts[1]
-                        }
-                    }
-                } catch (e: Exception) {
-                    logCoord("clickByCoordinates: scroll failed: ${e.message}")
-                }
-            }
-        }
+        // Step 2: smart scroll into view, returns [newClientX, newClientY] if scrolled
+        val newViewportCoords = smartScrollIntoView(devTools, x, y, scrollX, scrollY, viewW, viewH, popupSelector)
 
         // Step 3: compute viewport coords (CSS pixels, no DPR scaling)
-        val clientX = (x - scrollX).toInt()
-        val clientY = (y - scrollY).toInt()
+        val clientX: Int
+        val clientY: Int
+        if (newViewportCoords != null) {
+            clientX = newViewportCoords[0].toInt()
+            clientY = newViewportCoords[1].toInt()
+        } else {
+            clientX = (x - scrollX).toInt()
+            clientY = (y - scrollY).toInt()
+        }
         logCoord("clickByCoordinates: doc=($x,$y) scroll=($scrollX,$scrollY) → client=($clientX,$clientY)")
 
         // Step 4: dispatch mouse events via CDP
@@ -854,44 +986,39 @@ class JvmWebView(
         // 触发点击动画（视口坐标）
         triggerClickAnimation(clientX, clientY)
         updateMouseTrail(clientX, clientY)
+
+        val verifyEl = evaluateJsViaCdp(devTools, "document.elementFromPoint($clientX, $clientY)?.tagName || 'null'")
+        logCoord("clickByCoordinates: CDP verify elementFromPoint($clientX, $clientY) = $verifyEl")
+
+        return Pair(clientX, clientY)
     }
 
     /**
      * Pure CDP hover implementation using Input.dispatchMouseEvent with type mouseMoved.
      * Coordinates are CSS viewport pixels (same system as clickByCoordinates).
      */
-    suspend fun hoverByCoordinates(x: Int, y: Int) {
+    suspend fun hoverByCoordinates(x: Int, y: Int, popupSelector: String? = null) {
         if (isDestroyed.get()) return
         val devTools = cefBrowser.devToolsClient ?: return
         if (devTools.isClosed) return
 
-        // Get scroll position to convert document coords to viewport coords
-        val scrollInfo = withContext(Dispatchers.IO) {
-            try {
-                val expr = "window.scrollX + ',' + window.scrollY"
-                val escapedExpr = kotlinx.serialization.json.Json.encodeToString(
-                    kotlinx.serialization.json.JsonPrimitive(expr)
-                )
-                val resultJson = devTools.executeDevToolsMethod(
-                    "Runtime.evaluate",
-                    """{"expression":$escapedExpr,"returnByValue":true}"""
-                ).get(5, java.util.concurrent.TimeUnit.SECONDS)
-                if (resultJson != null) {
-                    val root = Json.parseToJsonElement(resultJson)
-                    val value = root.jsonObject["result"]?.jsonObject?.get("result")
-                        ?.jsonObject?.get("value")?.jsonPrimitive?.content
-                        ?: root.jsonObject["result"]?.jsonObject?.get("value")?.jsonPrimitive?.content
-                        ?: root.jsonObject["value"]?.jsonPrimitive?.content
-                    value?.split(',')?.mapNotNull { it.trim().toDoubleOrNull() }
-                        ?.takeIf { it.size >= 2 }
-                } else null
-            } catch (e: Exception) {
-                null
-            }
-        } ?: listOf(0.0, 0.0)
+        val scrollAndViewport = getScrollAndViewportInfo(devTools)
+        val scrollX = scrollAndViewport?.get(0) ?: 0.0
+        val scrollY = scrollAndViewport?.get(1) ?: 0.0
+        val viewW = scrollAndViewport?.get(2) ?: 0.0
+        val viewH = scrollAndViewport?.get(3) ?: 0.0
 
-        val clientX = (x - scrollInfo[0]).toInt()
-        val clientY = (y - scrollInfo[1]).toInt()
+        val newViewportCoords = smartScrollIntoView(devTools, x, y, scrollX, scrollY, viewW, viewH, popupSelector)
+
+        val clientX: Int
+        val clientY: Int
+        if (newViewportCoords != null) {
+            clientX = newViewportCoords[0].toInt()
+            clientY = newViewportCoords[1].toInt()
+        } else {
+            clientX = (x - scrollX).toInt()
+            clientY = (y - scrollY).toInt()
+        }
 
         withContext(Dispatchers.IO) {
             try {
@@ -1301,21 +1428,37 @@ internal actual fun createHeadlessWebView(
 internal actual suspend fun performClickByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
-) {
+    y: Int,
+    popupSelector: String?
+): Pair<Int, Int>? {
     if (webView is JvmWebView) {
-        webView.clickByCoordinates(x, y)
+        return webView.clickByCoordinates(x, y, popupSelector)
     }
+    return null
 }
 
 internal actual suspend fun performHoverByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
+    y: Int,
+    popupSelector: String?
 ) {
     if (webView is JvmWebView) {
-        webView.hoverByCoordinates(x, y)
+        webView.hoverByCoordinates(x, y, popupSelector)
     }
+}
+
+internal actual suspend fun verifyElementAtCdp(
+    webView: KBWebView,
+    vx: Int,
+    vy: Int
+): String? {
+    if (webView !is JvmWebView) return null
+    val devTools = webView.cefBrowser.devToolsClient ?: return null
+    if (devTools.isClosed) return null
+    return webView.evaluateJsViaCdp(devTools,
+        "(function(){ var el = document.elementFromPoint($vx, $vy); if (!el) return 'NO_ELEMENT'; return JSON.stringify({tag: el.tagName.toLowerCase(), id: el.id || ''}); })()"
+    )
 }
 
 internal actual suspend fun performScrollByCoordinates(

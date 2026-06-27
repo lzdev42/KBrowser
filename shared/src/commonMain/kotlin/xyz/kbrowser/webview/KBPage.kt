@@ -37,6 +37,33 @@ class KBPage(val webView: KBWebView) {
         }
     }
 
+    private fun findPopupForNode(node: AxNode): AxNode? {
+        val cache = nodeCache
+        val popups = cache.values.filter { it.role == "dialog" || it.role == "alertdialog" }
+        if (popups.isEmpty()) return null
+
+        val refidToNode = cache
+
+        for (popup in popups) {
+            val visited = mutableSetOf<String>()
+            val queue = ArrayDeque<String>()
+            for (cid in popup.childIds) {
+                queue.add(cid)
+            }
+            while (queue.isNotEmpty()) {
+                val refid = queue.removeFirst()
+                if (refid in visited) continue
+                visited.add(refid)
+                if (refid == node.refid) return popup
+                val child = refidToNode[refid] ?: continue
+                for (cid in child.childIds) {
+                    if (cid !in visited) queue.add(cid)
+                }
+            }
+        }
+        return null
+    }
+
     suspend fun loadUrl(url: String) {
         withContext(Dispatchers.Main) {
             suspendCancellableCoroutine<Unit> { continuation ->
@@ -88,7 +115,7 @@ class KBPage(val webView: KBWebView) {
         evaluateJavascript("document.cookie = \"$escapedCookie\";")
     }
 
-    suspend fun getRawAxTree(): AxTreeData {
+    private suspend fun getRawAxTree(): AxTreeData {
         // JVM 平台优先走 CDP 原生路线（不注入 JS，不受 CSP 限制）
         val nativeTree = fetchAxTreeNative(webView)
         val treeData = if (nativeTree != null) {
@@ -110,9 +137,15 @@ class KBPage(val webView: KBWebView) {
      */
     suspend fun click(refid: String): OperationResult {
         val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
-        clickByCoordinates(node.centerX, node.centerY)
+        val popup = findPopupForNode(node)
+        val popupSelector = popup?.selector
+        val viewportCoords = performClickByCoordinates(webView, node.centerX, node.centerY, popupSelector)
         delay(200)
-        return verifyClickAt(node.centerX, node.centerY, node)
+        return if (viewportCoords != null) {
+            verifyClickAtViewport(viewportCoords.first, viewportCoords.second, node)
+        } else {
+            verifyClickAt(node.centerX, node.centerY, node)
+        }
     }
 
     /**
@@ -132,7 +165,8 @@ class KBPage(val webView: KBWebView) {
      */
     suspend fun hover(refid: String) {
         val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
-        hoverByCoordinates(node.centerX, node.centerY)
+        val popup = findPopupForNode(node)
+        performHoverByCoordinates(webView, node.centerX, node.centerY, popup?.selector)
     }
 
     /**
@@ -200,13 +234,17 @@ class KBPage(val webView: KBWebView) {
     }
 
     suspend fun clickByCoordinates(x: Int, y: Int): OperationResult {
-        performClickByCoordinates(webView, x, y)
+        val viewportCoords = performClickByCoordinates(webView, x, y, null)
         delay(200)
-        return verifyClickAt(x, y, null)
+        return if (viewportCoords != null) {
+            verifyClickAtViewport(viewportCoords.first, viewportCoords.second, null)
+        } else {
+            verifyClickAt(x, y, null)
+        }
     }
 
     suspend fun hoverByCoordinates(x: Int, y: Int) {
-        performHoverByCoordinates(webView, x, y)
+        performHoverByCoordinates(webView, x, y, null)
     }
 
     suspend fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int): OperationResult {
@@ -405,6 +443,67 @@ class KBPage(val webView: KBWebView) {
     }
 
     // ===== Operation Verification Helpers =====
+
+    private suspend fun verifyClickAtViewport(vx: Int, vy: Int, targetNode: AxNode?): OperationResult {
+        val targetId = targetNode?.id ?: ""
+        val targetTag = targetNode?.tagName ?: ""
+
+        val cdpResult = verifyElementAtCdp(webView, vx, vy)
+        val result = if (cdpResult != null && cdpResult != "NO_ELEMENT") {
+            cdpResult.trim()
+        } else if (cdpResult == "NO_ELEMENT") {
+            "NO_ELEMENT"
+        } else {
+            val js = """
+                (function() {
+                    var el = document.elementFromPoint($vx, $vy);
+                    if (!el) return 'NO_ELEMENT';
+                    var tag = el.tagName.toLowerCase();
+                    var id = el.id || '';
+                    var matched = false;
+                    var cur = el;
+                    for (var i = 0; i < 8 && cur; i++) {
+                        ${if (targetId.isNotEmpty()) "if (cur.id === '$targetId') { matched = true; break; }" else ""}
+                        ${if (targetTag.isNotEmpty()) "if (cur.tagName.toLowerCase() === '$targetTag') { matched = true; break; }" else ""}
+                        cur = cur.parentElement;
+                    }
+                    return JSON.stringify({tag: tag, id: id, matched: matched});
+                })()
+            """.trimIndent()
+            evaluateJavascript(js).trim()
+        }
+
+        if (result == "NO_ELEMENT") {
+            return OperationResult.Failure("click", "no element at viewport coords")
+        }
+
+        return try {
+            val jsonObj = kotlinx.serialization.json.Json.parseToJsonElement(result)
+                .let { it as kotlinx.serialization.json.JsonObject }
+            val elId = jsonObj["id"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content } ?: ""
+            val elTag = jsonObj["tag"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content } ?: ""
+            val jsMatched = jsonObj["matched"]?.let {
+                it as kotlinx.serialization.json.JsonPrimitive
+            }?.content?.toBoolean()
+            val matched = jsMatched ?: ((elId.isNotEmpty() && elId == targetId) || (elTag.isNotEmpty() && elTag == targetTag))
+
+            if (matched) {
+                val detail = if (elId.isNotEmpty()) "hit #$elId" else "hit <$elTag>"
+                OperationResult.Success("click", detail = detail)
+            } else if (targetNode == null) {
+                val detail = if (elId.isNotEmpty()) "hit #$elId" else "hit <$elTag>"
+                OperationResult.Success("click", verified = false, detail = detail)
+            } else {
+                val hitDesc = if (elId.isNotEmpty()) "#$elId" else "<$elTag>"
+                val expectedDesc = if (targetId.isNotEmpty()) "#$targetId"
+                    else if (targetTag.isNotEmpty()) "<$targetTag>" else "($vx,$vy)"
+                OperationResult.Failure("click",
+                    "hit $hitDesc, expected $expectedDesc (occluded?)")
+            }
+        } catch (e: Exception) {
+            OperationResult.Success("click", verified = false)
+        }
+    }
 
     /**
      * 验证坐标点击是否命中目标元素。

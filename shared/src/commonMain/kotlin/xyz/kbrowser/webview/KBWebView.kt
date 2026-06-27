@@ -133,14 +133,22 @@ internal expect fun createHeadlessWebView(
 internal expect suspend fun performClickByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
-)
+    y: Int,
+    popupSelector: String? = null
+): Pair<Int, Int>?
 
 internal expect suspend fun performHoverByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
+    y: Int,
+    popupSelector: String? = null
 )
+
+internal expect suspend fun verifyElementAtCdp(
+    webView: KBWebView,
+    vx: Int,
+    vy: Int
+): String?
 
 internal expect suspend fun performScrollByCoordinates(
     webView: KBWebView,

@@ -84,3 +84,42 @@ tasks.register<JavaExec>("runHeadlessViewportTest") {
     )
     workingDir = rootProject.projectDir
 }
+
+tasks.register<JavaExec>("runAutoScrollClickTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.webview.AutoScrollClickTestKt")
+    val compileTestKotlin = tasks.named("compileTestKotlin")
+    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+    workingDir = rootProject.projectDir
+}
+
+tasks.register<JavaExec>("runPopupScrollTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.webview.PopupScrollTestKt")
+    val compileTestKotlin = tasks.named("compileTestKotlin")
+    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+    workingDir = rootProject.projectDir
+}
+
+tasks.register<JavaExec>("runBossCitySelectTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.webview.BossCitySelectTestKt")
+    val compileTestKotlin = tasks.named("compileTestKotlin")
+    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+    workingDir = rootProject.projectDir
+}

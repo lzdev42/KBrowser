@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Popup / Floating Window Scroll Test</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f5f5f5; }
+        h1 { color: #333; }
+        .section { margin: 20px 0; padding: 20px; background: white; border-radius: 8px; border: 1px solid #ddd; }
+        .popup-container {
+            position: fixed;
+            top: 80px;
+            right: 40px;
+            width: 320px;
+            height: 280px;
+            background: #1a1a2e;
+            color: #eee;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .popup-header {
+            padding: 12px 16px;
+            background: #16213e;
+            font-weight: bold;
+            font-size: 15px;
+            border-bottom: 1px solid #0f3460;
+        }
+        .popup-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .popup-item {
+            padding: 10px 14px;
+            margin: 4px 0;
+            background: #0f3460;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .popup-item:hover { background: #533483; }
+        .popup-item.clicked {
+            background: #4CAF50 !important;
+            color: white;
+        }
+        #statusPanel {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            padding: 16px;
+            background: #333;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 13px;
+            border-radius: 8px;
+            z-index: 9999;
+            min-width: 320px;
+        }
+        .main-page-item {
+            margin-top: 3000px;
+            padding: 12px 24px;
+            background: #E91E63;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            position: relative;
+            z-index: 10000;
+        }
+        .main-page-item.clicked {
+            background: #4CAF50 !important;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Popup / Floating Window Scroll Test</h1>
+<p>测试场景：</p>
+<ol>
+    <li><strong>浮窗内元素</strong>：fixed 浮窗内的可滚动列表，元素需要滚动浮窗内部才能看到</li>
+    <li><strong>主页面远端元素</strong>：margin-top: 3000px 的按钮，需要滚动主页面</li>
+</ol>
+
+<div class="section">
+    <h2>固定浮窗 (position: fixed)</h2>
+    <p>浮窗在视口右侧，内部列表可滚动</p>
+</div>
+
+<div class="popup-container" id="testPopup" role="dialog" aria-label="可滚动浮窗">
+    <div class="popup-header">可滚动浮窗</div>
+    <div class="popup-body" id="popupBody">
+        <div class="popup-item" id="popupItem1" onclick="onPopupItemClick('popupItem1')">弹出项 1 (可见)</div>
+        <div class="popup-item" id="popupItem2" onclick="onPopupItemClick('popupItem2')">弹出项 2 (可见)</div>
+        <div class="popup-item" id="popupItem3" onclick="onPopupItemClick('popupItem3')">弹出项 3 (可见)</div>
+        <div class="popup-item" id="popupItem4" onclick="onPopupItemClick('popupItem4')">弹出项 4 (需滚动)</div>
+        <div class="popup-item" id="popupItem5" onclick="onPopupItemClick('popupItem5')">弹出项 5 (需滚动)</div>
+        <div class="popup-item" id="popupItem6" onclick="onPopupItemClick('popupItem6')">弹出项 6 (需滚动)</div>
+        <div class="popup-item" id="popupItem7" onclick="onPopupItemClick('popupItem7')">弹出项 7 (需滚动)</div>
+        <div class="popup-item" id="popupTargetBtn" onclick="onPopupItemClick('popupTargetBtn')" style="background: #e94560; font-weight: bold;">
+            ★ 目标按钮 (远在浮窗底部) ★
+        </div>
+        <div class="popup-item" id="popupItem9" onclick="onPopupItemClick('popupItem9')">弹出项 9 (需滚动)</div>
+        <div class="popup-item" id="popupItem10" onclick="onPopupItemClick('popupItem10')">弹出项 10 (需滚动)</div>
+    </div>
+</div>
+
+<div class="section">
+    <h2>主页面远端元素</h2>
+    <button id="mainPageFarBtn" class="main-page-item" onclick="onMainPageClick()">
+        主页面远端按钮 (margin-top: 3000px)
+    </button>
+</div>
+
+<div id="statusPanel">
+    <div>scrollX: <span id="scrollXVal">0</span></div>
+    <div>scrollY: <span id="scrollYVal">0</span></div>
+    <div>popup.scrollTop: <span id="popupScrollTop">0</span></div>
+    <div>popupTargetBtn clicked: <span id="popupTargetStatus">not clicked</span></div>
+    <div>mainPageFarBtn clicked: <span id="mainPageStatus">not clicked</span></div>
+    <div>lastClickedItem: <span id="lastClickedItem">none</span></div>
+</div>
+
+<script>
+    var clickState = {
+        popupTargetBtn: 0,
+        mainPageFarBtn: 0,
+        lastItem: 'none'
+    };
+
+    function onPopupItemClick(id) {
+        clickState[id] = (clickState[id] || 0) + 1;
+        clickState.lastItem = id;
+        var el = document.getElementById(id);
+        if (el) el.classList.add('clicked');
+        updateStatus();
+    }
+
+    function onMainPageClick() {
+        clickState.mainPageFarBtn++;
+        clickState.lastItem = 'mainPageFarBtn';
+        document.getElementById('mainPageFarBtn').classList.add('clicked');
+        updateStatus();
+    }
+
+    function updateStatus() {
+        document.getElementById('scrollXVal').textContent = Math.round(window.scrollX);
+        document.getElementById('scrollYVal').textContent = Math.round(window.scrollY);
+        document.getElementById('popupScrollTop').textContent = Math.round(document.getElementById('popupBody').scrollTop);
+        document.getElementById('popupTargetStatus').textContent = clickState.popupTargetBtn > 0 ? 'clicked x' + clickState.popupTargetBtn : 'not clicked';
+        document.getElementById('mainPageStatus').textContent = clickState.mainPageFarBtn > 0 ? 'clicked x' + clickState.mainPageFarBtn : 'not clicked';
+        document.getElementById('lastClickedItem').textContent = clickState.lastItem;
+    }
+
+    window.addEventListener('scroll', function() {
+        document.getElementById('scrollXVal').textContent = Math.round(window.scrollX);
+        document.getElementById('scrollYVal').textContent = Math.round(window.scrollY);
+    });
+
+    document.getElementById('popupBody').addEventListener('scroll', function() {
+        document.getElementById('popupScrollTop').textContent = Math.round(this.scrollTop);
+    });
+
+    window.__getPopupScrollTestData = function() {
+        var popup = document.getElementById('popupBody');
+        var targetBtn = document.getElementById('popupTargetBtn');
+        var targetRect = targetBtn ? targetBtn.getBoundingClientRect() : null;
+        var popupRect = popup.getBoundingClientRect();
+        return JSON.stringify({
+            scrollX: window.scrollX,
+            scrollY: window.scrollY,
+            mainPageScrollY: window.scrollY,
+            popupScrollTop: popup.scrollTop,
+            popupScrollHeight: popup.scrollHeight,
+            popupClientHeight: popup.clientHeight,
+            popupTargetBtnClicked: clickState.popupTargetBtn > 0,
+            popupTargetBtnVisible: targetRect ? (targetRect.top >= popupRect.top && targetRect.bottom <= popupRect.bottom) : false,
+            mainPageFarBtnClicked: clickState.mainPageFarBtn > 0,
+            lastItem: clickState.lastItem,
+            targetBtnRect: targetRect ? {
+                vpX: Math.round(targetRect.x + targetRect.width / 2),
+                vpY: Math.round(targetRect.y + targetRect.height / 2),
+                docX: Math.round(targetRect.x + targetRect.width / 2 + window.scrollX),
+                docY: Math.round(targetRect.y + targetRect.height / 2 + window.scrollY),
+                top: Math.round(targetRect.top),
+                bottom: Math.round(targetRect.bottom),
+                inViewport: targetRect.top >= 0 && targetRect.left >= 0 && targetRect.bottom <= window.innerHeight && targetRect.right <= window.innerWidth,
+                inPopup: targetRect.top >= popupRect.top && targetRect.bottom <= popupRect.bottom && targetRect.left >= popupRect.left && targetRect.right <= popupRect.right
+            } : null
+        });
+    };
+</script>
+
+</body>
+</html>

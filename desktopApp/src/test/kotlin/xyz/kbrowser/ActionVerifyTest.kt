@@ -270,7 +270,7 @@ fun main() {
                 record("7c. locator.scroll 返回 Success", scrollResult is OperationResult.Success)
 
                 // 7d. 遮挡元素: 用 page.click(refid) 才有 targetNode 信息做遮挡检测
-                val treeData = page.getRawAxTree()
+                val treeData = page.snapshot().rawTree
                 val occAxNode = treeData.nodes.find {
                     it.id == "occludedButton" || it.selector.contains("occludedButton")
                 }

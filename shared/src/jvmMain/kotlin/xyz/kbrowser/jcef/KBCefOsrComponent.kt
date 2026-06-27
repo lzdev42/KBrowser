@@ -27,6 +27,9 @@ class KBCefOsrComponent : JPanel() {
 
     private var myScale: Double = 1.0
 
+    @Volatile
+    private var myCefFocusState = false
+
     /** IME 适配器，参照 IntelliJ 的 JBCefInputMethodAdapter */
     private val myInputMethodAdapter = KBCefInputMethodAdapter(this)
 
@@ -77,6 +80,7 @@ class KBCefOsrComponent : JPanel() {
                     myRenderHandler?.setLocationOnScreen(locationOnScreen)
                 }
                 requestFocusInWindow()
+                ensureCefFocus()
             }
         })
 
@@ -156,12 +160,12 @@ class KBCefOsrComponent : JPanel() {
 
         myBrowser?.createImmediately()
 
-        // createImmediately 后延迟触发一次 wasResized，确保 JCEF 以正确的组件尺寸渲染首帧
         SwingUtilities.invokeLater {
             val browser = myBrowser ?: return@invokeLater
             val handler = myRenderHandler ?: return@invokeLater
             browser.wasResized(0, 0)
             handler.startResizePusher(browser, true)
+            ensureCefFocus()
         }
     }
 
@@ -172,6 +176,7 @@ class KBCefOsrComponent : JPanel() {
         myScheduleResizeMs.set(-1L)
         myFirstResizeSynced = false
         myScaleInitialized.set(false)
+        myCefFocusState = false
         myRenderHandler?.stopResizePusher()
     }
 
@@ -242,6 +247,7 @@ class KBCefOsrComponent : JPanel() {
 
         if (e.id == MouseEvent.MOUSE_PRESSED) {
             requestFocusInWindow()
+            ensureCefFocus()
         }
     }
 
@@ -286,19 +292,34 @@ class KBCefOsrComponent : JPanel() {
     }
 
     /**
-     * 当 AWT 焦点变化时，同步通知 CEF。
-     * OSR 模式下 CEF 没有原生窗口来检测焦点，必须由嵌入方显式通知。
+     * 主动确保 CEF 焦点状态与 AWT 焦点一致。
+     *
+     * 这是 OSR 模式下中文输入能否工作的关键保障。
+     * 仅依赖 [processFocusEvent] 被动通知 CEF 焦点状态是不够的，因为：
+     * 1. Compose SwingPanel 的焦点代理机制可能导致 AWT FocusEvent 不到达 KBCefOsrComponent
+     * 2. 外层容器（KBCefBrowser.myComponent）的焦点拦截可能阻止事件穿透
+     * 3. 窗口切换、Compose 重组等场景下焦点事件可能丢失
+     *
      * 如果不调用 [CefBrowser.setFocus]，CEF 内部认为浏览器没有焦点，
      * 会静默丢弃所有 IME 请求（ImeSetComposition/ImeCommitText），
      * 而 sendKeyEvent 不检查焦点状态所以英文字母能输入——这就是中文无法输入的根本原因。
      */
+    private fun ensureCefFocus() {
+        val browser = myBrowser ?: return
+        val awtFocused = isFocusOwner
+        if (awtFocused != myCefFocusState) {
+            myCefFocusState = awtFocused
+            browser.setFocus(awtFocused)
+        }
+    }
+
+    /**
+     * 当 AWT 焦点变化时，同步通知 CEF。
+     * OSR 模式下 CEF 没有原生窗口来检测焦点，必须由嵌入方显式通知。
+     */
     override fun processFocusEvent(e: FocusEvent) {
         super.processFocusEvent(e)
-        val browser = myBrowser
-        if (browser != null) {
-            val focusGained = e.id == FocusEvent.FOCUS_GAINED
-            browser.setFocus(focusGained)
-        }
+        ensureCefFocus()
     }
 
     override fun processKeyEvent(e: KeyEvent) {

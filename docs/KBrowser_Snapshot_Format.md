@@ -131,7 +131,7 @@ val snapshot = result.yaml          // YAML 字符串，给 AI
 val rawTree = result.rawTree        // 原始 AxTreeData，refid 与 yaml 一致
 
 // 或直接从 AxTreeData 转换
-val tree = page.getRawAxTree()
+val tree = page.snapshot().rawTree
 
 // 视口内紧凑 YAML（默认，适合 AI 消费）
 val viewportYaml = tree.toYamlSnapshot(SnapshotMode.VIEWPORT)

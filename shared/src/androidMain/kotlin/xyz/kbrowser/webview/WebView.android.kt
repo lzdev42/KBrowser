@@ -314,8 +314,9 @@ internal actual fun createHeadlessWebView(
 internal actual suspend fun performClickByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
-) {
+    y: Int,
+    popupSelector: String?
+): Pair<Int, Int>? {
     if (webView is AndroidWebView) {
         val w = webView.getOrCreateWebView(AndroidContextHolder.context)
         val downTime = SystemClock.uptimeMillis()
@@ -330,12 +331,14 @@ internal actual suspend fun performClickByCoordinates(
         )
         w.dispatchTouchEvent(upEvent)
     }
+    return null
 }
 
 internal actual suspend fun performHoverByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
+    y: Int,
+    popupSelector: String?
 ) {
     if (webView is AndroidWebView) {
         val w = webView.getOrCreateWebView(AndroidContextHolder.context)
@@ -345,6 +348,14 @@ internal actual suspend fun performHoverByCoordinates(
         )
         w.dispatchTouchEvent(hoverEvent)
     }
+}
+
+internal actual suspend fun verifyElementAtCdp(
+    webView: KBWebView,
+    vx: Int,
+    vy: Int
+): String? {
+    return null
 }
 
 internal actual suspend fun performScrollByCoordinates(

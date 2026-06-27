@@ -72,7 +72,7 @@ page.locator(node.selector).jsFill("内容")
 ### 1. 从 AXTree 获取选择器
 
 ```kotlin
-val tree = page.getRawAxTree().getCleanedAxTree()
+val tree = page.snapshot().rawTree.getCleanedAxTree()
 
 // 每个节点都有 selector 字段
 tree.nodes.forEach { node ->

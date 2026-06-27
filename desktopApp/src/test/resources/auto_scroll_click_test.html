@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Auto Scroll Click Test</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        .target-btn {
+            padding: 12px 32px;
+            font-size: 18px;
+            cursor: pointer;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            transition: background 0.3s;
+        }
+        .target-btn.clicked {
+            background: #4CAF50 !important;
+        }
+        #belowButton {
+            margin-top: 3000px;
+            background: #E91E63;
+        }
+        #rightButton {
+            margin-left: 2000px;
+            background: #2196F3;
+        }
+        #diagonalButton {
+            margin-top: 2500px;
+            margin-left: 2500px;
+            background: #FF9800;
+        }
+        #statusPanel {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 16px;
+            background: #333;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 13px;
+            border-radius: 8px;
+            z-index: 9999;
+            min-width: 280px;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Auto Scroll + Click Test</h1>
+<p>这个页面测试元素在视口外时，clickByCoordinates 是否能自动滚动到元素位置并成功点击。</p>
+
+<div class="section">
+    <h2>下方远端按钮 (margin-top: 3000px)</h2>
+    <p>点击此按钮需要向下滚动 3000px</p>
+    <button id="belowButton" class="target-btn" onclick="onTargetClick('below')">
+        Below Target
+    </button>
+</div>
+
+<div class="section" style="width: max-content;">
+    <h2>右侧远端按钮 (margin-left: 2000px)</h2>
+    <p>点击此按钮需要向右滚动 2000px</p>
+    <button id="rightButton" class="target-btn" onclick="onTargetClick('right')">
+        Right Target
+    </button>
+</div>
+
+<div class="section" style="width: max-content;">
+    <h2>对角远端按钮 (margin-top: 2500px, margin-left: 2500px)</h2>
+    <p>点击此按钮需要同时向右下滚动</p>
+    <button id="diagonalButton" class="target-btn" onclick="onTargetClick('diagonal')">
+        Diagonal Target
+    </button>
+</div>
+
+<div id="statusPanel">
+    <div>scrollX: <span id="scrollXVal">0</span></div>
+    <div>scrollY: <span id="scrollYVal">0</span></div>
+    <div>below: <span id="belowStatus">not clicked</span></div>
+    <div>right: <span id="rightStatus">not clicked</span></div>
+    <div>diagonal: <span id="diagStatus">not clicked</span></div>
+</div>
+
+<script>
+    var clickLog = { below: 0, right: 0, diagonal: 0 };
+
+    function onTargetClick(which) {
+        clickLog[which]++;
+        var btn = null;
+        if (which === 'below') btn = document.getElementById('belowButton');
+        else if (which === 'right') btn = document.getElementById('rightButton');
+        else if (which === 'diagonal') btn = document.getElementById('diagonalButton');
+        if (btn) btn.classList.add('clicked');
+        updateStatus();
+    }
+
+    function updateStatus() {
+        document.getElementById('belowStatus').textContent = clickLog.below > 0 ? 'clicked x' + clickLog.below : 'not clicked';
+        document.getElementById('rightStatus').textContent = clickLog.right > 0 ? 'clicked x' + clickLog.right : 'not clicked';
+        document.getElementById('diagStatus').textContent = clickLog.diagonal > 0 ? 'clicked x' + clickLog.diagonal : 'not clicked';
+    }
+
+    window.addEventListener('scroll', function() {
+        document.getElementById('scrollXVal').textContent = Math.round(window.scrollX);
+        document.getElementById('scrollYVal').textContent = Math.round(window.scrollY);
+    });
+
+    window.__getScrollClickData = function() {
+        return JSON.stringify({
+            scrollX: window.scrollX,
+            scrollY: window.scrollY,
+            belowClicked: clickLog.below,
+            rightClicked: clickLog.right,
+            diagonalClicked: clickLog.diagonal,
+            belowRect: getRect('belowButton'),
+            rightRect: getRect('rightButton'),
+            diagonalRect: getRect('diagonalButton')
+        });
+    };
+
+    function getRect(id) {
+        var el = document.getElementById(id);
+        if (!el) return null;
+        var r = el.getBoundingClientRect();
+        return {
+            docX: Math.round(r.x + r.width / 2 + window.scrollX),
+            docY: Math.round(r.y + r.height / 2 + window.scrollY),
+            vpX: Math.round(r.x + r.width / 2),
+            vpY: Math.round(r.y + r.height / 2),
+            inViewport: r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth
+        };
+    }
+</script>
+
+</body>
+</html>

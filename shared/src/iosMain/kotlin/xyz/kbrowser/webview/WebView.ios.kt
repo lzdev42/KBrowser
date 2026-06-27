@@ -347,8 +347,9 @@ internal actual fun createHeadlessWebView(
 internal actual suspend fun performClickByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
-) {
+    y: Int,
+    popupSelector: String?
+): Pair<Int, Int>? {
     val js = """
         (function() {
             var el = document.elementFromPoint($x, $y);
@@ -360,12 +361,14 @@ internal actual suspend fun performClickByCoordinates(
         })()
     """.trimIndent()
     webView.evaluateJavascript(js, null)
+    return null
 }
 
 internal actual suspend fun performHoverByCoordinates(
     webView: KBWebView,
     x: Int,
-    y: Int
+    y: Int,
+    popupSelector: String?
 ) {
     val js = """
         (function() {
@@ -381,6 +384,14 @@ internal actual suspend fun performHoverByCoordinates(
         })()
     """.trimIndent()
     webView.evaluateJavascript(js, null)
+}
+
+internal actual suspend fun verifyElementAtCdp(
+    webView: KBWebView,
+    vx: Int,
+    vy: Int
+): String? {
+    return null
 }
 
 internal actual suspend fun performScrollByCoordinates(
