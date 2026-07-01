@@ -19,8 +19,8 @@ fun main() {
             println("[测试] 正在加载网页...")
             page.loadUrl("https://example.com")
             println("[测试] 网页加载成功！")
-            println("[测试] URL: ${page.currentUrl.value}")
-            println("[测试] Title: ${page.title.value}")
+            println("[测试] URL: ${page.webView.currentUrl.value}")
+            println("[测试] Title: ${page.webView.currentTitle.value}")
 
             println("[测试] 正在销毁全局引擎...")
             KBrowser.shutdown()

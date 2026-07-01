@@ -24,7 +24,7 @@ fun main() {
 
             try {
                 val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-                KBrowser.setConfigPath(storageDir)
+                KBrowser.initializeConfig(storageDir)
                 initializeKBrowser()
                 println("[T] CefApp 初始化完成")
                 delay(3000)
@@ -35,7 +35,7 @@ fun main() {
                 println("[T] 加载 Boss直聘首页...")
                 withTimeout(30000) { page.loadUrl("https://www.zhipin.com") }
                 delay(3000)
-                println("[T] URL: ${page.currentUrl.value}")
+                println("[T] URL: ${page.webView.currentUrl.value}")
 
                 // ═══════════════════════════════════════════════
                 // 场景 A: 弹窗内热门城市点击（弹窗内元素，无需滚动）
@@ -71,7 +71,7 @@ fun main() {
                         val cityR = page.click(hangzhou.refid)
                         println("[T] 点击结果: $cityR")
                         delay(2000)
-                        val urlAfter = page.currentUrl.value
+                        val urlAfter = page.webView.currentUrl.value
                         println("[T] URL 变为: $urlAfter")
                         record("A1. 弹窗内热门城市点击成功", urlAfter?.contains("hangzhou") == true)
                     } else {
@@ -192,7 +192,7 @@ fun main() {
                         println("[T] 点击结果: $scrollCityR")
                         delay(2000)
 
-                        val urlAfterD = page.currentUrl.value
+                        val urlAfterD = page.webView.currentUrl.value
                         val cityClicked = scrollCityR.toString().contains("Success") ||
                             urlAfterD?.lowercase()?.contains(scrollCity.text.lowercase()) == true
                         record("D1. 弹窗内非热门城市点击成功", cityClicked)

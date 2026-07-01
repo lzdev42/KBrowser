@@ -86,7 +86,7 @@ compose.desktop {
 }
 ```
 
-> **注意**：不加这些 JVM 参数，OSR 模式下无法输入中文。
+> **⚠️ 重要**：不加这些 JVM 参数，OSR 模式下**无法输入中文及任何 CJK 文字**（英文不受影响）。OSR 模式下 JCEF 离屏渲染，没有原生窗口处理 IME，中文输入依赖通过反射调用 JCEF 内部类实现，`--add-opens` 参数正是打开这些内部类的访问权限。不加参数时 IME 事件被静默丢弃，但英文通过按键事件正常输入，容易误判为"输入法坏了"而非"配置缺失"。Non-OSR 模式下 JCEF 使用原生窗口，IME 由操作系统原生处理，不需要这些参数。
 
 ---
 
@@ -94,14 +94,30 @@ compose.desktop {
 
 在 JVM 上，JCEF 支持两种渲染模式。模式在初始化时通过 `KBrowser.initializeConfig(useOsr = ...)` 决定，**应用启动后不可更改**。
 
-| 模式 | `useOsr` | 叠加 Compose UI | 事件响应 | 性能 |
-|------|----------|-----------------|---------|------|
-| **非 OSR（原生窗口）** | `false` | ❌ 无法在 JCEF 上叠加 Compose UI | ✅ 正常 | ✅ 较优 |
-| **OSR（离屏渲染）** | `true` | ✅ 可在 JCEF 上叠加 Compose UI | ⚠️ 事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应 | 较低（CPU/GPU 占用更高） |
+| 模式 | `useOsr` | 叠加 Compose UI | 事件响应 | 性能 | 中文输入 |
+|------|----------|-----------------|---------|------|---------|
+| **非 OSR（原生窗口）** | `false` | ❌ 无法在 JCEF 上叠加 Compose UI | ✅ 正常 | ✅ 较优 | ✅ 原生支持 |
+| **OSR（离屏渲染）** | `true` | ✅ 可在 JCEF 上叠加 Compose UI | ⚠️ 事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应 | 较低（CPU/GPU 占用更高） | ⚠️ 需配置 JVM 参数 |
 
 **已知问题（OSR 模式）**：在 OSR 模式下，JCEF 离屏渲染，允许 Compose UI 层叠在其上。但鼠标和键盘事件会被底层 JCEF 原生视图接收，而非上层 Compose 组件。这意味着放置在 JCEF 区域上方的交互式 Compose 组件不会响应用户输入。此问题尚未开始研究，目前优先级较低。
 
-**建议**：除非明确需要在浏览器上方叠加 Compose UI，否则应使用非 OSR 模式（`useOsr = false`）。非 OSR 模式提供更好的渲染性能，且 JCEF 视图本身的事件处理正常。
+**OSR 模式下的中文输入**：除上述 JVM 参数外，OSR 模式还需要焦点同步才能输入中文——KBrowser 内部已自动处理，无需用户操作。技术细节见[架构文档](docs/KBrowser_Architecture_Design_zh.md)。
+
+**建议**：除非明确需要在浏览器上方叠加 Compose UI，否则应使用非 OSR 模式（`useOsr = false`）。非 OSR 模式提供更好的渲染性能，且 JCEF 视图本身的事件处理正常，中文输入也无需额外配置。
+
+---
+
+## Demo 应用
+
+本项目附带一个完整的 Demo 应用，展示 KBrowser 的全部功能。
+
+**桌面端**：启动后首先选择渲染模式（OSR / Non-OSR），这是桌面端特有的步骤——因为 OSR 模式性能较低且需要额外 JVM 参数才能输入中文。选择 OSR 后进入主页面，包含：
+- **浏览器模式**：完整的多标签页浏览器 + 自动化调试面板（AXTree、CDP 交互、截图等）
+- **KBWebView 组件演示**：6 个独立页面分别演示基础浏览、HTML 内容渲染、JS 双向通信、新窗口与文件处理、生命周期回调、缓存管理
+
+选择 Non-OSR 后直接展示 WebGL 场景（直观演示 Non-OSR 模式下无法叠加 Compose UI 的限制）。
+
+**移动端**：无渲染模式选择（移动端 WebView 不存在 OSR 概念），直接进入功能列表。6 个 WebView 组件演示页面与桌面端共享代码。浏览器自动化页面标注了警告：移动端部分功能可能不可用。
 
 ---
 
@@ -206,7 +222,7 @@ page.close()
 
 - `KBPage` 的所有 `suspend` 方法内部通过 `withContext(Dispatchers.Main)` 切换到主线程执行，可在任意协程上下文中安全调用。
 - `KBPage` 的节点缓存写入使用 `Mutex` 串行化，读取使用 `@Volatile` 保证可见性。读操作（如 `click`）不会因写操作（如 `getRawAxTree`）持锁而死锁。
-- CPU 密集型操作（`getCleanedAxTree`、`getViewportAxTree`）是纯 Kotlin 扩展函数，在调用方协程上下文执行，不切换线程。
+- CPU 密集型操作（`AxTreeData.getCleanedAxTree()`、`AxTreeData.toYamlSnapshot()`）是纯 Kotlin 扩展函数，在调用方协程上下文执行，不切换线程。`getCleanedAxTree()` 实际行为是过滤出当前视口内的节点（与 `toYamlSnapshot(VIEWPORT)` 使用相同的视口范围判定）。
 
 ---
 
@@ -214,8 +230,8 @@ page.close()
 
 KBrowser 提供两个职责清晰的 page 创建 API：
 
-- `KBrowser.newPage()` — 创建 **UI 模式 page**，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。
-- `KBrowser.newHeadlessTab(viewportWidth = 1280, viewportHeight = 720)` — 创建 **无头模式 page**，用于后台自动化（截图、CDP 操作、AX Tree 提取）。渲染尺寸由承载 JCEF 组件的透明 `JFrame`（opacity = 0）决定。**禁止将无头 page 挂载到 `KBWebView` Composable** —— 会导致尺寸异常。
+- `KBrowser.newPage(profile: KBProfile? = null)` — 创建 **UI 模式 page**，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。
+- `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth = 1280, viewportHeight = 720)` — 创建 **无头模式 page**，用于后台自动化（截图、CDP 操作、AX Tree 提取）。渲染尺寸由承载 JCEF 组件的透明 `JFrame`（opacity = 0）决定。**禁止将无头 page 挂载到 `KBWebView` Composable** —— 会导致尺寸异常。
 
 两个 API 都只创建 page；导航通过 `page.loadUrl(url)` 完成，它是 `suspend` 函数，返回时即加载完成：
 

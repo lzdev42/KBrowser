@@ -38,26 +38,23 @@ fun main() {
             var frame: JFrame? = null
             try {
                 val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-                KBrowser.setConfigPath(storageDir)
+                KBrowser.initializeConfig(storageDir)
                 initializeKBrowser()
                 println("[Test] CefApp 初始化完成")
                 delay(3000)
 
                 val profile = KBProfile("action_verify_profile", "$storageDir/action_verify_profile")
-                val webView = JvmWebView(null, profile = profile, isHeadless = false)
+                val page = KBrowser.newPage(profile = profile)
 
                 SwingUtilities.invokeLater {
                     frame = JFrame("Action Verify Test").apply {
                         defaultCloseOperation = JFrame.EXIT_ON_CLOSE
                         setSize(1280, 900)
-                        contentPane.add(webView.browser.getComponent())
+                        contentPane.add((page.webView as JvmWebView).browser.getComponent())
                         isVisible = true
                     }
                 }
                 delay(2000)
-
-                val page = KBPage(webView)
-                KBrowser.registerPage(page)
 
                 // ── 加载本地测试页面 ──
                 val htmlFile = File("desktopApp/src/test/resources/action_verify_test.html")
@@ -314,10 +311,8 @@ fun main() {
 /**
  * 辅助函数：从 AX tree 中查找包含指定 id 属性值的节点。
  * 在 AxNode 的 `name` 或 `description` 中匹配，或者直接用 refid 匹配。
- * 这里我们用一个简单的 JS fallback 来获取元素的文档坐标。
  */
 private suspend fun findNodeByRefId(page: KBPage, elementId: String): NodeInfo? {
-    // 使用 JS 获取元素文档坐标（更可靠）
     val js = """
         (function() {
             var el = document.getElementById('$elementId');

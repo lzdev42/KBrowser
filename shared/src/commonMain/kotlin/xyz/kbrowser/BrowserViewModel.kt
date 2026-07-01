@@ -828,7 +828,7 @@ class BrowserViewModel : ViewModel() {
                 viewModelScope.launch {
                     try {
                         // 并行抓截图和 AXTree
-                        val bytes = page.screenshot()
+                        val bytes = page.webView.takeScreenshot()?.imageData
                         val axTree = try { page.snapshot().rawTree } catch (e: Exception) { null }
                         if (bytes != null) {
                             _state.update { it.copy(screenshotBytes = bytes, screenshotAxTree = axTree) }

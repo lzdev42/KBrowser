@@ -13,7 +13,6 @@ interface JsPromptResultCallback {
 enum class PermissionResource {
     CAMERA,
     MICROPHONE,
-    GEOLOCATION,
     PROTECTED_MEDIA_IDENTIFIER,
     AUDIO_CAPTURE,
     VIDEO_CAPTURE

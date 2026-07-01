@@ -86,7 +86,7 @@ compose.desktop {
 }
 ```
 
-> **Note**: Without these JVM arguments, OSR mode will not support Chinese input.
+> **⚠️ Important**: Without these JVM arguments, OSR mode **will not support Chinese/CJK text input** (English input is unaffected). In OSR mode, JCEF renders off-screen with no native window handling IME. Chinese input relies on reflective calls to JCEF internal classes, and `--add-opens` grants access to those classes. Without them, IME events are silently dropped, but English works via key events — easy to misdiagnose as "IME broken" rather than "missing configuration". In non-OSR mode, JCEF uses a native window where IME is handled natively by the OS, so no special arguments are needed.
 
 ---
 
@@ -94,14 +94,30 @@ compose.desktop {
 
 On JVM, JCEF supports two rendering modes. The mode is determined at initialization time via `KBrowser.initializeConfig(useOsr = ...)` and **cannot be changed after the application starts**.
 
-| Mode | `useOsr` | Overlay Compose UI | Event Handling | Performance |
-|------|----------|-------------------|----------------|-------------|
-| **Non-OSR (Native Window)** | `false` | ❌ Cannot overlay Compose UI on top of JCEF | ✅ Normal | ✅ Better |
-| **OSR (Off-Screen Rendering)** | `true` | ✅ Can overlay Compose UI on top of JCEF | ⚠️ Events are dispatched to the underlying JCEF view, not to overlay Compose components | Lower (higher CPU/GPU usage) |
+| Mode | `useOsr` | Overlay Compose UI | Event Handling | Performance | Chinese Input |
+|------|----------|-------------------|----------------|-------------|---------------|
+| **Non-OSR (Native Window)** | `false` | ❌ Cannot overlay Compose UI on top of JCEF | ✅ Normal | ✅ Better | ✅ Native support |
+| **OSR (Off-Screen Rendering)** | `true` | ✅ Can overlay Compose UI on top of JCEF | ⚠️ Events are dispatched to the underlying JCEF view, not to overlay Compose components | Lower (higher CPU/GPU usage) | ⚠️ Requires JVM args |
 
 **Known Issue (OSR mode)**: In OSR mode, JCEF renders off-screen, allowing Compose UI to be layered on top. However, mouse and keyboard events are received by the underlying JCEF native view, not by the Compose overlay. This means interactive Compose components placed over the JCEF area will not respond to user input. This issue has not been investigated yet and is currently low priority.
 
-**Recommendation**: Use non-OSR mode (`useOsr = false`) unless you specifically need to overlay Compose UI on top of the browser. Non-OSR mode provides better rendering performance and correct event handling for the JCEF view itself.
+**Chinese Input in OSR Mode**: Besides the JVM arguments above, OSR mode also requires focus synchronization for Chinese input — KBrowser handles this internally, no user action needed. For technical details, see the [Architecture Document](docs/KBrowser_Architecture_Design.md).
+
+**Recommendation**: Use non-OSR mode (`useOsr = false`) unless you specifically need to overlay Compose UI on top of the browser. Non-OSR mode provides better rendering performance, correct event handling, and Chinese input without extra configuration.
+
+---
+
+## Demo Application
+
+This project includes a full demo application showcasing all KBrowser features.
+
+**Desktop**: On launch, you first choose a rendering mode (OSR / Non-OSR) — this is desktop-specific, since OSR mode has lower performance and requires extra JVM arguments for Chinese input. After selecting OSR, the main page offers:
+- **Browser Mode**: A full multi-tab browser + automation debug panel (AXTree, CDP interactions, screenshots, etc.)
+- **KBWebView Component Demo**: 6 separate pages demonstrating basic browsing, HTML content rendering, JS bidirectional communication, new window & file handling, lifecycle callbacks, and cache management
+
+Selecting Non-OSR directly shows a WebGL scene (demonstrating the limitation that Compose UI cannot be overlaid in Non-OSR mode).
+
+**Mobile**: No rendering mode selection (mobile WebView has no OSR concept), goes directly to the feature list. The 6 WebView component demo pages share code with the desktop. The browser automation page shows a warning that some features may not work on mobile.
 
 ---
 
@@ -206,7 +222,7 @@ page.close()
 
 - All `suspend` methods of `KBPage` internally switch to `Dispatchers.Main` via `withContext`, so they can be called from any coroutine context.
 - The `KBPage` node cache uses `Mutex` for write serialization and `@Volatile` for read visibility. Read operations (e.g., `click`) will never deadlock with write operations (e.g., `getRawAxTree`).
-- CPU-intensive operations (`getCleanedAxTree`, `getViewportAxTree`) are pure Kotlin extension functions that execute in the caller's coroutine context without switching threads.
+- CPU-intensive operations (`AxTreeData.getCleanedAxTree()`, `AxTreeData.toYamlSnapshot()`) are pure Kotlin extension functions that execute in the caller's coroutine context without switching threads. `getCleanedAxTree()` actually filters nodes within the current viewport (same viewport-range logic as `toYamlSnapshot(VIEWPORT)`).
 
 ---
 
@@ -214,8 +230,8 @@ page.close()
 
 KBrowser provides two distinct page-creation APIs, each with a clear single responsibility:
 
-- `KBrowser.newPage()` — Creates a **UI page** for display in a Compose window via the `KBWebView` Composable. Render size is determined by the Compose `modifier`.
-- `KBrowser.newHeadlessTab(viewportWidth = 1280, viewportHeight = 720)` — Creates a **headless page** for background automation (screenshots, CDP operations, AX Tree extraction). Render size is determined by a transparent `JFrame` (opacity = 0) that hosts the JCEF component. **Never mount a headless page onto the `KBWebView` Composable** — it will cause size anomalies.
+- `KBrowser.newPage(profile: KBProfile? = null)` — Creates a **UI page** for display in a Compose window via the `KBWebView` Composable. Render size is determined by the Compose `modifier`.
+- `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth = 1280, viewportHeight = 720)` — Creates a **headless page** for background automation (screenshots, CDP operations, AX Tree extraction). Render size is determined by a transparent `JFrame` (opacity = 0) that hosts the JCEF component. **Never mount a headless page onto the `KBWebView` Composable** — it will cause size anomalies.
 
 Both APIs only create the page; navigation is done via `page.loadUrl(url)`, which is a `suspend` function that returns when loading completes:
 

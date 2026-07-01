@@ -89,6 +89,62 @@ class AndroidWebView(
                 override fun onReceivedTitle(view: WebView?, title: String?) {
                     currentTitle.value = title
                 }
+
+                override fun onJsAlert(view: WebView?, url: String?, message: String?, result: android.webkit.JsResult?): Boolean {
+                    if (result == null) return false
+                    webChromeClient?.onJsAlert(url ?: "", message ?: "", object : JsResultCallback {
+                        override fun confirm() { result.confirm() }
+                        override fun cancel() { result.cancel() }
+                    })
+                    return true
+                }
+
+                override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: android.webkit.JsResult?): Boolean {
+                    if (result == null) return false
+                    webChromeClient?.onJsConfirm(url ?: "", message ?: "", object : JsResultCallback {
+                        override fun confirm() { result.confirm() }
+                        override fun cancel() { result.cancel() }
+                    })
+                    return true
+                }
+
+                override fun onJsPrompt(view: WebView?, url: String?, message: String?, defaultValue: String?, result: android.webkit.JsPromptResult?): Boolean {
+                    if (result == null) return false
+                    webChromeClient?.onJsPrompt(url ?: "", message ?: "", defaultValue, object : JsPromptResultCallback {
+                        override fun confirm(value: String?) {
+                            if (value != null) result.confirm(value) else result.confirm()
+                        }
+                        override fun cancel() { result.cancel() }
+                    })
+                    return true
+                }
+
+                override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+                    if (request == null) return
+                    val mapped = request.resources.mapNotNull { res ->
+                        when (res) {
+                            android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE -> PermissionResource.VIDEO_CAPTURE
+                            android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE -> PermissionResource.AUDIO_CAPTURE
+                            android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID -> PermissionResource.PROTECTED_MEDIA_IDENTIFIER
+                            else -> null
+                        }
+                    }
+                    val kbRequest = object : PermissionRequest {
+                        override val origin: String = ""
+                        override val resources: List<PermissionResource> = mapped
+                        override fun grant() {
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                request.grant(request.resources)
+                            }
+                        }
+                        override fun deny() {
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                request.deny()
+                            }
+                        }
+                    }
+                    webChromeClient?.onPermissionRequest(kbRequest)
+                }
             }
 
             val displayMetrics = context.resources.displayMetrics
@@ -222,10 +278,7 @@ class AndroidWebView(
         webView = null
     }
 
-    override fun setInteractionLocked(locked: Boolean) { /* Android: not implemented */ }
-    override fun updateMouseTrail(viewportX: Int, viewportY: Int) { /* Android: not implemented */ }
-
-    override suspend fun takeScreenshot(): ByteArray? {
+    override suspend fun takeScreenshot(): KBScreenshot? {
         val w = webView ?: return null
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
             val width = w.width
@@ -256,17 +309,29 @@ class AndroidWebView(
             val baos = java.io.ByteArrayOutputStream()
             try {
                 targetBitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
-                if (targetBitmap != bitmap) {
-                    targetBitmap.recycle()
-                }
-                baos.toByteArray()
+                val imageData = baos.toByteArray()
+                KBScreenshot(
+                    imageData = imageData,
+                    width = targetBitmap.width,
+                    height = targetBitmap.height
+                )
             } catch (e: Exception) {
                 e.printStackTrace()
                 null
+            } finally {
+                if (targetBitmap != bitmap && !targetBitmap.isRecycled) {
+                    targetBitmap.recycle()
+                }
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
             }
         }
     }
 }
+
+internal actual fun setInteractionLockedNative(webView: KBWebView, locked: Boolean) { /* Android: not implemented */ }
+internal actual fun updateMouseTrailNative(webView: KBWebView, viewportX: Int, viewportY: Int) { /* Android: not implemented */ }
 
 @Composable
 actual fun KBWebView(

@@ -6,7 +6,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CompletableDeferred
 import kotlin.coroutines.resume
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
@@ -15,11 +14,6 @@ import kotlin.random.Random
 
 class KBPage(val webView: KBWebView) {
     val uuid: String = Random.nextLong().toString()
-    
-    val currentUrl: StateFlow<String?> get() = webView.currentUrl
-    val title: StateFlow<String?> get() = webView.currentTitle
-    val loadingState: StateFlow<LoadingState> get() = webView.loadingState
-    val progress: StateFlow<Float> get() = webView.progress
 
     /**
      * Cache of node coordinates, refreshed on [getRawAxTree].
@@ -108,11 +102,6 @@ class KBPage(val webView: KBWebView) {
         withContext(Dispatchers.Main) {
             webView.clearCacheAndCookies()
         }
-    }
-
-    suspend fun setCookieViaJs(cookieString: String) {
-        val escapedCookie = cookieString.replace("\"", "\\\"")
-        evaluateJavascript("document.cookie = \"$escapedCookie\";")
     }
 
     private suspend fun getRawAxTree(): AxTreeData {
@@ -338,10 +327,6 @@ class KBPage(val webView: KBWebView) {
         return KBLocator(this, testId, KBSelectorType.TEST_ID)
     }
 
-    suspend fun screenshot(): ByteArray? {
-        return webView.takeScreenshot()
-    }
-
     /**
      * 锁定/解锁用户交互。
      * locked=true：在浏览器上覆盖 AWT 拦截层，阻止用户鼠标/键盘输入，并显示鼠标轨迹。
@@ -349,7 +334,7 @@ class KBPage(val webView: KBWebView) {
      * 自动化操作（CDP）不受影响。JVM 平台有效，Android/iOS 为空实现。
      */
     fun setInteractionLocked(locked: Boolean) {
-        webView.setInteractionLocked(locked)
+        setInteractionLockedNative(webView, locked)
     }
 
     /**
@@ -357,7 +342,7 @@ class KBPage(val webView: KBWebView) {
      * 坐标为视口坐标（CSS 像素）。仅 JVM 平台有效。
      */
     fun updateMouseTrail(viewportX: Int, viewportY: Int) {
-        webView.updateMouseTrail(viewportX, viewportY)
+        updateMouseTrailNative(webView, viewportX, viewportY)
     }
 
     /**

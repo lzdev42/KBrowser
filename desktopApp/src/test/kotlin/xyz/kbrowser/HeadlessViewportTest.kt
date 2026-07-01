@@ -51,7 +51,7 @@ fun main() {
 
         // 截图
         println("[Test] 正在截图...")
-        val pngBytes = page.screenshot()
+        val pngBytes = page.webView.takeScreenshot()?.imageData
         if (pngBytes == null) {
             println("[Test] ❌ 截图失败")
             return@runBlocking

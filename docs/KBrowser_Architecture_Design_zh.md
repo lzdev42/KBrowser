@@ -25,8 +25,8 @@ classDiagram
     class KBrowser {
         <<object Singleton>>
         +initializeConfig(storageDir: String?, useOsr: Boolean)
-        +newPage() KBPage
-        +newHeadlessTab(viewportWidth: Int, viewportHeight: Int) KBPage
+        +newPage(profile: KBProfile?) KBPage
+        +newHeadlessTab(profile: KBProfile?, viewportWidth: Int, viewportHeight: Int) KBPage
         +pages: StateFlow~List~KBPage~~
         +getPages() List~KBPage~
         +shutdown()
@@ -41,23 +41,44 @@ classDiagram
         +StateFlow~Float~ progress
         +suspend loadUrl(url: String)
         +suspend evaluateJavascript(script: String) String
-        +suspend getRawAxTree() AxTreeData
+        +suspend clearCacheAndCookies()
+        +suspend setCookieViaJs(cookieString: String)
         +suspend snapshot(mode: SnapshotMode) SnapshotResult
-        +suspend click(refid: String)
+        +suspend click(refid: String) OperationResult
         +suspend hover(refid: String)
-        +suspend scroll(refid: String, deltaX: Int, deltaY: Int)
+        +suspend scroll(refid: String, deltaX: Int, deltaY: Int) OperationResult
         +suspend drag(startRefid: String, endRefid: String)
         +suspend jsClick(refid: String)
         +suspend jsHover(refid: String)
         +suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)
         +suspend jsDrag(startRefid: String, endRefid: String)
-        +suspend clickByCoordinates(x: Int, y: Int)
+        +suspend clickByCoordinates(x: Int, y: Int) OperationResult
         +suspend hoverByCoordinates(x: Int, y: Int)
-        +suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)
+        +suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int) OperationResult
         +suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)
+        +suspend press(key: KeyboardKey)
+        +suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)
+        +suspend typeChar(char: Char)
+        +suspend type(text: String)
+        +suspend uploadFile(refid: String, filePaths: List~String~)
+        +suspend uploadFileBySelector(selector: String, filePaths: List~String~)
         +suspend screenshot() ByteArray?
+        +locator(selector: String) KBLocator
+        +getByRole(role, name?) KBLocator
+        +getByText(text, exact) KBLocator
+        +getByLabel(label) KBLocator
+        +getByPlaceholder(text) KBLocator
+        +getByAltText(text) KBLocator
+        +getByTitle(title) KBLocator
+        +getByTestId(testId) KBLocator
+        +setInteractionLocked(locked: Boolean)
+        +updateMouseTrail(viewportX: Int, viewportY: Int)
         +var onNewPage: ((url: String) -> Unit)?
+        +var onFileDialog: ((request, callback) -> Unit)?
         +close()
+        -suspend getRawAxTree() AxTreeData
+        -nodeCacheWriteLock: Mutex
+        -nodeCache: Map~String, AxNode~
     }
 
     class KBWebView {
@@ -69,9 +90,24 @@ classDiagram
         +StateFlow~Boolean~ canGoBack
         +StateFlow~Boolean~ canGoForward
         +loadUrl(url: String)
+        +loadHtml(html: String)
+        +reload()
+        +stopLoading()
+        +goBack()
+        +goForward()
         +evaluateJavascript(script: String, callback: ((String) -> Unit)?)
+        +registerJsCallback(name, callback)
+        +unregisterJsCallback(name)
+        +registerJsHandler(name, handler)
+        +unregisterJsHandler(name)
+        +clearCacheAndCookies()
+        +setWebViewClient(client?)
+        +setWebChromeClient(client?)
         +suspend takeScreenshot() ByteArray?
+        +setInteractionLocked(locked: Boolean)
+        +updateMouseTrail(viewportX: Int, viewportY: Int)
         +var onNewWindowRequest: ((url: String) -> Unit)?
+        +var onFileDialogRequest: ((request, callback) -> Unit)?
         +destroy()
     }
 
@@ -79,11 +115,13 @@ classDiagram
         +KBPage page
         +String selector
         +KBSelectorType selectorType
-        +suspend click()
+        +String? name
+        +Boolean exact
+        +suspend click() OperationResult
         +suspend hover()
-        +suspend scroll(deltaX: Int, deltaY: Int)
-        +suspend fill(value: String)
-        +suspend type(text: String)
+        +suspend scroll(deltaX: Int, deltaY: Int) OperationResult
+        +suspend fill(value: String) OperationResult
+        +suspend type(text: String) OperationResult
         +suspend focus()
         +suspend check()
         +suspend selectOption(value: String)
@@ -92,16 +130,22 @@ classDiagram
         +suspend jsClick()
         +suspend jsHover()
         +suspend jsScroll(deltaX: Int, deltaY: Int)
-        +suspend jsFill(value: String)
-        +suspend jsType(text: String)
+        +suspend jsFill(value: String) OperationResult
+        +suspend jsType(text: String) OperationResult
         +suspend jsFocus()
         +suspend jsCheck()
         +suspend jsSelectOption(value: String)
         +suspend jsPress(key: KeyboardKey)
         +suspend jsPressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)
         +suspend isVisible() Boolean
+        +suspend getText() String
+        +suspend getAttribute(name: String) String?
+        +suspend count() Int
+        +suspend boundingBox() Rect?
         +filter(predicate) KBLocator
         +nth(index: Int) KBLocator
+        +first() KBLocator
+        +last() KBLocator
     }
 
     KBrowser "1" *-- "many" KBPage
@@ -135,6 +179,15 @@ JCEF 创建原生重量级窗口组件。浏览器通过原生窗口系统直接
 JCEF 渲染到离屏缓冲区，结果作为轻量级组件绘制。这允许 Compose UI 层叠在 JCEF 视图之上。但鼠标和键盘事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应用户输入。
 
 这是已知问题，优先级较低。如不需要在浏览器上方叠加 Compose UI，应使用非 OSR 模式以获得更好的性能和正确的事件处理。
+
+### OSR 模式下的中文输入
+
+OSR 模式下 CEF 没有原生窗口来检测焦点，中文输入需要两个条件同时满足：
+
+1. **JVM 参数**：`--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED` 和 `--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED`，用于打开 JCEF 内部类的反射访问权限（`ImeSetComposition` / `ImeCommitText` 通过反射调用）
+2. **焦点同步**：嵌入方必须显式调用 `CefBrowser.setFocus(true)` 同步焦点状态。若焦点未同步，CEF 内部认为浏览器没有焦点，会静默丢弃所有 IME 请求，而 `sendKeyEvent` 不检查焦点所以英文正常——这是中文无法输入的根本原因
+
+KBrowser 内部通过 `KBCefInputMethodAdapter`（IME 事件转发）和 `ensureCefFocus()`（焦点同步）实现了完整的 OSR 中文输入支持。Non-OSR 模式下 JCEF 使用原生窗口，IME 由操作系统原生处理，不存在此问题。
 
 ### 自动降级
 
@@ -175,7 +228,7 @@ application { /* Compose UI */ }
 
 - `KBPage` 的所有 `suspend` 方法内部通过 `withContext(Dispatchers.Main)` 切换到主线程执行，可在任意协程上下文中安全调用。
 - 异步回调（JS 执行结果、页面加载完成）通过 `suspendCancellableCoroutine` 转为挂起，不阻塞线程。
-- CPU 密集型操作（`getCleanedAxTree`、`getViewportAxTree`）是纯 Kotlin 扩展函数，在调用方协程上下文执行，不切换线程。
+- CPU 密集型操作（`AxTreeData.getCleanedAxTree()`、`AxTreeData.toYamlSnapshot()`）是纯 Kotlin 扩展函数，在调用方协程上下文执行，不切换线程。`getCleanedAxTree()` 实际行为是过滤出当前视口内的节点（与 `toYamlSnapshot(VIEWPORT)` 使用相同的视口范围判定）。
 - `KBrowser.pages` 使用 `MutableStateFlow` + `update {}` 原子更新，多协程并发安全。
 - `loadUrl` 协程取消时自动调用 `webView.stopLoading()`。
 - `KBPage` 节点缓存：写操作通过 `Mutex` 串行化，读操作使用 `@Volatile` 保证可见性。读操作不会因写操作持锁而死锁。

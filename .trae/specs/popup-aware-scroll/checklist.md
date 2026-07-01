@@ -1,9 +1,0 @@
-- [x] 弹窗归属判断：findPopupForNode 能正确识别 role=dialog 的弹窗节点，并通过 childIds 递归判断元素归属
-- [x] smartScrollIntoView 弹窗内滚动：目标在弹窗内时，只在弹窗内部搜索 overflow:auto/scroll 容器并滚动
-- [x] smartScrollIntoView 主页面滚动：目标不在弹窗内时，使用 window.scrollTo 滚主页面
-- [x] click(refid) 自动传递弹窗信息：调用方无需额外处理，page.click(refid) 自动判断弹窗归属
-- [x] hover(refid) 自动传递弹窗信息：同上
-- [x] verifyClickAtViewport 使用 CDP 上下文：elementFromPoint 在 CDP 上下文中执行，与 Input.dispatchMouseEvent 坐标系一致
-- [x] popup_scroll_test 9/9 全部通过：本地 HTML 弹窗滚动测试无回归
-- [x] auto_scroll_click_test 测试 1-3 通过：主页面滚动无回归（已知 snapshot 性能问题可能导致超时，非本次改动引入）
-- [x] Boss直聘综合测试全部通过：弹窗内点击、弹窗内滚动、主页面滚动全部正常（B 场景因页面遮挡而非滚动问题）

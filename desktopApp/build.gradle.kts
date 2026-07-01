@@ -123,3 +123,16 @@ tasks.register<JavaExec>("runBossCitySelectTest") {
     )
     workingDir = rootProject.projectDir
 }
+
+tasks.register<JavaExec>("runJsDialogReproTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.JsDialogReproTestKt")
+    val compileTestKotlin = tasks.named("compileTestKotlin")
+    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+    workingDir = rootProject.projectDir
+}

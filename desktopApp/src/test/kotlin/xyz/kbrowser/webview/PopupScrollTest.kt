@@ -29,26 +29,23 @@ fun main() {
             var frame: JFrame? = null
             try {
                 val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-                KBrowser.setConfigPath(storageDir)
+                KBrowser.initializeConfig(storageDir)
                 initializeKBrowser()
                 println("[Test] CefApp 初始化完成")
                 delay(3000)
 
                 val profile = KBProfile("popup_scroll_test_profile", "$storageDir/popup_scroll_test_profile")
-                val webView = JvmWebView(null, profile = profile, isHeadless = false)
+                val page = KBrowser.newPage(profile = profile)
 
                 SwingUtilities.invokeLater {
                     frame = JFrame("Popup Scroll Test").apply {
                         defaultCloseOperation = JFrame.EXIT_ON_CLOSE
                         setSize(1280, 900)
-                        contentPane.add(webView.browser.getComponent())
+                        contentPane.add((page.webView as JvmWebView).browser.getComponent())
                         isVisible = true
                     }
                 }
                 delay(2000)
-
-                val page = KBPage(webView)
-                KBrowser.registerPage(page)
 
                 val htmlFile = File("desktopApp/src/test/resources/popup_scroll_test.html")
                 val url = htmlFile.toURI().toString()

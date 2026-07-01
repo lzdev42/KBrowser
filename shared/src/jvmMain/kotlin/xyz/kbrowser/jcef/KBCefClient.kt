@@ -257,4 +257,46 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
         }
     }
     fun removeDialogHandler(handler: CefDialogHandler, browser: CefBrowser) = myDialogHandler.remove(handler, browser) { cefClient.removeDialogHandler() }
+
+    // --- JS Dialog (alert / confirm / prompt) ---
+    fun addJSDialogHandler(handler: CefJSDialogHandler, browser: CefBrowser) {
+        myJSDialogHandler.add(handler, browser) {
+            cefClient.addJSDialogHandler(object : CefJSDialogHandlerAdapter() {
+                override fun onJSDialog(
+                    b: CefBrowser,
+                    originUrl: String,
+                    dialogType: CefJSDialogHandler.JSDialogType,
+                    messageText: String,
+                    defaultPromptText: String?,
+                    callback: CefJSDialogCallback,
+                    suppressMessage: BoolRef
+                ): Boolean {
+                    return myJSDialogHandler.handleBooleanAny(b, false) {
+                        it.onJSDialog(b, originUrl, dialogType, messageText, defaultPromptText, callback, suppressMessage)
+                    }
+                }
+            })
+        }
+    }
+    fun removeJSDialogHandler(handler: CefJSDialogHandler, browser: CefBrowser) = myJSDialogHandler.remove(handler, browser) { cefClient.removeJSDialogHandler() }
+
+    // --- Permission (Media Access: camera / microphone) ---
+    fun addPermissionHandler(handler: CefPermissionHandler, browser: CefBrowser) {
+        myPermissionHandler.add(handler, browser) {
+            cefClient.addPermissionHandler(object : CefPermissionHandler {
+                override fun onRequestMediaAccessPermission(
+                    b: CefBrowser,
+                    frame: CefFrame,
+                    requestingOrigin: String,
+                    requestedPermissions: Int,
+                    callback: CefMediaAccessCallback
+                ): Boolean {
+                    return myPermissionHandler.handleBooleanAny(b, false) {
+                        it.onRequestMediaAccessPermission(b, frame, requestingOrigin, requestedPermissions, callback)
+                    }
+                }
+            })
+        }
+    }
+    fun removePermissionHandler(handler: CefPermissionHandler, browser: CefBrowser) = myPermissionHandler.remove(handler, browser) { cefClient.removePermissionHandler() }
 }

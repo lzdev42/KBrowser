@@ -12,13 +12,21 @@ import org.cef.browser.CefMessageRouter
 import org.cef.handler.CefMessageRouterHandlerAdapter
 import org.cef.callback.CefQueryCallback
 import org.cef.callback.CefStringVisitor
+import org.cef.callback.CefJSDialogCallback
+import org.cef.callback.CefMediaAccessCallback
 import org.cef.handler.CefDisplayHandlerAdapter
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
+import org.cef.handler.CefJSDialogHandler
+import org.cef.handler.CefJSDialogHandlerAdapter
+import org.cef.handler.CefPermissionHandler
+import org.cef.misc.BoolRef
 import org.cef.network.CefRequest
 import xyz.kbrowser.jcef.*
 import java.awt.Component
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.awt.event.InputEvent
@@ -315,6 +323,39 @@ class JvmWebView(
             }
         }, cefBrowser)
 
+        // 同时注册 CefJSDialogHandler 与 CDP 拦截：
+        // - CefJSDialogHandler 是正统拦截方式，返回 true 可阻止原生弹窗
+        // - CDP 作为 JBR Remote 模式下的 fallback（CefJSDialogHandler 在某些场景不触发）
+        setupNativeJsDialogHandling()
+        setupCdpDialogHandling()
+
+        browser.myCefClient.addPermissionHandler(object : CefPermissionHandler {
+            override fun onRequestMediaAccessPermission(
+                b: CefBrowser,
+                frame: CefFrame,
+                requestingOrigin: String,
+                requestedPermissions: Int,
+                callback: CefMediaAccessCallback
+            ): Boolean {
+                val client = webChromeClient ?: return false
+                val resources = mutableListOf<PermissionResource>()
+                if ((requestedPermissions and CefMediaAccessCallback.MediaPermissionFlags.DEVICE_VIDEO_CAPTURE) != 0) {
+                    resources += PermissionResource.VIDEO_CAPTURE
+                }
+                if ((requestedPermissions and CefMediaAccessCallback.MediaPermissionFlags.DEVICE_AUDIO_CAPTURE) != 0) {
+                    resources += PermissionResource.AUDIO_CAPTURE
+                }
+                val kbRequest = object : PermissionRequest {
+                    override val origin: String = requestingOrigin
+                    override val resources: List<PermissionResource> = resources
+                    override fun grant() { callback.Continue(requestedPermissions) }
+                    override fun deny() { callback.Cancel() }
+                }
+                client.onPermissionRequest(kbRequest)
+                return true
+            }
+        }, cefBrowser)
+
         if (isHeadless) {
             SwingUtilities.invokeLater {
                 val frame = javax.swing.JFrame()
@@ -342,8 +383,35 @@ class JvmWebView(
 
     override fun loadHtml(html: String) {
         if (!isDestroyed.get()) {
+            // 使用 about:blank + document.write 加载 HTML 字符串，避免 URL 变成 base64 data URI。
+            // 否则 JCEF 弹原生 JS 对话框时会把当前 URL（超长 base64）显示在标题里。
+            browser.loadURL("about:blank")
+            // 等待 about:blank 真正加载完成，避免固定的 50ms 在慢机器上不够导致 document.write 失败。
+            val deadline = System.currentTimeMillis() + 2000
+            while (System.currentTimeMillis() < deadline) {
+                val ready = try {
+                    cefBrowser.url == "about:blank"
+                } catch (_: Exception) {
+                    false
+                }
+                if (ready) break
+                try {
+                    Thread.sleep(20)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return
+                }
+            }
             val encoded = Base64.getEncoder().encodeToString(html.toByteArray(Charsets.UTF_8))
-            browser.loadURL("data:text/html;charset=utf-8;base64,$encoded")
+            val js = """
+                (function() {
+                    var html = decodeURIComponent(escape(atob('$encoded')));
+                    document.open();
+                    document.write(html);
+                    document.close();
+                })();
+            """.trimIndent()
+            cefBrowser.executeJavaScript(js, "about:blank", 0)
         }
     }
 
@@ -380,7 +448,7 @@ class JvmWebView(
         }
     }
 
-    override fun updateMouseTrail(viewportX: Int, viewportY: Int) {
+    fun updateMouseTrail(viewportX: Int, viewportY: Int) {
         val panel = lockPanel ?: return
         trailPoints.add(java.awt.Point(viewportX, viewportY))
         if (trailPoints.size > MAX_TRAIL) trailPoints.removeAt(0)
@@ -393,7 +461,7 @@ class JvmWebView(
      * locked=false：移除面板，恢复用户操作。
      * 自动化操作（CDP）不受影响。
      */
-    override fun setInteractionLocked(locked: Boolean) {
+    fun setInteractionLocked(locked: Boolean) {
         SwingUtilities.invokeLater {
             val comp = cefBrowser.uiComponent ?: return@invokeLater
             val parent = comp.parent ?: return@invokeLater
@@ -553,6 +621,8 @@ class JvmWebView(
     }
 
     override fun setWebChromeClient(client: KBWebChromeClient?) {
+        // JS dialog / permission handler 已在 init 中作为永久转发 handler 注册到 CefClient，
+        // 这里只需更新当前回调实例；handler 内部会读取此字段并分发。
         this.webChromeClient = client
     }
 
@@ -584,42 +654,66 @@ class JvmWebView(
     /**
      * 注册支持 Promise 的双向请求处理器。
      *
-     * 底层使用独立的 CefMessageRouter 槽位，handler 的返回值通过
-     * CefQueryCallback.success(result) 真正传回 JS 的 Promise resolve。
-     *
-     * JS 端注入的包装代码：
-     * ```javascript
-     * window.name = function(arg) {
-     *   return new Promise(function(resolve, reject) {
-     *     cefQuery_xxx({ request: arg,
-     *       onSuccess: function(r) { resolve(r); },
-     *       onFailure: function(code, msg) { reject(new Error(msg)); }
-     *     });
-     *   });
-     * };
-     * ```
+     * 由于 JCEF Remote 模式下 CefMessageRouter 的 success 回调无法可靠地把返回值
+     * 传回 JS Promise，这里采用 callback-id 方案：
+     *   1. JS 端生成唯一 id，把 {__kb_cb_id, data} 通过 CefMessageRouter 发到 native
+     *   2. native handler 执行完后，通过 executeJavaScript 调用 window.__kb_handler_cb[id]
+     *   3. JS Promise 得到真正的返回值
      */
     override fun registerJsHandler(name: String, handler: (String) -> String) {
         if (isDestroyed.get()) return
         val query = KBCefJSQuery.create(browser)
         query.addHandler { request ->
             try {
-                val result = handler(request)
-                KBCefJSQuery.Response(result)
+                val json = Json.decodeFromString<JsonObject>(request)
+                val callbackId = json["__kb_cb_id"]?.jsonPrimitive?.content
+                val data = json["data"]?.jsonPrimitive?.content ?: ""
+                if (callbackId == null) {
+                    return@addHandler KBCefJSQuery.Response("", errCode = 1, errMsg = "missing callback id")
+                }
+                val result = handler(data)
+                val escapedResult = Json.encodeToString(JsonPrimitive(result))
+                cefBrowser.executeJavaScript(
+                    "if(window.__kb_handler_cb&&window.__kb_handler_cb['$callbackId'])" +
+                    "{window.__kb_handler_cb['$callbackId'].resolve($escapedResult);" +
+                    "delete window.__kb_handler_cb['$callbackId'];}",
+                    "", 0
+                )
+                KBCefJSQuery.Response("OK")
             } catch (e: Exception) {
-                KBCefJSQuery.Response("", errCode = 1, errMsg = e.message ?: "handler error")
+                val errorMsg = e.message ?: "handler error"
+                try {
+                    val json = Json.decodeFromString<JsonObject>(request)
+                    val callbackId = json["__kb_cb_id"]?.jsonPrimitive?.content
+                    if (callbackId != null) {
+                        val escapedError = Json.encodeToString(JsonPrimitive(errorMsg))
+                        cefBrowser.executeJavaScript(
+                            "if(window.__kb_handler_cb&&window.__kb_handler_cb['$callbackId'])" +
+                            "{window.__kb_handler_cb['$callbackId'].reject(new Error($escapedError));" +
+                            "delete window.__kb_handler_cb['$callbackId'];}",
+                            "", 0
+                        )
+                    }
+                } catch (_: Exception) {}
+                KBCefJSQuery.Response("", errCode = 1, errMsg = errorMsg)
             }
         }
         jsHandlers[name] = query
         val funcName = query.myFunc.myFuncName
-        // 注入 Promise 包装：onSuccess resolve，onFailure reject
         val script = """
+            window.__kb_handler_cb = window.__kb_handler_cb || {};
+            window.__kb_handler_cb_id = window.__kb_handler_cb_id || 0;
             window.$name = function(arg) {
                 return new Promise(function(resolve, reject) {
+                    var id = 'cb_' + (++window.__kb_handler_cb_id);
+                    window.__kb_handler_cb[id] = {resolve: resolve, reject: reject};
                     window["$funcName"]({
-                        request: (typeof arg === 'string' ? arg : JSON.stringify(arg)),
-                        onSuccess: function(r) { resolve(r); },
-                        onFailure: function(code, msg) { reject(new Error(msg || 'handler error')); }
+                        request: JSON.stringify({
+                            __kb_cb_id: id,
+                            data: (typeof arg === 'string' ? arg : JSON.stringify(arg))
+                        }),
+                        onSuccess: function(r){},
+                        onFailure: function(c,m){}
                     });
                 });
             };
@@ -1175,7 +1269,7 @@ class JvmWebView(
         }
     }
 
-    override suspend fun takeScreenshot(): ByteArray? {
+    override suspend fun takeScreenshot(): KBScreenshot? {
         if (isDestroyed.get()) return null
 
         val devTools = cefBrowser.devToolsClient ?: return null
@@ -1197,11 +1291,9 @@ class JvmWebView(
                 ?: return null
 
             val pngBytes = java.util.Base64.getDecoder().decode(base64)
-            println("[SCREENSHOT] raw PNG size: ${pngBytes.size} bytes")
 
             // Step 2: get DPR from Page.getLayoutMetrics
             // DPR = layoutViewport.clientWidth / cssLayoutViewport.clientWidth
-            // (scale field is page zoom, not device pixel ratio)
             val dpr = withContext(Dispatchers.IO) {
                 try {
                     val metricsJson = devTools.executeDevToolsMethod(
@@ -1218,27 +1310,25 @@ class JvmWebView(
 
                         val physW = resolveObj("layoutViewport")?.get("clientWidth")?.jsonPrimitive?.content?.toDoubleOrNull()
                         val cssW  = resolveObj("cssLayoutViewport")?.get("clientWidth")?.jsonPrimitive?.content?.toDoubleOrNull()
-
-                        val computed = if (physW != null && cssW != null && cssW > 0) physW / cssW else 1.0
-                        println("[SCREENSHOT] layoutVp.clientWidth=$physW cssLayoutVp.clientWidth=$cssW → DPR=$computed")
-                        computed
+                        if (physW != null && cssW != null && cssW > 0) physW / cssW else 1.0
                     } else 1.0
                 } catch (e: Exception) {
-                    println("[SCREENSHOT] getLayoutMetrics failed: ${e.message}")
                     1.0
                 }
             }
 
-            // Step 3: if DPR > 1.0, downscale to CSS pixel size
+            // Step 3: decode image and downscale if DPR > 1.0 to align pixels with CSS coords
+            val srcImage = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(pngBytes)) ?: return null
+            val cssWidth: Int
+            val cssHeight: Int
+            val outputBytes: ByteArray
             if (dpr <= 1.0) {
-                println("[SCREENSHOT] DPR=$dpr ≤ 1.0, returning raw bytes")
-                pngBytes
+                cssWidth = srcImage.width
+                cssHeight = srcImage.height
+                outputBytes = pngBytes
             } else {
-                val srcImage = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(pngBytes))
-                    ?: return pngBytes
-                val cssWidth = (srcImage.width / dpr).toInt().coerceAtLeast(1)
-                val cssHeight = (srcImage.height / dpr).toInt().coerceAtLeast(1)
-                println("[SCREENSHOT] DPR=$dpr, src=${srcImage.width}×${srcImage.height} → css=${cssWidth}×${cssHeight}")
+                cssWidth = (srcImage.width / dpr).toInt().coerceAtLeast(1)
+                cssHeight = (srcImage.height / dpr).toInt().coerceAtLeast(1)
                 val scaled = java.awt.image.BufferedImage(cssWidth, cssHeight, java.awt.image.BufferedImage.TYPE_INT_ARGB)
                 val g2d = scaled.createGraphics()
                 try {
@@ -1252,11 +1342,20 @@ class JvmWebView(
                 }
                 val baos = java.io.ByteArrayOutputStream()
                 javax.imageio.ImageIO.write(scaled, "png", baos)
-                baos.toByteArray()
+                outputBytes = baos.toByteArray()
             }
+            KBScreenshot(imageData = outputBytes, width = cssWidth, height = cssHeight)
         } catch (e: Exception) {
             null
         }
+    }
+
+    internal fun setInteractionLockedInternal(locked: Boolean) {
+        setInteractionLocked(locked)
+    }
+
+    internal fun updateMouseTrailInternal(viewportX: Int, viewportY: Int) {
+        updateMouseTrail(viewportX, viewportY)
     }
 
     suspend fun scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int) {
@@ -1343,6 +1442,181 @@ class JvmWebView(
         triggerClickAnimation(endX, endY)
     }
 
+    // ── 原生 CefJSDialogHandler 拦截 alert/confirm/prompt ──────────────────
+
+    private fun setupNativeJsDialogHandling() {
+        browser.myCefClient.addJSDialogHandler(object : CefJSDialogHandler {
+            override fun onJSDialog(
+                b: CefBrowser,
+                originUrl: String,
+                dialogType: CefJSDialogHandler.JSDialogType,
+                messageText: String,
+                defaultPromptText: String?,
+                callback: CefJSDialogCallback,
+                suppressMessage: BoolRef
+            ): Boolean {
+                val client = webChromeClient
+                if (client == null) {
+                    // 没有上层监听时直接关闭对话框并阻止默认弹窗，否则非 headless 模式下
+                    // 会弹出原生对话框，把当前 URL（可能是超长 base64）显示在标题里。
+                    when (dialogType) {
+                        CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_ALERT -> callback.Continue(true, "")
+                        CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_CONFIRM -> callback.Continue(false, "")
+                        CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_PROMPT -> callback.Continue(false, "")
+                    }
+                    return true
+                }
+                when (dialogType) {
+                    CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_ALERT -> {
+                        client.onJsAlert(originUrl, messageText, object : JsResultCallback {
+                            override fun confirm() { callback.Continue(true, "") }
+                            override fun cancel() { callback.Continue(false, "") }
+                        })
+                    }
+                    CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_CONFIRM -> {
+                        client.onJsConfirm(originUrl, messageText, object : JsResultCallback {
+                            override fun confirm() { callback.Continue(true, "") }
+                            override fun cancel() { callback.Continue(false, "") }
+                        })
+                    }
+                    CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_PROMPT -> {
+                        client.onJsPrompt(originUrl, messageText, defaultPromptText, object : JsPromptResultCallback {
+                            override fun confirm(value: String?) { callback.Continue(true, value ?: "") }
+                            override fun cancel() { callback.Continue(false, "") }
+                        })
+                    }
+                }
+                return true
+            }
+
+            override fun onBeforeUnloadDialog(
+                b: CefBrowser,
+                messageText: String,
+                isReload: Boolean,
+                callback: CefJSDialogCallback
+            ): Boolean {
+                // 没有上层监听时允许离开，避免页面卡死
+                val client = webChromeClient ?: run {
+                    callback.Continue(true, "")
+                    return true
+                }
+                client.onJsConfirm(b.url ?: "", messageText, object : JsResultCallback {
+                    override fun confirm() { callback.Continue(true, "") }
+                    override fun cancel() { callback.Continue(false, "") }
+                })
+                return true
+            }
+
+            override fun onResetDialogState(b: CefBrowser) {}
+            override fun onDialogClosed(b: CefBrowser) {}
+        }, cefBrowser)
+    }
+
+    // ── CDP 拦截 JS alert/confirm/prompt ───────────────────────────────────
+
+    private fun setupCdpDialogHandling() {
+        // RemoteBrowser 的 native peer 是异步创建的，等就绪后再挂 listener
+        Thread({
+            try {
+                waitForNativeBrowserCreated(cefBrowser)
+                val devTools = cefBrowser.devToolsClient ?: return@Thread
+                devTools.addEventListener { method, paramsJson ->
+                    if (method == "Page.javascriptDialogOpening") {
+                        handleCdpDialogOpening(devTools, paramsJson)
+                    }
+                }
+                devTools.executeDevToolsMethod("Page.enable", "{}").get(3, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (e: Exception) {
+                // CDP 对话框拦截为非关键路径，失败时静默降级
+            }
+        }, "KB-CdpDialog-Setup").apply { isDaemon = true }.start()
+    }
+
+    private fun waitForNativeBrowserCreated(browser: CefBrowser) {
+        val method = try {
+            browser.javaClass.getMethod("isNativeBrowserCreated")
+        } catch (e: NoSuchMethodException) {
+            return
+        }
+        val deadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                if (method.invoke(browser) as? Boolean == true) return
+            } catch (e: Exception) {
+                return
+            }
+            Thread.sleep(50)
+        }
+    }
+
+    private fun handleCdpDialogOpening(
+        devTools: org.cef.browser.CefDevToolsClient,
+        paramsJson: String
+    ) {
+        try {
+            val params = Json.parseToJsonElement(paramsJson).jsonObject
+            val type = params["type"]?.jsonPrimitive?.content ?: return
+            val message = params["message"]?.jsonPrimitive?.content ?: ""
+            val defaultPrompt = params["defaultPrompt"]?.jsonPrimitive?.content
+            val url = params["url"]?.jsonPrimitive?.content ?: ""
+
+            val client = webChromeClient
+            if (client == null) {
+                // 没有上层监听时直接取消，避免 JS 挂起
+                devTools.executeDevToolsMethod("Page.handleJavaScriptDialog", """{"accept":false}""")
+                return
+            }
+
+            when (type) {
+                "alert" -> {
+                    client.onJsAlert(url, message, object : JsResultCallback {
+                        override fun confirm() = handleCdpDialogAccept(devTools, true)
+                        override fun cancel() = handleCdpDialogAccept(devTools, false)
+                    })
+                }
+                "confirm" -> {
+                    client.onJsConfirm(url, message, object : JsResultCallback {
+                        override fun confirm() = handleCdpDialogAccept(devTools, true)
+                        override fun cancel() = handleCdpDialogAccept(devTools, false)
+                    })
+                }
+                "prompt" -> {
+                    client.onJsPrompt(url, message, defaultPrompt, object : JsPromptResultCallback {
+                        override fun confirm(value: String?) = handleCdpDialogAccept(devTools, true, value)
+                        override fun cancel() = handleCdpDialogAccept(devTools, false)
+                    })
+                }
+                else -> {
+                    // beforeunload 等不认识的类型统一取消
+                    handleCdpDialogAccept(devTools, false)
+                }
+            }
+        } catch (e: Exception) {
+            // 异常时尝试取消对话框，防止页面卡死
+            try {
+                devTools.executeDevToolsMethod("Page.handleJavaScriptDialog", """{"accept":false}""")
+            } catch (ignored: Exception) {}
+        }
+    }
+
+    private fun handleCdpDialogAccept(
+        devTools: org.cef.browser.CefDevToolsClient,
+        accept: Boolean,
+        promptText: String? = null
+    ) {
+        try {
+            val params = if (promptText != null) {
+                val escaped = Json.encodeToString(JsonPrimitive(promptText))
+                """{"accept":$accept,"promptText":$escaped}"""
+            } else {
+                """{"accept":$accept}"""
+            }
+            devTools.executeDevToolsMethod("Page.handleJavaScriptDialog", params)
+        } catch (e: Exception) {
+            // 取消/确认失败时页面可能已关闭，忽略
+        }
+    }
+
 }
 
 object JcefWebViewFactory {
@@ -1423,6 +1697,14 @@ internal actual fun createHeadlessWebView(
     } else {
         return FallbackWebView(initialUrl ?: "about:blank")
     }
+}
+
+internal actual fun setInteractionLockedNative(webView: KBWebView, locked: Boolean) {
+    if (webView is JvmWebView) webView.setInteractionLockedInternal(locked)
+}
+
+internal actual fun updateMouseTrailNative(webView: KBWebView, viewportX: Int, viewportY: Int) {
+    if (webView is JvmWebView) webView.updateMouseTrailInternal(viewportX, viewportY)
 }
 
 internal actual suspend fun performClickByCoordinates(

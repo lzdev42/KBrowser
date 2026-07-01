@@ -24,7 +24,7 @@ fun main() {
     println("====== KBrowser File Upload Test (CDP DOM.setFileInputFiles) ======")
 
     val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-    KBrowser.setConfigPath(storageDir)
+    KBrowser.initializeConfig(storageDir)
     runBlocking { initializeKBrowser() }
 
     // Create temporary test files
@@ -68,7 +68,7 @@ fun main() {
             val page = KBrowser.newHeadlessTab()
             page.loadUrl(htmlUrl) // suspend，返回时加载完成
 
-            println("\n[INFO] Page loaded: ${page.currentUrl.value}")
+            println("\n[INFO] Page loaded: ${page.webView.currentUrl.value}")
 
             // Get AX tree to find elements
             val tree = page.snapshot().rawTree

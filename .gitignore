@@ -3,6 +3,9 @@
 .AppleDouble
 .LSOverride
 
+# TRAE IDE
+.trae/
+
 # IntelliJ IDEA
 .idea/
 *.iml

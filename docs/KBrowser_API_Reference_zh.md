@@ -40,7 +40,7 @@ fun main() {
 
 ### 必需的 JVM 参数
 
-必须在 `compose.desktop` 配置中添加以下 JVM 参数。不加这些参数，OSR 模式下无法输入中文：
+必须在 `compose.desktop` 配置中添加以下 JVM 参数。不加这些参数，OSR 模式下**无法输入中文及任何 CJK 文字**（英文不受影响）。原因详见 README 渲染模式章节。
 
 ```kotlin
 compose.desktop {
@@ -59,13 +59,11 @@ compose.desktop {
 | 方法 / 属性 | 说明 |
 |------------|------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | 配置存储目录与渲染模式。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。`useOsr` 决定渲染模式（见 README 渲染模式章节），初始化后不可更改。 |
-| `KBrowser.newPage(): KBPage` | 创建 **UI 模式** page，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。导航用 `page.loadUrl(url)`（suspend，返回时加载完成）。 |
-| `KBrowser.newHeadlessTab(viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | 创建 **无头模式** page，用于后台自动化（截图、CDP、AX Tree）。渲染尺寸由透明 `JFrame`（opacity = 0）决定。默认 viewport 1280×720，与 Playwright 一致。**禁止将无头 page 挂载到 `KBWebView` Composable。** 导航用 `page.loadUrl(url)`。 |
+| `KBrowser.newPage(profile: KBProfile? = null): KBPage` | 创建 **UI 模式** page，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。导航用 `page.loadUrl(url)`（suspend，返回时加载完成）。 |
+| `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | 创建 **无头模式** page，用于后台自动化（截图、CDP、AX Tree）。渲染尺寸由透明 `JFrame`（opacity = 0）决定。默认 viewport 1280×720，与 Playwright 一致。**禁止将无头 page 挂载到 `KBWebView` Composable。** 导航用 `page.loadUrl(url)`。 |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | 当前所有打开页面的响应式流 |
 | `KBrowser.getPages(): List<KBPage>` | 同步获取当前所有打开页面的快照 |
 | `KBrowser.shutdown()` | 关闭所有页面并执行全局资源清理 |
-| `KBrowser.registerPage(page: KBPage)` | @Deprecated。手动注册页面。`newPage()`/`newHeadlessTab()` 自动注册。 |
-| `KBrowser.unregisterPage(page: KBPage)` | @Deprecated。从列表移除页面。请用 `page.close()`。 |
 
 ---
 
@@ -188,9 +186,8 @@ fun BrowserScreen() {
 | 方法 | 说明 |
 |------|------|
 | `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | 返回 `SnapshotResult`，包含 YAML 字符串和原始 `AxTreeData`，两者来自同一次 fetch，refid 保证一致。请使用此方法 —— `getRawAxTree()` 已私有，不应直接调用。 |
-| `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展：过滤不可见元素、script/style 标签、调试 overlay |
-| `AxTreeData.getViewportAxTree(): AxTreeData` | 扩展：裁剪到当前视口范围内的节点 |
-| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | 转换为 KBrowser YAML Snapshot 格式。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
+| `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展：**过滤出当前视口内的节点**（`centerX ∈ [scrollX, scrollX + innerWidth]` 且 `centerY ∈ [scrollY, scrollY + innerHeight]`），并重新统计 `totalElements/visibleElements/hiddenElements`。与 `toYamlSnapshot(SnapshotMode.VIEWPORT)` 使用相同的视口范围判定。 |
+| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | 转换为 KBrowser YAML Snapshot 格式（标准 YAML 结构）。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
 
 扩展函数是纯 Kotlin 计算，在调用方协程上下文执行，不切换线程。
 
@@ -439,7 +436,7 @@ if (fillResult is OperationResult.Success && fillResult.verified) {
 
 ```kotlin
 data class AxNode(
-    val refid: String,          // 节点唯一 ID
+    val refid: String,          // 节点唯一 ID（操作时使用，如 page.click("r12")）
     val tagName: String,        // HTML 标签名
     val role: String,           // ARIA role
     val id: String,             // DOM id 属性
@@ -456,7 +453,12 @@ data class AxNode(
     val attributes: Map<String, String>,
     val iframeSrc: String?,
     val selector: String,       // 动态生成的唯一 CSS 选择器，每次 getRawAxTree() 重新生成
-    val occludedBy: String?     // 遮挡该节点的元素 refid，无遮挡时为 null
+    val occludedBy: String?,    // 遮挡该节点中心点的元素 refid，无遮挡时为 null
+    val nodeId: String,         // CDP AX 节点 ID（来自 Accessibility.getFullAXTree 的 nodeId 字段），
+                                // 用于通过 childIds 构建真实 DOM 层级关系；JS 注入路径下等于 refid
+    val childIds: List<String>  // CDP AX 子节点 ID 列表，引用其他节点的 nodeId。
+                                // 绝对定位元素（下拉菜单、弹窗等）的视觉坐标不在 DOM 父节点内，
+                                // 坐标包含关系会错误分配父节点，childIds 提供正确的层级信息
 )
 ```
 
@@ -581,7 +583,7 @@ interface KBWebChromeClient {
 fun showScreenshotPreview(bytes: ByteArray)
 ```
 
-在 JVM 弹出独立 Swing 预览窗口展示截图，鼠标移动时标题栏实时显示 CSS 文档像素坐标。**仅 JVM 有效，Android/iOS 为空操作。**
+在 JVM 弹出独立 Swing 预览窗口展示截图。窗口尺寸固定为图片分辨率（1:1，不可缩放）；鼠标在图片上移动时，**光标右下方实时绘制坐标标签 `(x, y)`**（CSS 文档像素，靠近边缘时自动翻转方向），并叠加半透明十字准线。标题栏显示图片分辨率与操作提示。**仅 JVM 有效，Android/iOS 为空操作。**
 
 ### JcefChecker
 

@@ -25,8 +25,8 @@ classDiagram
     class KBrowser {
         <<object Singleton>>
         +initializeConfig(storageDir: String?, useOsr: Boolean)
-        +newPage() KBPage
-        +newHeadlessTab(viewportWidth: Int, viewportHeight: Int) KBPage
+        +newPage(profile: KBProfile?) KBPage
+        +newHeadlessTab(profile: KBProfile?, viewportWidth: Int, viewportHeight: Int) KBPage
         +pages: StateFlow~List~KBPage~~
         +getPages() List~KBPage~
         +shutdown()
@@ -41,23 +41,44 @@ classDiagram
         +StateFlow~Float~ progress
         +suspend loadUrl(url: String)
         +suspend evaluateJavascript(script: String) String
-        +suspend getRawAxTree() AxTreeData
+        +suspend clearCacheAndCookies()
+        +suspend setCookieViaJs(cookieString: String)
         +suspend snapshot(mode: SnapshotMode) SnapshotResult
-        +suspend click(refid: String)
+        +suspend click(refid: String) OperationResult
         +suspend hover(refid: String)
-        +suspend scroll(refid: String, deltaX: Int, deltaY: Int)
+        +suspend scroll(refid: String, deltaX: Int, deltaY: Int) OperationResult
         +suspend drag(startRefid: String, endRefid: String)
         +suspend jsClick(refid: String)
         +suspend jsHover(refid: String)
         +suspend jsScroll(refid: String, deltaX: Int, deltaY: Int)
         +suspend jsDrag(startRefid: String, endRefid: String)
-        +suspend clickByCoordinates(x: Int, y: Int)
+        +suspend clickByCoordinates(x: Int, y: Int) OperationResult
         +suspend hoverByCoordinates(x: Int, y: Int)
-        +suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int)
+        +suspend scrollByCoordinates(x: Int, y: Int, deltaX: Int, deltaY: Int) OperationResult
         +suspend dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int)
+        +suspend press(key: KeyboardKey)
+        +suspend pressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)
+        +suspend typeChar(char: Char)
+        +suspend type(text: String)
+        +suspend uploadFile(refid: String, filePaths: List~String~)
+        +suspend uploadFileBySelector(selector: String, filePaths: List~String~)
         +suspend screenshot() ByteArray?
+        +locator(selector: String) KBLocator
+        +getByRole(role, name?) KBLocator
+        +getByText(text, exact) KBLocator
+        +getByLabel(label) KBLocator
+        +getByPlaceholder(text) KBLocator
+        +getByAltText(text) KBLocator
+        +getByTitle(title) KBLocator
+        +getByTestId(testId) KBLocator
+        +setInteractionLocked(locked: Boolean)
+        +updateMouseTrail(viewportX: Int, viewportY: Int)
         +var onNewPage: ((url: String) -> Unit)?
+        +var onFileDialog: ((request, callback) -> Unit)?
         +close()
+        -suspend getRawAxTree() AxTreeData
+        -nodeCacheWriteLock: Mutex
+        -nodeCache: Map~String, AxNode~
     }
 
     class KBWebView {
@@ -69,9 +90,24 @@ classDiagram
         +StateFlow~Boolean~ canGoBack
         +StateFlow~Boolean~ canGoForward
         +loadUrl(url: String)
+        +loadHtml(html: String)
+        +reload()
+        +stopLoading()
+        +goBack()
+        +goForward()
         +evaluateJavascript(script: String, callback: ((String) -> Unit)?)
+        +registerJsCallback(name, callback)
+        +unregisterJsCallback(name)
+        +registerJsHandler(name, handler)
+        +unregisterJsHandler(name)
+        +clearCacheAndCookies()
+        +setWebViewClient(client?)
+        +setWebChromeClient(client?)
         +suspend takeScreenshot() ByteArray?
+        +setInteractionLocked(locked: Boolean)
+        +updateMouseTrail(viewportX: Int, viewportY: Int)
         +var onNewWindowRequest: ((url: String) -> Unit)?
+        +var onFileDialogRequest: ((request, callback) -> Unit)?
         +destroy()
     }
 
@@ -79,11 +115,13 @@ classDiagram
         +KBPage page
         +String selector
         +KBSelectorType selectorType
-        +suspend click()
+        +String? name
+        +Boolean exact
+        +suspend click() OperationResult
         +suspend hover()
-        +suspend scroll(deltaX: Int, deltaY: Int)
-        +suspend fill(value: String)
-        +suspend type(text: String)
+        +suspend scroll(deltaX: Int, deltaY: Int) OperationResult
+        +suspend fill(value: String) OperationResult
+        +suspend type(text: String) OperationResult
         +suspend focus()
         +suspend check()
         +suspend selectOption(value: String)
@@ -92,16 +130,22 @@ classDiagram
         +suspend jsClick()
         +suspend jsHover()
         +suspend jsScroll(deltaX: Int, deltaY: Int)
-        +suspend jsFill(value: String)
-        +suspend jsType(text: String)
+        +suspend jsFill(value: String) OperationResult
+        +suspend jsType(text: String) OperationResult
         +suspend jsFocus()
         +suspend jsCheck()
         +suspend jsSelectOption(value: String)
         +suspend jsPress(key: KeyboardKey)
         +suspend jsPressKeyCombination(modifier: KeyboardKey, key: KeyboardKey)
         +suspend isVisible() Boolean
+        +suspend getText() String
+        +suspend getAttribute(name: String) String?
+        +suspend count() Int
+        +suspend boundingBox() Rect?
         +filter(predicate) KBLocator
         +nth(index: Int) KBLocator
+        +first() KBLocator
+        +last() KBLocator
     }
 
     KBrowser "1" *-- "many" KBPage
@@ -135,6 +179,15 @@ JCEF creates a native heavyweight window component. The browser renders directly
 JCEF renders into an off-screen buffer, and the result is painted as a lightweight component. This allows Compose UI to be layered on top of the JCEF view. However, mouse and keyboard events are dispatched to the underlying JCEF native view, not to overlay Compose components. Interactive Compose components placed over the JCEF area will not respond to user input.
 
 This is a known issue with low priority. If you do not need to overlay Compose UI on the browser, use non-OSR mode for better performance and correct event handling.
+
+### Chinese Input in OSR Mode
+
+In OSR mode, CEF has no native window to detect focus. Chinese input requires two conditions to be satisfied simultaneously:
+
+1. **JVM arguments**: `--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED` and `--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED`, which open reflective access to JCEF internal classes (`ImeSetComposition` / `ImeCommitText` are invoked via reflection)
+2. **Focus synchronization**: The embedder must explicitly call `CefBrowser.setFocus(true)` to sync focus state. Without focus sync, CEF internally considers the browser unfocused and silently drops all IME requests, while `sendKeyEvent` ignores focus so English works — this is the root cause of Chinese input failure
+
+KBrowser internally implements full OSR Chinese input support via `KBCefInputMethodAdapter` (IME event forwarding) and `ensureCefFocus()` (focus synchronization). In non-OSR mode, JCEF uses a native window where IME is handled natively by the OS, so this issue does not apply.
 
 ### Automatic Fallback
 
@@ -175,7 +228,7 @@ application { /* Compose UI */ }
 
 - All `suspend` methods of `KBPage` internally switch to `Dispatchers.Main` via `withContext`, allowing them to be called from any coroutine context.
 - Asynchronous callbacks (JS evaluation results, page load completion) are converted to suspended states using `suspendCancellableCoroutine` without blocking threads.
-- CPU-intensive operations (`getCleanedAxTree`, `getViewportAxTree`) are pure Kotlin extension functions that execute in the caller's coroutine context.
+- CPU-intensive operations (`AxTreeData.getCleanedAxTree()`, `AxTreeData.toYamlSnapshot()`) are pure Kotlin extension functions that execute in the caller's coroutine context. `getCleanedAxTree()` actually filters nodes within the current viewport (same viewport-range logic as `toYamlSnapshot(VIEWPORT)`).
 - `KBrowser.pages` uses `MutableStateFlow` + `update {}` for atomic updates, ensuring safety across coroutines.
 - Cancelled `loadUrl` coroutines automatically call `webView.stopLoading()`.
 - `KBPage` node cache: write operations are serialized via `Mutex`, read operations use `@Volatile` for visibility. Reads never deadlock with writes.

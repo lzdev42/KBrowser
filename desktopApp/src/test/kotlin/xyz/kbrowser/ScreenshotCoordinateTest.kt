@@ -137,7 +137,7 @@ private suspend fun testSite(site: TestSite): SiteResult {
     }
 
     println("  Taking screenshot...")
-    val screenshotBytes = page.screenshot()
+    val screenshotBytes = page.webView.takeScreenshot()?.imageData
     if (screenshotBytes == null || screenshotBytes.isEmpty()) {
         println("  ❌ Screenshot failed")
         page.close()

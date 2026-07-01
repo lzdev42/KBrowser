@@ -40,7 +40,7 @@ fun main() {
 
 ### Required JVM Arguments
 
-The following JVM arguments must be added to the `compose.desktop` configuration. Without them, OSR mode will not support Chinese input:
+The following JVM arguments must be added to the `compose.desktop` configuration. Without them, OSR mode **will not support Chinese/CJK text input** (English input is unaffected). See the Rendering Modes section in README for details.
 
 ```kotlin
 compose.desktop {
@@ -59,13 +59,11 @@ compose.desktop {
 | Method / Property | Description |
 |-------------------|-------------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | Configures storage directory and rendering mode. Must be called before `initializeKBrowser()` and `newPage()`. `useOsr` determines the rendering mode (see Rendering Modes section in README) and cannot be changed after initialization. |
-| `KBrowser.newPage(): KBPage` | Creates a **UI-mode** page for display in a Compose window via the `KBWebView` Composable. Render size is controlled by the Compose `modifier`. Navigation is done via `page.loadUrl(url)` (suspend, returns when loaded). |
-| `KBrowser.newHeadlessTab(viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | Creates a **headless-mode** page for background automation (screenshots, CDP, AX Tree). Render size is determined by a transparent `JFrame` (opacity = 0). Default viewport 1280×720, matching Playwright. **Never mount a headless page onto the `KBWebView` Composable.** Navigation is done via `page.loadUrl(url)`. |
+| `KBrowser.newPage(profile: KBProfile? = null): KBPage` | Creates a **UI-mode** page for display in a Compose window via the `KBWebView` Composable. Render size is controlled by the Compose `modifier`. Navigation is done via `page.loadUrl(url)` (suspend, returns when loaded). |
+| `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | Creates a **headless-mode** page for background automation (screenshots, CDP, AX Tree). Render size is determined by a transparent `JFrame` (opacity = 0). Default viewport 1280×720, matching Playwright. **Never mount a headless page onto the `KBWebView` Composable.** Navigation is done via `page.loadUrl(url)`. |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | Reactive stream of all currently open pages. |
 | `KBrowser.getPages(): List<KBPage>` | Synchronously returns a snapshot of all currently open pages. |
 | `KBrowser.shutdown()` | Closes all pages and performs global resource cleanup. |
-| `KBrowser.registerPage(page: KBPage)` | @Deprecated. Manually registers a `KBPage`. `newPage()`/`newHeadlessTab()` register automatically. |
-| `KBrowser.unregisterPage(page: KBPage)` | @Deprecated. Removes a page from the list. Use `page.close()` instead. |
 
 ---
 
@@ -190,9 +188,8 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 | Method | Description |
 |--------|-------------|
 | `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | Returns a `SnapshotResult` containing both the YAML string and the raw `AxTreeData` from the same fetch, guaranteeing refid consistency. Use this — `getRawAxTree()` is private and should not be called directly. |
-| `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension: filters out invisible elements, script/style tags, debug overlays |
-| `AxTreeData.getViewportAxTree(): AxTreeData` | Extension: crops nodes to the current viewport area |
-| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | Converts to KBrowser YAML Snapshot format. See [Snapshot Format](KBrowser_Snapshot_Format.md). |
+| `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension: **filters nodes within the current viewport** (`centerX ∈ [scrollX, scrollX + innerWidth]` and `centerY ∈ [scrollY, scrollY + innerHeight]`), and re-computes `totalElements/visibleElements/hiddenElements`. Uses the same viewport-range logic as `toYamlSnapshot(SnapshotMode.VIEWPORT)`. |
+| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | Converts to KBrowser YAML Snapshot format (standard YAML structure). See [Snapshot Format](KBrowser_Snapshot_Format.md). |
 
 Extension functions are pure Kotlin computations that execute in the caller's coroutine context.
 
@@ -441,7 +438,7 @@ All coordinates are in **CSS document pixels**.
 
 ```kotlin
 data class AxNode(
-    val refid: String,          // Unique node ID for interactions
+    val refid: String,          // Unique node ID for interactions (e.g. page.click("r12"))
     val tagName: String,        // HTML tag name
     val role: String,           // ARIA role
     val id: String,             // DOM id attribute
@@ -458,7 +455,14 @@ data class AxNode(
     val attributes: Map<String, String>,
     val iframeSrc: String?,
     val selector: String,       // Dynamic unique CSS selector, regenerated per getRawAxTree()
-    val occludedBy: String?     // refid of covering element, or null
+    val occludedBy: String?,    // refid of the element occluding this node's center, or null
+    val nodeId: String,         // CDP AX node ID (from Accessibility.getFullAXTree's nodeId field),
+                                // used with childIds to build the real DOM hierarchy;
+                                // equals refid on the JS-injection path
+    val childIds: List<String>  // CDP AX child node ID list, referencing other nodes' nodeId.
+                                // Absolutely-positioned elements (dropdowns, popups) have visual
+                                // coordinates outside their DOM parent, so coordinate-containment
+                                // would mis-assign parents; childIds provides the correct hierarchy
 )
 ```
 
@@ -583,7 +587,7 @@ interface KBWebChromeClient {
 fun showScreenshotPreview(bytes: ByteArray)
 ```
 
-On JVM, opens a standalone Swing preview window displaying the screenshot. Mouse movement shows real-time CSS document pixel coordinates in the title bar. **JVM only; no-op on Android/iOS.**
+On JVM, opens a standalone Swing preview window displaying the screenshot. The window is sized 1:1 to the image (non-resizable); moving the mouse over the image **renders a coordinate label `(x, y)` to the lower-right of the cursor** (CSS document pixels; flips direction near edges) plus a translucent crosshair. The title bar shows the image dimensions and a usage hint. **JVM only; no-op on Android/iOS.**
 
 ### JcefChecker
 

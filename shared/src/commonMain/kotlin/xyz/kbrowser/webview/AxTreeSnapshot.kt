@@ -198,9 +198,11 @@ private fun serializeNodeCompact(
         sb.append(fieldIndent).append("id: ").append(yamlStr(node.id)).append('\n')
     }
 
-    sb.append(fieldIndent).append("centerX: ").append(node.centerX).append('\n')
-    sb.append(fieldIndent).append("centerY: ").append(node.centerY).append('\n')
+    // centerX/centerY: 对AI自动化操作没用（click自动滚动，AI用refid调操作），暂注释掉减少token
+    // sb.append(fieldIndent).append("centerX: ").append(node.centerX).append('\n')
+    // sb.append(fieldIndent).append("centerY: ").append(node.centerY).append('\n')
 
+    // selector: 供记录/调试用，AI自动化操作用refid而非selector定位
     if (node.selector.isNotEmpty()) {
         sb.append(fieldIndent).append("selector: ").append(yamlStr(node.selector)).append('\n')
     }
