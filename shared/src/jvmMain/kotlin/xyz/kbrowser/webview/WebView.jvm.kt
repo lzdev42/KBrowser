@@ -76,6 +76,19 @@ class JvmWebView(
     private val isDestroyed = AtomicBoolean(false)
     private var headlessFrame: javax.swing.JFrame? = null
 
+    private val nativeReady = AtomicBoolean(false)
+    private val pendingOps = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
+    private val readyLock = Any()
+
+    private fun runWhenReady(op: () -> Unit) {
+        if (isDestroyed.get()) return
+        val ready = synchronized(readyLock) {
+            if (nativeReady.get()) true
+            else { pendingOps.add(op); false }
+        }
+        if (ready) op()
+    }
+
     val browser: KBCefBrowser
 
     internal val cefBrowser: CefBrowser
@@ -373,45 +386,62 @@ class JvmWebView(
                 headlessFrame = frame
             }
         }
+
+        Thread({
+            try {
+                waitForNativeBrowserCreated(cefBrowser)
+            } catch (_: Exception) {}
+            val toRun: List<() -> Unit>
+            synchronized(readyLock) {
+                nativeReady.set(true)
+                toRun = pendingOps.toList()
+                pendingOps.clear()
+            }
+            toRun.forEach { op -> try { op() } catch (_: Exception) {} }
+        }, "KB-NativeReady-Wait").apply { isDaemon = true }.start()
     }
 
     override fun loadUrl(url: String) {
-        if (!isDestroyed.get()) {
-            browser.loadURL(url)
+        runWhenReady {
+            if (!isDestroyed.get()) {
+                browser.loadURL(url)
+            }
         }
     }
 
     override fun loadHtml(html: String) {
-        if (!isDestroyed.get()) {
-            // 使用 about:blank + document.write 加载 HTML 字符串，避免 URL 变成 base64 data URI。
-            // 否则 JCEF 弹原生 JS 对话框时会把当前 URL（超长 base64）显示在标题里。
-            browser.loadURL("about:blank")
-            // 等待 about:blank 真正加载完成，避免固定的 50ms 在慢机器上不够导致 document.write 失败。
-            val deadline = System.currentTimeMillis() + 2000
-            while (System.currentTimeMillis() < deadline) {
-                val ready = try {
-                    cefBrowser.url == "about:blank"
-                } catch (_: Exception) {
-                    false
+        runWhenReady {
+            if (!isDestroyed.get()) {
+                // 使用 about:blank + document.write 加载 HTML 字符串，避免 URL 变成 base64 data URI。
+                // 否则 JCEF 弹原生 JS 对话框时会把当前 URL（超长 base64）显示在标题里。
+                browser.loadURL("about:blank")
+                // 等待 about:blank 真正加载完成，避免固定的 50ms 在慢机器上不够导致 document.write 失败。
+                val deadline = System.currentTimeMillis() + 2000
+                while (System.currentTimeMillis() < deadline) {
+                    val ready = try {
+                        cefBrowser.url == "about:blank"
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (ready) break
+                    try {
+                        Thread.sleep(20)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return@runWhenReady
+                    }
                 }
-                if (ready) break
-                try {
-                    Thread.sleep(20)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    return
-                }
+                val encoded = Base64.getEncoder().encodeToString(html.toByteArray(Charsets.UTF_8))
+                val js = """
+                    (function() {
+                        var html = decodeURIComponent(escape(atob('$encoded')));
+                        document.open();
+                        document.write(html);
+                        document.close();
+                    })();
+                """.trimIndent()
+                cefBrowser.executeJavaScript(js, "about:blank", 0)
             }
-            val encoded = Base64.getEncoder().encodeToString(html.toByteArray(Charsets.UTF_8))
-            val js = """
-                (function() {
-                    var html = decodeURIComponent(escape(atob('$encoded')));
-                    document.open();
-                    document.write(html);
-                    document.close();
-                })();
-            """.trimIndent()
-            cefBrowser.executeJavaScript(js, "about:blank", 0)
         }
     }
 
@@ -572,47 +602,50 @@ class JvmWebView(
 
     override fun evaluateJavascript(script: String, callback: ((String) -> Unit)?) {
         if (isDestroyed.get()) return
-        if (callback == null) {
-            cefBrowser.executeJavaScript(script, "", 0)
-        } else {
-            val jsQuery = xyz.kbrowser.jcef.KBCefJSQuery.create(browser)
-            jsQuery.addHandler { response ->
-                callback(response)
-                jsQuery.dispose()
-                xyz.kbrowser.jcef.KBCefJSQuery.Response("OK")
-            }
-
-            // 直接把脚本内联执行，不走 base64+eval，避免触发 CSP eval() 限制。
-            // 用 Function 构造器也会被 CSP 拦截，所以直接把脚本文本嵌入 IIFE。
-            val funcName = jsQuery.myFunc.myFuncName
-            val trimmed = script.trim()
-            val processedScript = if (trimmed.startsWith("return")) {
-                trimmed
-            } else if (trimmed.startsWith("(") || !trimmed.contains("\n")) {
-                "return ($trimmed);"
+        runWhenReady {
+            if (isDestroyed.get()) return@runWhenReady
+            if (callback == null) {
+                cefBrowser.executeJavaScript(script, "", 0)
             } else {
-                trimmed
+                val jsQuery = xyz.kbrowser.jcef.KBCefJSQuery.create(browser)
+                jsQuery.addHandler { response ->
+                    callback(response)
+                    jsQuery.dispose()
+                    xyz.kbrowser.jcef.KBCefJSQuery.Response("OK")
+                }
+
+                // 直接把脚本内联执行，不走 base64+eval，避免触发 CSP eval() 限制。
+                // 用 Function 构造器也会被 CSP 拦截，所以直接把脚本文本嵌入 IIFE。
+                val funcName = jsQuery.myFunc.myFuncName
+                val trimmed = script.trim()
+                val processedScript = if (trimmed.startsWith("return")) {
+                    trimmed
+                } else if (trimmed.startsWith("(") || !trimmed.contains("\n")) {
+                    "return ($trimmed);"
+                } else {
+                    trimmed
+                }
+                val jsCode = """
+                    (function() {
+                        try {
+                            var result = (function() { $processedScript })();
+                            var responseText = (result === undefined ? "undefined" : (typeof result === 'string' ? result : JSON.stringify(result)));
+                            window["$funcName"]({
+                                request: responseText,
+                                onSuccess: function(r){},
+                                onFailure: function(e,m){}
+                            });
+                        } catch(err) {
+                            window["$funcName"]({
+                                request: "KB_JS_ERROR:" + (err.message || String(err)),
+                                onSuccess: function(r){},
+                                onFailure: function(e,m){}
+                            });
+                        }
+                    })();
+                """.trimIndent()
+                cefBrowser.executeJavaScript(jsCode, "", 0)
             }
-            val jsCode = """
-                (function() {
-                    try {
-                        var result = (function() { $processedScript })();
-                        var responseText = (result === undefined ? "undefined" : (typeof result === 'string' ? result : JSON.stringify(result)));
-                        window["$funcName"]({
-                            request: responseText,
-                            onSuccess: function(r){},
-                            onFailure: function(e,m){}
-                        });
-                    } catch(err) {
-                        window["$funcName"]({
-                            request: "KB_JS_ERROR:" + (err.message || String(err)),
-                            onSuccess: function(r){},
-                            onFailure: function(e,m){}
-                        });
-                    }
-                })();
-            """.trimIndent()
-            cefBrowser.executeJavaScript(jsCode, "", 0)
         }
     }
 
