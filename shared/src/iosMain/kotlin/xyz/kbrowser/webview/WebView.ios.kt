@@ -67,7 +67,7 @@ private class KbNavigationDelegate(
     ) {
         val url = webView.URL?.absoluteString ?: ""
         val errorCode = withError.code.toInt()
-        val description = withError.localizedDescription ?: "Unknown error"
+        val description = withError.localizedDescription
         iosWebView.loadingState.value = LoadingState.Error(errorCode, description, url)
         iosWebView.webViewClient?.onReceivedError(Diagnostics(errorCode, description, url))
     }
@@ -80,7 +80,7 @@ private class KbNavigationDelegate(
     ) {
         val url = webView.URL?.absoluteString ?: ""
         val errorCode = withError.code.toInt()
-        val description = withError.localizedDescription ?: "Unknown error"
+        val description = withError.localizedDescription
         iosWebView.loadingState.value = LoadingState.Error(errorCode, description, url)
         iosWebView.webViewClient?.onReceivedError(Diagnostics(errorCode, description, url))
     }
@@ -155,6 +155,7 @@ private class KbUIDelegate(
             WKMediaCaptureType.WKMediaCaptureTypeCamera -> listOf(PermissionResource.VIDEO_CAPTURE)
             WKMediaCaptureType.WKMediaCaptureTypeMicrophone -> listOf(PermissionResource.AUDIO_CAPTURE)
             WKMediaCaptureType.WKMediaCaptureTypeCameraAndMicrophone -> listOf(PermissionResource.VIDEO_CAPTURE, PermissionResource.AUDIO_CAPTURE)
+            else -> emptyList()
         }
         val origin = requestMediaCapturePermissionForOrigin.toString()
         val kbRequest = object : PermissionRequest {
@@ -218,7 +219,7 @@ class IosWebView(
                 allowsInlineMediaPlayback = true
                 // iOS 14+ 默认允许内容 JavaScript；若 API 可用则显式确认
                 try {
-                    defaultWebpagePreferences?.setAllowsContentJavaScript(true)
+                    defaultWebpagePreferences.setAllowsContentJavaScript(true)
                 } catch (_: Exception) {}
             }
             
