@@ -230,6 +230,14 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
                 override fun onBeforeBrowse(b: CefBrowser, f: CefFrame, r: CefRequest, g: Boolean, i: Boolean): Boolean {
                     return myRequestHandler.handleBooleanAny(b, false) { it.onBeforeBrowse(b, f, r, g, i) }
                 }
+                override fun onRenderProcessTerminated(
+                    b: CefBrowser,
+                    status: CefRequestHandler.TerminationStatus,
+                    errorCode: Int,
+                    errorString: String?
+                ) {
+                    myRequestHandler.handleAll(b) { it.onRenderProcessTerminated(b, status, errorCode, errorString) }
+                }
             })
         }
     }

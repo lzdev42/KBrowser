@@ -3,6 +3,7 @@ package xyz.kbrowser.webview
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.flow.StateFlow
+import xyz.kbrowser.webview.debug.KBDebug
 
 interface KBWebView {
     // 响应式 Compose 状态
@@ -72,6 +73,9 @@ interface KBWebView {
 
     // 释放资源
     fun destroy()
+
+    // 调试 API（统一事件流、健康快照、CDP 逃生舱口）
+    val debug: KBDebug
 
     // 网页截图，截图像素与 CSS 坐标 1:1 对齐
     suspend fun takeScreenshot(): KBScreenshot?

@@ -23,6 +23,8 @@ import org.cef.handler.CefPermissionHandler
 import org.cef.misc.BoolRef
 import org.cef.network.CefRequest
 import xyz.kbrowser.jcef.*
+import xyz.kbrowser.webview.debug.KBDebug
+import xyz.kbrowser.webview.debug.KBDebugJvm
 import java.awt.Component
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -101,6 +103,8 @@ class JvmWebView(
 
     override val canGoBack = MutableStateFlow(false)
     override val canGoForward = MutableStateFlow(false)
+
+    override val debug: KBDebug by lazy { KBDebugJvm(cefBrowser, browser.myCefClient) }
 
     private var webViewClient: KBWebViewClient? = null
     private var webChromeClient: KBWebChromeClient? = null
@@ -1289,6 +1293,7 @@ class JvmWebView(
 
     override fun destroy() {
         if (isDestroyed.compareAndSet(false, true)) {
+            debug.disable()
             jsCallbacks.values.forEach { it.dispose() }
             jsCallbacks.clear()
             jsHandlers.values.forEach { it.dispose() }

@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import xyz.kbrowser.webview.debug.KBDebug
+import xyz.kbrowser.webview.debug.KBDebugNoop
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
 import platform.WebKit.WKWebsiteDataStore
@@ -468,6 +470,8 @@ class IosWebView(
     override var onNewWindowRequest: ((url: String) -> Unit)? = null
 
     override var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)? = null
+
+    override val debug: KBDebug = KBDebugNoop
 
     override fun destroy() {
         webView = null

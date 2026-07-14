@@ -16,6 +16,8 @@ import androidx.webkit.WebViewFeature
 import androidx.webkit.ProfileStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import xyz.kbrowser.webview.debug.KBDebug
+import xyz.kbrowser.webview.debug.KBDebugNoop
 import kotlin.coroutines.resume
 
 class AndroidWebView(
@@ -272,6 +274,8 @@ class AndroidWebView(
     override var onNewWindowRequest: ((url: String) -> Unit)? = null
 
     override var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)? = null
+
+    override val debug: KBDebug = KBDebugNoop
 
     override fun destroy() {
         webView?.destroy()

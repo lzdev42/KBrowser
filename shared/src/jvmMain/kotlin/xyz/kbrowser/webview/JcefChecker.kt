@@ -2,6 +2,8 @@ package xyz.kbrowser.webview
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import xyz.kbrowser.webview.debug.KBDebug
+import xyz.kbrowser.webview.debug.KBDebugNoop
 
 object JcefChecker {
     val isJcefAvailable: Boolean by lazy {
@@ -60,4 +62,6 @@ class FallbackWebView(initialUrl: String) : KBWebView {
     override var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)? = null
 
     override suspend fun takeScreenshot(): KBScreenshot? = null
+
+    override val debug: KBDebug = KBDebugNoop
 }

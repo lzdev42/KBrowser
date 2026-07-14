@@ -11,9 +11,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.delay
 import kotlin.random.Random
+import xyz.kbrowser.webview.debug.KBDebug
 
 class KBPage(val webView: KBWebView) {
     val uuid: String = Random.nextLong().toString()
+    val debug: KBDebug get() = webView.debug
 
     /**
      * Cache of node coordinates, refreshed on [getRawAxTree].
