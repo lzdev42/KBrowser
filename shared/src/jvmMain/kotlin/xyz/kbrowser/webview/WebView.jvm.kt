@@ -3,6 +3,7 @@ package xyz.kbrowser.webview
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
+import androidx.compose.ui.layout.onGloballyPositioned
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.cef.network.CefCookieManager
@@ -1282,11 +1283,24 @@ class JvmWebView(
 
     fun resizeViewport(width: Int, height: Int) {
         if (isDestroyed.get()) return
+        if (width <= 0 || height <= 0) return
         SwingUtilities.invokeLater {
-            val comp = cefBrowser.uiComponent ?: return@invokeLater
-            if (comp.width != width || comp.height != height) {
-                comp.setSize(width, height)
-                cefBrowser.wasResized(0, 0)
+            if (isDestroyed.get()) return@invokeLater
+
+            val osrComp = browser.getComponent().components
+                .filterIsInstance<KBCefOsrComponent>()
+                .firstOrNull()
+
+            if (osrComp != null) {
+                if (osrComp.width != width || osrComp.height != height) {
+                    osrComp.setSize(width, height)
+                }
+            } else {
+                val comp = cefBrowser.uiComponent ?: return@invokeLater
+                if (comp.width != width || comp.height != height) {
+                    comp.setSize(width, height)
+                    cefBrowser.wasResized(0, 0)
+                }
             }
         }
     }
@@ -1672,7 +1686,10 @@ object JcefWebViewRender {
             factory = {
                 jvmWebView.browser.getComponent()
             },
-            modifier = modifier
+            modifier = modifier.onGloballyPositioned { coordinates ->
+                val size = coordinates.size
+                jvmWebView.resizeViewport(size.width, size.height)
+            }
         )
     }
 }

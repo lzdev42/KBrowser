@@ -2,6 +2,8 @@ package xyz.kbrowser.jcef
 
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.InputMethodEvent
@@ -90,6 +92,17 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
         myComponent.addFocusListener(object : FocusAdapter() {
             override fun focusGained(e: FocusEvent) {
                 uiComp.requestFocusInWindow()
+            }
+        })
+
+        // resize 兜底：参照 IDEA JBCefBrowser.createComponent 注册 ComponentListener。
+        // OSR 模式下 KBCefOsrComponent.reshape() 已由 AWT 布局自动触发（含 100ms 节流 + ResizePusher），
+        // 无需在此重复处理；非 OSR（窗口）模式下重量级组件需要显式 wasResized 通知 CEF。
+        uiComp.addComponentListener(object : ComponentAdapter() {
+            override fun componentResized(e: ComponentEvent) {
+                if (findOsrComponent() == null) {
+                    myCefBrowser.wasResized(0, 0)
+                }
             }
         })
     }
