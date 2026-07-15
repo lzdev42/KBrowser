@@ -162,3 +162,16 @@ tasks.register<JavaExec>("runResizeFollowTest") {
     )
     workingDir = rootProject.projectDir
 }
+
+tasks.register<JavaExec>("runNonOsrResizeTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.NonOsrResizeTestKt")
+    val compileTestKotlin = tasks.named("compileTestKotlin")
+    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+    workingDir = rootProject.projectDir
+}
