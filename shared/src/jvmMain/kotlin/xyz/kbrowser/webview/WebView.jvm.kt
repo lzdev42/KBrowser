@@ -3,7 +3,6 @@ package xyz.kbrowser.webview
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
-import androidx.compose.ui.layout.onGloballyPositioned
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.cef.network.CefCookieManager
@@ -1686,10 +1685,7 @@ object JcefWebViewRender {
             factory = {
                 jvmWebView.browser.getComponent()
             },
-            modifier = modifier.onGloballyPositioned { coordinates ->
-                val size = coordinates.size
-                jvmWebView.resizeViewport(size.width, size.height)
-            }
+            modifier = modifier
         )
     }
 }

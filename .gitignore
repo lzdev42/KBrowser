@@ -67,4 +67,5 @@ iosApp/iosApp.xcodeproj/xcuserdata/
 
 # virtual machine crash logs
 hs_err_pid*
-replay_pid*
+replay_pid*axtree_*.txt
+axtree_*.json
