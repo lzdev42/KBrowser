@@ -1,35 +1,36 @@
 package xyz.kbrowser.webview.debug
 
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 
 /**
  * Debug API for AI-driven browser automation.
  *
- * Provides a unified event stream, point-in-time health snapshots,
+ * Provides a query-based inspection interface, dialog handling,
  * on-demand network response body retrieval, and raw CDP escape hatch.
+ *
+ * Designed for MCP/toolcall usage: every method returns data directly
+ * (no event subscription needed).
  *
  * Usage:
  * ```kotlin
  * webView.debug.enable()
  * page.click(refid)
- * delay(500)
- * val snap = webView.debug.snapshot()
- * if (snap.consoleErrorCount > 0) { /* AI: handle errors */ }
- * val events = webView.debug.events.replayCache // recent events
+ * val inspection = webView.debug.inspect()   // what happened?
+ * if (inspection.activeDialog != null) {
+ *     webView.debug.respondDialog(accept = true)
+ * }
  * ```
  *
  * JVM: fully backed by CDP (Chrome DevTools Protocol) via CefDevToolsClient.
- * Android/iOS/Fallback: KBDebugNoop (empty flows, null returns).
+ * Android/iOS/Fallback: KBDebugNoop (empty results, null returns).
  */
 interface KBDebug {
 
     /**
      * Enable debug capture. After this call:
-     * - Console logs, JS exceptions, network requests, and render crashes flow into [events].
+     * - Console errors, JS exceptions, network requests, navigations, and dialogs are tracked.
      * - Render process crash auto-recovery is activated.
+     * - JS dialogs are intercepted (no native dialog shown) — handle via [respondDialog].
      *
      * Must be called before the first action you want to capture.
      * Idempotent — calling multiple times is safe.
@@ -38,39 +39,57 @@ interface KBDebug {
 
     /**
      * Disable debug capture and release CDP resources.
-     * The [events] replay buffer is cleared.
+     * Internal event buffer is cleared.
      */
     fun disable()
 
     /**
-     * Unified debug event stream.
-     *
-     * Internal ring buffer (capacity 500, drop-oldest). Even without continuous
-     * collection, the most recent events are available via [replayCache] or [snapshot].
-     *
-     * Event types: [DebugEvent.ConsoleLog], [DebugEvent.JsException],
-     * [DebugEvent.NetworkRequest], [DebugEvent.RenderCrash].
+     * Whether debug mode is currently active.
+     * WebView checks this to decide whether to auto-dismiss JS dialogs.
      */
-    val events: SharedFlow<DebugEvent>
+    val isEnabled: Boolean
 
     /**
-     * Current page health snapshot.
+     * Query: what happened since the last [inspect] call?
+     *
+     * Returns the current page URL, whether the page navigated since the last
+     * inspect, any active JS dialog, errors that occurred, and XHR/Fetch requests
+     * that were made.
+     *
+     * Acts as an implicit checkpoint — the next [inspect] only returns events
+     * that occur after this call.
+     */
+    suspend fun inspect(): PageInspection
+
+    /**
+     * Respond to the active JS dialog (alert/confirm/prompt).
+     *
+     * Use after [inspect] reports a non-null [PageInspection.activeDialog].
+     *
+     * @param accept true to accept (OK/confirm), false to dismiss (cancel)
+     * @param promptText text to enter for prompt dialogs (ignored for alert/confirm)
+     * @return true if a dialog was present and handled; false if no dialog was active
+     */
+    suspend fun respondDialog(accept: Boolean, promptText: String? = null): Boolean
+
+    /**
+     * Point-in-time page health snapshot.
      *
      * Returns performance metrics (JS heap, DOM node count), error counts,
      * crash status, and a list of recent error events.
      *
-     * Ideal for post-action diagnostics: `page.click(refid) → delay → snapshot()`.
+     * Ideal for periodic health monitoring (not post-action queries — use [inspect] for that).
      */
     suspend fun snapshot(): DebugSnapshot
 
     /**
      * Retrieve a network response body by requestId.
      *
-     * requestId comes from [DebugEvent.NetworkRequest] events in the [events] stream.
+     * requestId comes from [PageInspection.requests] or [DebugSnapshot.recentErrors].
      * CDP internally caches response bodies with eviction — call soon after the
      * request completes for best results.
      *
-     * @return response body string, or null if unavailable (JVM only; mobile returns null)
+     * @return response body string, or null if unavailable
      */
     suspend fun getResponseBody(requestId: String): String?
 
@@ -81,29 +100,53 @@ interface KBDebug {
      *
      * @param method CDP method name, e.g. "Runtime.evaluate", "DOM.getDocument"
      * @param params JSON parameter string, e.g. """{"expression":"1+1"}"""
-     * @return JSON result string, or null (JVM only; mobile returns null)
+     * @return JSON result string, or null
      */
     suspend fun executeCdp(method: String, params: String): String?
-
-    /**
-     * Subscribe to raw CDP events (unparsed method + params).
-     *
-     * Advanced usage. For parsed events, use [events] instead.
-     */
-    fun onCdpEvent(listener: (method: String, params: String) -> Unit)
 }
 
-// ── Event Model ─────────────────────────────────────────────────────────
+// ── Inspection Result ────────────────────────────────────────────────────
 
 /**
- * Unified debug event. All events carry a [timestamp] (epoch millis).
+ * Result of [KBDebug.inspect] — answers "what happened since last check?".
+ */
+data class PageInspection(
+    val currentUrl: String,
+    val navigated: Boolean,
+    val activeDialog: DialogInfo? = null,
+    val errors: List<PageError> = emptyList(),
+    val requests: List<RequestSummary> = emptyList()
+)
+
+data class DialogInfo(
+    val type: DialogType,
+    val message: String,
+    val defaultPrompt: String? = null
+)
+
+data class PageError(
+    val type: String,
+    val message: String
+)
+
+data class RequestSummary(
+    val requestId: String,
+    val method: String,
+    val url: String,
+    val status: Int?,
+    val failed: Boolean = false
+)
+
+enum class DialogType { ALERT, CONFIRM, PROMPT, BEFOREUNLOAD }
+
+// ── Internal Event Model (for KBDebugJvm internal use) ────────────────────
+
+/**
+ * Internal event type for recording debug events in the ring buffer.
  */
 sealed class DebugEvent {
     abstract val timestamp: Long
 
-    /**
-     * console.log/info/warn/error/debug output from page JavaScript.
-     */
     data class ConsoleLog(
         override val timestamp: Long,
         val level: ConsoleLevel,
@@ -114,10 +157,6 @@ sealed class DebugEvent {
         val stackTrace: String? = null
     ) : DebugEvent()
 
-    /**
-     * Uncaught JavaScript exception (distinct from console.error).
-     * Maps to CDP Runtime.exceptionThrown.
-     */
     data class JsException(
         override val timestamp: Long,
         val message: String,
@@ -127,10 +166,6 @@ sealed class DebugEvent {
         val stackTrace: String? = null
     ) : DebugEvent()
 
-    /**
-     * Completed or failed network request.
-     * One event per request lifecycle (not per CDP lifecycle event).
-     */
     data class NetworkRequest(
         override val timestamp: Long,
         val requestId: String,
@@ -144,15 +179,24 @@ sealed class DebugEvent {
         val errorText: String? = null
     ) : DebugEvent()
 
-    /**
-     * Render process crash event.
-     * Auto-recovery (reload) is handled by [KBDebug.enable].
-     */
     data class RenderCrash(
         override val timestamp: Long,
         val status: String,
         val errorCode: Int,
         val errorString: String? = null
+    ) : DebugEvent()
+
+    data class Navigation(
+        override val timestamp: Long,
+        val url: String
+    ) : DebugEvent()
+
+    data class Dialog(
+        override val timestamp: Long,
+        val type: DialogType,
+        val message: String,
+        val url: String? = null,
+        val defaultPrompt: String? = null
     ) : DebugEvent()
 }
 
@@ -182,17 +226,15 @@ data class DebugSnapshot(
 /**
  * No-op implementation for platforms without CDP (Android, iOS, fallback).
  */
-@OptIn(ExperimentalCoroutinesApi::class)
 object KBDebugNoop : KBDebug {
-    private val _events = MutableSharedFlow<DebugEvent>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
-    )
-    override val events: SharedFlow<DebugEvent> = _events.asSharedFlow()
-
     override fun enable() {}
     override fun disable() {}
+    override val isEnabled: Boolean get() = false
+    override suspend fun inspect(): PageInspection = PageInspection(
+        currentUrl = "",
+        navigated = false
+    )
+    override suspend fun respondDialog(accept: Boolean, promptText: String?): Boolean = false
     override suspend fun snapshot(): DebugSnapshot = DebugSnapshot(
         jsHeapUsedSize = 0,
         jsHeapTotalSize = 0,
@@ -209,5 +251,4 @@ object KBDebugNoop : KBDebug {
 
     override suspend fun getResponseBody(requestId: String): String? = null
     override suspend fun executeCdp(method: String, params: String): String? = null
-    override fun onCdpEvent(listener: (method: String, params: String) -> Unit) {}
 }

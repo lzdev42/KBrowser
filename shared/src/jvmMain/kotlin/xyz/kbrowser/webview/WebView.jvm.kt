@@ -1504,6 +1504,11 @@ class JvmWebView(
             ): Boolean {
                 val client = webChromeClient
                 if (client == null) {
+                    if (debug.isEnabled) {
+                        // Debug mode — return true without callback to prevent native dialog.
+                        // KBDebug captures via CDP Page.javascriptDialogOpening and responds via CDP.
+                        return true
+                    }
                     // 没有上层监听时直接关闭对话框并阻止默认弹窗，否则非 headless 模式下
                     // 会弹出原生对话框，把当前 URL（可能是超长 base64）显示在标题里。
                     when (dialogType) {
@@ -1609,6 +1614,11 @@ class JvmWebView(
 
             val client = webChromeClient
             if (client == null) {
+                if (debug.isEnabled) {
+                    // Debug mode active — KBDebug will capture the dialog via its own CDP listener,
+                    // and respondDialog() will handle it. Don't auto-dismiss.
+                    return
+                }
                 // 没有上层监听时直接取消，避免 JS 挂起
                 devTools.executeDevToolsMethod("Page.handleJavaScriptDialog", """{"accept":false}""")
                 return

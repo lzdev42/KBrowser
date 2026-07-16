@@ -1,11 +1,7 @@
 package xyz.kbrowser.webview.debug
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import org.cef.browser.CefBrowser
@@ -13,17 +9,9 @@ import org.cef.handler.CefRequestHandler
 import org.cef.handler.CefRequestHandlerAdapter
 import xyz.kbrowser.jcef.KBCefClient
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * JVM implementation of [KBDebug], backed by CefDevToolsClient (CDP).
- *
- * All CDP access is in-process (no remote debugging port needed).
- * Setup is asynchronous — [enable] starts a background thread that waits for
- * native browser creation before attaching listeners.
- */
 internal class KBDebugJvm(
     private val cefBrowser: CefBrowser,
     private val cefClient: KBCefClient
@@ -33,17 +21,15 @@ internal class KBDebugJvm(
     @Volatile private var devTools: org.cef.browser.CefDevToolsClient? = null
     @Volatile private var crashedRecently = false
 
-    // ── Event stream (ring buffer 500, drop oldest) ──────────────────────
+    @Volatile private var lastInspectMs: Long = 0L
+    @Volatile private var lastKnownUrl: String = ""
+    @Volatile private var pendingDialog: DialogInfo? = null
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     private val _events = MutableSharedFlow<DebugEvent>(
         replay = 500,
         extraBufferCapacity = 0,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
     )
-    override val events: SharedFlow<DebugEvent> = _events.asSharedFlow()
-
-    // ── Network request lifecycle tracking ───────────────────────────────
 
     private data class NetBuilder(
         val requestId: String,
@@ -59,12 +45,6 @@ internal class KBDebugJvm(
     )
 
     private val networkRequests = ConcurrentHashMap<String, NetBuilder>()
-
-    // ── Raw CDP event listeners (escape hatch) ───────────────────────────
-
-    private val cdpEventListeners = CopyOnWriteArrayList<(String, String) -> Unit>()
-
-    // ── Crash recovery handler ──────────────────────────────────────────
 
     private val crashHandler = object : CefRequestHandlerAdapter() {
         override fun onRenderProcessTerminated(
@@ -84,10 +64,12 @@ internal class KBDebugJvm(
         }
     }
 
-    // ── enable / disable ────────────────────────────────────────────────
+    override val isEnabled: Boolean get() = enabledFlag.get()
 
     override fun enable() {
         if (!enabledFlag.compareAndSet(false, true)) return
+        lastInspectMs = System.currentTimeMillis()
+        lastKnownUrl = cefBrowser.url ?: ""
         Thread({
             try {
                 waitForNativeBrowserCreated(cefBrowser)
@@ -96,7 +78,7 @@ internal class KBDebugJvm(
                 if (dt.isClosed) return@Thread
                 devTools = dt
 
-                for (domain in listOf("Runtime", "Network", "Performance")) {
+                for (domain in listOf("Runtime", "Network", "Performance", "Page")) {
                     try {
                         dt.executeDevToolsMethod("$domain.enable", "{}").get(3, TimeUnit.SECONDS)
                     } catch (_: Exception) {}
@@ -106,7 +88,6 @@ internal class KBDebugJvm(
 
                 dt.addEventListener { method, paramsJson ->
                     if (!enabledFlag.get()) return@addEventListener
-                    cdpEventListeners.forEach { runCatching { it(method, paramsJson) } }
                     runCatching { handleCdpEvent(method, paramsJson) }
                 }
             } catch (_: Exception) {}
@@ -117,25 +98,82 @@ internal class KBDebugJvm(
         if (!enabledFlag.compareAndSet(true, false)) return
         val dt = devTools
         if (dt != null && !dt.isClosed) {
-            for (domain in listOf("Runtime", "Network", "Performance")) {
+            for (domain in listOf("Runtime", "Network", "Performance", "Page")) {
                 try { dt.executeDevToolsMethod("$domain.disable", "{}") } catch (_: Exception) {}
             }
+            try { dt.executeDevToolsMethod("Page.handleJavaScriptDialog", """{"accept":false}""") } catch (_: Exception) {}
         }
         try { cefClient.removeRequestHandler(crashHandler, cefBrowser) } catch (_: Exception) {}
         networkRequests.clear()
-        cdpEventListeners.clear()
-        @OptIn(ExperimentalCoroutinesApi::class)
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
         _events.resetReplayCache()
         crashedRecently = false
         devTools = null
+        pendingDialog = null
+        lastInspectMs = 0L
     }
 
-    // ── snapshot ────────────────────────────────────────────────────────
+    override suspend fun inspect(): PageInspection {
+        val now = System.currentTimeMillis()
+        val sinceMs = lastInspectMs
+        val cache = _events.replayCache
+
+        val recentEvents = cache.filter { it.timestamp > sinceMs }
+
+        val currentUrl = cefBrowser.url ?: ""
+        val navigated = lastKnownUrl.isNotEmpty() && currentUrl != lastKnownUrl
+
+        val errors = mutableListOf<PageError>()
+        recentEvents.filter { it is DebugEvent.ConsoleLog && it.level == ConsoleLevel.ERROR }
+            .forEach { e -> e as DebugEvent.ConsoleLog; errors.add(PageError("console_error", e.text)) }
+        recentEvents.filterIsInstance<DebugEvent.JsException>()
+            .forEach { errors.add(PageError("js_exception", it.message)) }
+        recentEvents.filterIsInstance<DebugEvent.NetworkRequest>().filter { it.failed }
+            .forEach { errors.add(PageError("network_failed", "${it.method} ${it.url} ${it.errorText ?: ""}")) }
+        recentEvents.filterIsInstance<DebugEvent.RenderCrash>()
+            .forEach { errors.add(PageError("render_crash", "${it.status}: ${it.errorString ?: ""}")) }
+
+        val requests = recentEvents.filterIsInstance<DebugEvent.NetworkRequest>()
+            .filter { isXhrLike(it.resourceType, it.url) }
+            .map { RequestSummary(it.requestId, it.method, it.url, it.status, it.failed) }
+
+        val inspection = PageInspection(
+            currentUrl = currentUrl,
+            navigated = navigated,
+            activeDialog = pendingDialog,
+            errors = errors,
+            requests = requests
+        )
+
+        lastInspectMs = now
+        lastKnownUrl = currentUrl
+        return inspection
+    }
+
+    override suspend fun respondDialog(accept: Boolean, promptText: String?): Boolean {
+        val dt = devTools
+        if (dt == null || dt.isClosed) return false
+        if (pendingDialog == null) return false
+        return withContext(Dispatchers.IO) {
+            try {
+                val params = buildJsonObject {
+                    put("accept", accept)
+                    if (promptText != null) put("promptText", promptText)
+                }.toString()
+                dt.executeDevToolsMethod("Page.handleJavaScriptDialog", params)
+                    .get(5, TimeUnit.SECONDS)
+                pendingDialog = null
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
 
     override suspend fun snapshot(): DebugSnapshot {
         val dt = devTools
         val metrics = if (dt != null && !dt.isClosed) fetchMetrics(dt) else null
-        val cache = events.replayCache
+        val cache = _events.replayCache
 
         val consoleErrors = cache.count { it is DebugEvent.ConsoleLog && it.level == ConsoleLevel.ERROR }
         val jsExceptions = cache.count { it is DebugEvent.JsException }
@@ -186,8 +224,6 @@ internal class KBDebugJvm(
         }
     }
 
-    // ── getResponseBody ─────────────────────────────────────────────────
-
     override suspend fun getResponseBody(requestId: String): String? {
         val dt = devTools ?: return null
         if (dt.isClosed) return null
@@ -206,8 +242,6 @@ internal class KBDebugJvm(
         }
     }
 
-    // ── executeCdp / onCdpEvent ─────────────────────────────────────────
-
     override suspend fun executeCdp(method: String, params: String): String? {
         val dt = devTools ?: return null
         if (dt.isClosed) return null
@@ -220,10 +254,6 @@ internal class KBDebugJvm(
         }
     }
 
-    override fun onCdpEvent(listener: (method: String, params: String) -> Unit) {
-        cdpEventListeners.add(listener)
-    }
-
     // ── CDP event parsing ────────────────────────────────────────────────
 
     private fun handleCdpEvent(method: String, paramsJson: String) {
@@ -234,6 +264,9 @@ internal class KBDebugJvm(
             "Network.responseReceived" -> handleNetResponse(paramsJson)
             "Network.loadingFinished" -> handleNetFinished(paramsJson)
             "Network.loadingFailed" -> handleNetFailed(paramsJson)
+            "Page.frameNavigated" -> handleNavigation(paramsJson)
+            "Page.javascriptDialogOpening" -> handleDialogOpening(paramsJson)
+            "Page.javascriptDialogClosed" -> handleDialogClosed(paramsJson)
         }
     }
 
@@ -361,7 +394,48 @@ internal class KBDebugJvm(
         ))
     }
 
-    // ── Native browser readiness ────────────────────────────────────────
+    private fun handleNavigation(paramsJson: String) {
+        val p = Json.parseToJsonElement(paramsJson).jsonObject
+        val frame = p["frame"]?.jsonObject ?: return
+        val url = frame["url"]?.jsonPrimitive?.content ?: return
+        _events.tryEmit(DebugEvent.Navigation(
+            timestamp = System.currentTimeMillis(),
+            url = url
+        ))
+    }
+
+    private fun handleDialogOpening(paramsJson: String) {
+        val p = Json.parseToJsonElement(paramsJson).jsonObject
+        val type = p["type"]?.jsonPrimitive?.content ?: "alert"
+        val dialogType = when (type) {
+            "confirm" -> DialogType.CONFIRM
+            "prompt" -> DialogType.PROMPT
+            "beforeunload" -> DialogType.BEFOREUNLOAD
+            else -> DialogType.ALERT
+        }
+        val message = p["message"]?.jsonPrimitive?.content ?: ""
+        val url = p["url"]?.jsonPrimitive?.content
+        val defaultPrompt = p["defaultPrompt"]?.jsonPrimitive?.content
+
+        pendingDialog = DialogInfo(dialogType, message, defaultPrompt)
+        _events.tryEmit(DebugEvent.Dialog(
+            timestamp = System.currentTimeMillis(),
+            type = dialogType,
+            message = message,
+            url = url,
+            defaultPrompt = defaultPrompt
+        ))
+    }
+
+    private fun handleDialogClosed(paramsJson: String) {
+        pendingDialog = null
+    }
+
+    private fun isXhrLike(resourceType: String?, url: String): Boolean {
+        if (resourceType in XHR_LIKE_TYPES) return true
+        val ext = url.substringAfterLast('?', "").substringAfterLast('#', "").substringAfterLast('.', "")
+        return ext.lowercase() !in STATIC_EXTENSIONS
+    }
 
     private fun waitForNativeBrowserCreated(browser: CefBrowser) {
         val method = try {
@@ -378,5 +452,14 @@ internal class KBDebugJvm(
             }
             Thread.sleep(50)
         }
+    }
+
+    companion object {
+        private val XHR_LIKE_TYPES = setOf("XHR", "Fetch", "Document", "WebSocket", "EventSource", "Other")
+        private val STATIC_EXTENSIONS = setOf(
+            "css", "js", "mjs", "png", "jpg", "jpeg", "gif", "svg", "ico",
+            "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm", "mp3",
+            "wav", "ogg", "flac", "webp", "avif", "map"
+        )
     }
 }

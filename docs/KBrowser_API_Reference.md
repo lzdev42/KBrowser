@@ -603,7 +603,7 @@ Checks whether the current JDK is JetBrains Runtime with JCEF support. The `KBWe
 
 ## 9. Debug API (KBDebug)
 
-The `KBDebug` interface provides AI-driven browser diagnostics via CDP (Chrome DevTools Protocol). Access it through `webView.debug` or `page.debug`.
+The `KBDebug` interface provides query-based diagnostics for AI-driven browser automation via CDP. Designed for MCP/toolcall usage — every method returns data directly, no event subscription needed. Access it through `webView.debug` or `page.debug`.
 
 ### KBDebug
 
@@ -611,57 +611,56 @@ The `KBDebug` interface provides AI-driven browser diagnostics via CDP (Chrome D
 interface KBDebug {
     fun enable()
     fun disable()
-    val events: SharedFlow<DebugEvent>
+    val isEnabled: Boolean
+    suspend fun inspect(): PageInspection
+    suspend fun respondDialog(accept: Boolean, promptText: String? = null): Boolean
     suspend fun snapshot(): DebugSnapshot
     suspend fun getResponseBody(requestId: String): String?
     suspend fun executeCdp(method: String, params: String): String?
-    fun onCdpEvent(listener: (method: String, params: String) -> Unit)
 }
 ```
 
 | Method | Description |
 |--------|-------------|
-| `enable()` | Start capturing console logs, JS exceptions, network requests, and render crashes. Also activates auto-recovery on render crash. Idempotent. |
-| `disable()` | Stop capture, release CDP resources, clear replay buffer. |
-| `events` | `SharedFlow<DebugEvent>` with 500-event replay buffer (drop-oldest). Access `events.replayCache` for recent history without continuous collection. |
-| `snapshot()` | Point-in-time health snapshot: JS heap, DOM nodes, error counts, crash status, recent error events. |
-| `getResponseBody(requestId)` | Fetch a network response body by `requestId` (from `DebugEvent.NetworkRequest`). CDP caches bodies with eviction — call soon after request completes. |
+| `enable()` | Start tracking console errors, JS exceptions, network requests, navigations, and dialogs. JS dialogs are intercepted (no native dialog shown) — handle via `respondDialog()`. Also activates render crash auto-recovery. Idempotent. |
+| `disable()` | Stop tracking, release CDP resources, auto-dismiss any pending dialog. |
+| `isEnabled` | Whether debug mode is currently active. |
+| `inspect()` | **Core query**: what happened since the last `inspect()` call? Returns navigation status, active dialog, errors, and XHR/Fetch requests. Acts as an implicit checkpoint. |
+| `respondDialog(accept, promptText?)` | Respond to the active JS dialog (alert/confirm/prompt). Returns `true` if a dialog was present and handled. |
+| `snapshot()` | Point-in-time health snapshot: JS heap, DOM nodes, error counts, crash status. For periodic monitoring (not post-action queries — use `inspect()` for that). |
+| `getResponseBody(requestId)` | Fetch a network response body by `requestId` (from `PageInspection.requests`). CDP caches bodies with eviction — call soon after request completes. |
 | `executeCdp(method, params)` | Raw CDP escape hatch. E.g. `executeCdp("Runtime.evaluate", """{"expression":"1+1"}""")`. |
-| `onCdpEvent(listener)` | Subscribe to raw CDP events (unparsed method + params JSON). |
 
-### DebugEvent
+### PageInspection
 
-```kotlin
-sealed class DebugEvent {
-    abstract val timestamp: Long
-
-    data class ConsoleLog(timestamp, level: ConsoleLevel, text, url?, lineNo?, columnNo?, stackTrace?)
-    data class JsException(timestamp, message, sourceUrl?, lineNo?, columnNo?, stackTrace?)
-    data class NetworkRequest(timestamp, requestId, url, method, status?, mimeType?, resourceType?, encodedDataLength?, failed, errorText?)
-    data class RenderCrash(timestamp, status: String, errorCode: Int, errorString?)
-}
-```
-
-- **ConsoleLog** — `console.log/info/warn/error/debug` output (CDP `Runtime.consoleAPICalled`)
-- **JsException** — Uncaught JS exceptions (CDP `Runtime.exceptionThrown`)
-- **NetworkRequest** — Completed/failed network request, one event per request lifecycle
-- **RenderCrash** — Render process crash (auto-reload handled by `enable()`)
-
-### DebugSnapshot
+Result of `inspect()` — answers "what happened since last check?":
 
 ```kotlin
-data class DebugSnapshot(
-    val jsHeapUsedSize: Long,
-    val jsHeapTotalSize: Long,
-    val domNodeCount: Int,
-    val jsEventListeners: Int,
-    val documents: Int,
-    val consoleErrorCount: Int,
-    val jsExceptionCount: Int,
-    val failedRequestCount: Int,
-    val totalRequestCount: Int,
-    val crashedRecently: Boolean,
-    val recentErrors: List<DebugEvent>
+data class PageInspection(
+    val currentUrl: String,
+    val navigated: Boolean,           // did URL change?
+    val activeDialog: DialogInfo?,    // is a dialog blocking?
+    val errors: List<PageError>,      // console errors + JS exceptions + failed requests + crashes
+    val requests: List<RequestSummary>  // XHR/Fetch requests only (no fonts/images/css noise)
+)
+
+data class DialogInfo(
+    val type: DialogType,             // ALERT, CONFIRM, PROMPT, BEFOREUNLOAD
+    val message: String,
+    val defaultPrompt: String? = null
+)
+
+data class PageError(
+    val type: String,     // "console_error" | "js_exception" | "network_failed" | "render_crash"
+    val message: String
+)
+
+data class RequestSummary(
+    val requestId: String,  // for getResponseBody()
+    val method: String,
+    val url: String,
+    val status: Int?,
+    val failed: Boolean = false
 )
 ```
 
@@ -669,26 +668,31 @@ data class DebugSnapshot(
 
 ```kotlin
 webView.debug.enable()
-page.loadUrl("https://example.com")
-delay(2000)
 
-// Check health
-val snap = webView.debug.snapshot()
-if (snap.consoleErrorCount > 0 || snap.jsExceptionCount > 0) {
-    println("Page has errors")
-    snap.recentErrors.forEach { println(it) }
+// AI automation loop
+page.click(refid)
+val insp = webView.debug.inspect()
+
+// 1. Dialog blocking?
+if (insp.activeDialog != null) {
+    println("Dialog: ${insp.activeDialog!!.type} ${insp.activeDialog!!.message}")
+    webView.debug.respondDialog(accept = true)
 }
 
-// Inspect network
-val netEvents = webView.debug.events.replayCache
-    .filterIsInstance<DebugEvent.NetworkRequest>()
-netEvents.forEach { println("${it.method} ${it.status} ${it.url}") }
+// 2. Page navigated?
+if (insp.navigated) {
+    println("Navigated to: ${insp.currentUrl}")
+    val snap = page.snapshot()  // re-read DOM
+}
 
-// Get response body
-val body = webView.debug.getResponseBody(netEvents.first().requestId)
+// 3. Errors?
+insp.errors.forEach { println("[${it.type}] ${it.message}") }
 
-// Raw CDP escape hatch
-val result = webView.debug.executeCdp("DOM.getDocument", "{}")
+// 4. Inspect API calls
+insp.requests.forEach { println("${it.method} ${it.status} ${it.url}") }
+
+// 5. Get response body
+val body = webView.debug.getResponseBody(insp.requests.first().requestId)
 
 webView.debug.disable()
 ```
@@ -698,8 +702,8 @@ webView.debug.disable()
 | Platform | Implementation |
 |----------|---------------|
 | JVM | Full CDP via `CefDevToolsClient` (in-process, no remote debugging port needed) |
-| Android/iOS | `KBDebugNoop` — all methods return empty/null |
+| Android/iOS | `KBDebugNoop` — `inspect()` returns empty, `respondDialog()` returns false, all other methods return null/empty |
 
 ### Setup Timing
 
-`enable()` starts a background daemon thread that waits up to 15s for native browser creation, then attaches CDP listeners. Allow ~1-2s after `enable()` before expecting events.
+`enable()` starts a background daemon thread that waits up to 15s for native browser creation, then attaches CDP listeners. Allow ~1-2s after `enable()` before expecting `inspect()` to return data.
