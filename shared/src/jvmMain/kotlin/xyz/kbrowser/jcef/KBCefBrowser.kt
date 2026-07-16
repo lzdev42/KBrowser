@@ -2,8 +2,6 @@ package xyz.kbrowser.jcef
 
 import java.awt.BorderLayout
 import java.awt.Dimension
-import java.awt.event.ComponentAdapter
-import java.awt.event.ComponentEvent
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.InputMethodEvent
@@ -14,7 +12,7 @@ import javax.swing.JComponent
 import javax.swing.JPanel
 
 class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
-    
+
     constructor() : this(KBCefBrowserBuilder())
     constructor(url: String) : this(KBCefBrowserBuilder().setUrl(url))
 
@@ -92,24 +90,6 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
         myComponent.addFocusListener(object : FocusAdapter() {
             override fun focusGained(e: FocusEvent) {
                 uiComp.requestFocusInWindow()
-            }
-        })
-
-        // resize 兜底：参照 IDEA JBCefBrowser.createComponent 注册 ComponentListener。
-        // OSR 模式下 KBCefOsrComponent.reshape() 已由 AWT 布局自动触发（含 100ms 节流 + ResizePusher），
-        // 无需在此重复处理。
-        // 非 OSR（窗口）模式下，Compose SwingPanel 嵌入重量级 Canvas 时，
-        // 拖拽时 Compose 布局变化可能不会及时同步给内层 Canvas 的 bounds，
-        // 导致 CEF 原生窗口尺寸滞后。这里在外层 JPanel resize 时主动同步内层 uiComp 的 bounds。
-        myComponent.addComponentListener(object : ComponentAdapter() {
-            override fun componentResized(e: ComponentEvent) {
-                if (findOsrComponent() == null) {
-                    val w = myComponent.width
-                    val h = myComponent.height
-                    if (w > 0 && h > 0 && (uiComp.width != w || uiComp.height != h)) {
-                        uiComp.setSize(w, h)
-                    }
-                }
             }
         })
     }

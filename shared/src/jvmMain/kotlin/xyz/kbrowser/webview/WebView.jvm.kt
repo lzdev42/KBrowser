@@ -1294,13 +1294,9 @@ class JvmWebView(
                 if (osrComp.width != width || osrComp.height != height) {
                     osrComp.setSize(width, height)
                 }
-            } else {
-                val comp = cefBrowser.uiComponent ?: return@invokeLater
-                if (comp.width != width || comp.height != height) {
-                    comp.setSize(width, height)
-                    cefBrowser.wasResized(0, 0)
-                }
             }
+            // 非 OSR 模式不需要手动 resize —— macOS 窗口模式下 wasResized() 是 no-op，
+            // NSView 由 doUpdate()（paint 时触发）定位，headless 模式下 JFrame 尺寸固定不涉及拖拽。
         }
     }
 

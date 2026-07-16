@@ -1,5 +1,10 @@
 # JCEF 拖拽不跟手问题修复计划
 
+> **更新（2026-07-16）**：经多轮修复与字节码分析，最终结论如下。
+> OSR 模式拖拽已完全修复（Compose → AWT → `KBCefOsrComponent.reshape()` 链路畅通）。
+> 非 OSR 模式拖拽不跟手是 **CEF + Core Animation 架构限制**，无法从 Java/AWT 侧修复。
+> 详见下方「八、最终结论」。
+
 ## 一、问题现象
 
 拖拽分隔栏/窗口边框时，JCEF 浏览器内容尺寸变化不跟手，存在明显延迟或卡顿。
@@ -231,3 +236,64 @@ if (!isOffScreenRendering) {
 3. 如果有 Splitter 分隔栏，拖拽分隔栏，观察预览区是否跟手程度
 4. 切换 OSR/非 OSR 模式（`KBrowser.useOsrMode`），分别测试
 5. 在 Retina 屏幕上测试 DPI 缩放是否正确
+
+## 八、最终结论
+
+### 8.1 OSR 模式 — 已修复 ✅
+
+修复后的尺寸传递链路：
+
+```
+Compose Layout 尺寸变化
+  → SwingPanel 内部 JPanel.setBounds()
+    → KBCefOsrComponent.reshape()           ← AWT 布局自动触发
+      → 100ms 节流 + ResizePusher            ← 已有逻辑，正确工作
+        → CefBrowser.wasResized()            ← 同步调用，通知 CEF 重新渲染
+```
+
+关键修复点：
+- `WebView.jvm.kt` 的 `resizeViewport()` 在 OSR 分支通过 `osrComp.setSize()` 触发 `reshape()`
+- `KBCefOsrComponent.reshape()` 内置 100ms 节流 + `ResizePusher`（20ms 间隔持续 invalidate）
+- `onPaint` 中 `scheduleFallbackWasResized` 作为尺寸不匹配兜底
+- 首帧快速通道 `myFirstResizeSynced` 跳过首次节流，立即 `wasResized`
+
+### 8.2 非 OSR 模式 — 不可修复 ❌（CEF 架构限制）
+
+经字节码分析确认，非 OSR 模式拖拽不跟手的根因是：
+
+1. **`CefBrowserWr.wasResized()` 在 macOS 窗口模式下是 no-op**
+   - 原生方法 `N_WasResized` 只有 OSR + Win/Linux 分支，macOS 直接 fall through
+   - 调用 `wasResized()` 对 macOS 窗口模式没有任何效果
+
+2. **NSView 尺寸更新依赖 `doUpdate()` → `N_UpdateUI()`**
+   - `doUpdate()` 只在 `CefBrowserWr$3.paint()` 和 `CefBrowserWr$5.ancestorResized` 中调用
+   - 这两处都通过 `EventQueue.invokeLater` 异步执行
+
+3. **macOS live-resize 期间 EventQueue 不处理**
+   - macOS 的 live-resize（拖拽窗口边框）期间，AWT EventQueue 被阻塞
+   - `paint()` 和 `ancestorResized` 都不会执行
+   - 即使 NSView frame 已设置，CEF 的 Core Animation compositor 也不会提交新帧
+
+4. **`paintImmediately()` 也无效**
+   - 尝试过强制 `paintImmediately()`，`doUpdate()` 确实执行了
+   - 但 CEF 的 Core Animation compositor 在 live-resize 期间不提交新帧
+
+**结论**：非 OSR 模式 live-resize 不跟随是 CEF + Core Animation 的架构限制。
+CEF 使用 Core Animation 进行硬件合成，在 macOS live-resize 期间 CA 不提交帧。
+这是 CEF 层面的问题，无法从 Java/AWT 侧绕过。
+
+### 8.3 清理工作
+
+- 移除了 `KBCefBrowser.kt` 中的 `ComponentListener`（非 OSR 兜底无效）
+- 移除了 `WebView.jvm.kt` `resizeViewport()` 中的非 OSR 分支（`wasResized` 是 no-op）
+- 移除了 `KBCefBrowser.kt` 中的 `reshape`/`doLayout` override、`paintImmediately` 等诊断代码
+- 代码恢复到干净状态，仅保留 IME 委托 + 焦点处理
+
+### 8.4 OSR 性能说明
+
+OSR 模式每帧需要 GPU → CPU → GPU 像素往返：
+- CEF 渲染到 GPU 纹理 → `glReadPixels` 读回 CPU 内存 → Java `Image` → AWT 重新上传 GPU 绘制
+- JetBrains Remote 模式 + SharedMemory 可缓解但无法消除此开销
+- `shared_texture_enabled`（CEF M125+）可避免像素往返，但 JCEF Java API 未暴露此能力
+
+在当前架构下，OSR 是 KBrowser 唯一可行的渲染模式（非 OSR 有 live-resize 限制）。

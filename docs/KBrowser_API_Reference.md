@@ -598,3 +598,108 @@ object JcefChecker {
 ```
 
 Checks whether the current JDK is JetBrains Runtime with JCEF support. The `KBWebView` Composable checks this internally and shows an error message when `false`.
+
+---
+
+## 9. Debug API (KBDebug)
+
+The `KBDebug` interface provides AI-driven browser diagnostics via CDP (Chrome DevTools Protocol). Access it through `webView.debug` or `page.debug`.
+
+### KBDebug
+
+```kotlin
+interface KBDebug {
+    fun enable()
+    fun disable()
+    val events: SharedFlow<DebugEvent>
+    suspend fun snapshot(): DebugSnapshot
+    suspend fun getResponseBody(requestId: String): String?
+    suspend fun executeCdp(method: String, params: String): String?
+    fun onCdpEvent(listener: (method: String, params: String) -> Unit)
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `enable()` | Start capturing console logs, JS exceptions, network requests, and render crashes. Also activates auto-recovery on render crash. Idempotent. |
+| `disable()` | Stop capture, release CDP resources, clear replay buffer. |
+| `events` | `SharedFlow<DebugEvent>` with 500-event replay buffer (drop-oldest). Access `events.replayCache` for recent history without continuous collection. |
+| `snapshot()` | Point-in-time health snapshot: JS heap, DOM nodes, error counts, crash status, recent error events. |
+| `getResponseBody(requestId)` | Fetch a network response body by `requestId` (from `DebugEvent.NetworkRequest`). CDP caches bodies with eviction — call soon after request completes. |
+| `executeCdp(method, params)` | Raw CDP escape hatch. E.g. `executeCdp("Runtime.evaluate", """{"expression":"1+1"}""")`. |
+| `onCdpEvent(listener)` | Subscribe to raw CDP events (unparsed method + params JSON). |
+
+### DebugEvent
+
+```kotlin
+sealed class DebugEvent {
+    abstract val timestamp: Long
+
+    data class ConsoleLog(timestamp, level: ConsoleLevel, text, url?, lineNo?, columnNo?, stackTrace?)
+    data class JsException(timestamp, message, sourceUrl?, lineNo?, columnNo?, stackTrace?)
+    data class NetworkRequest(timestamp, requestId, url, method, status?, mimeType?, resourceType?, encodedDataLength?, failed, errorText?)
+    data class RenderCrash(timestamp, status: String, errorCode: Int, errorString?)
+}
+```
+
+- **ConsoleLog** — `console.log/info/warn/error/debug` output (CDP `Runtime.consoleAPICalled`)
+- **JsException** — Uncaught JS exceptions (CDP `Runtime.exceptionThrown`)
+- **NetworkRequest** — Completed/failed network request, one event per request lifecycle
+- **RenderCrash** — Render process crash (auto-reload handled by `enable()`)
+
+### DebugSnapshot
+
+```kotlin
+data class DebugSnapshot(
+    val jsHeapUsedSize: Long,
+    val jsHeapTotalSize: Long,
+    val domNodeCount: Int,
+    val jsEventListeners: Int,
+    val documents: Int,
+    val consoleErrorCount: Int,
+    val jsExceptionCount: Int,
+    val failedRequestCount: Int,
+    val totalRequestCount: Int,
+    val crashedRecently: Boolean,
+    val recentErrors: List<DebugEvent>
+)
+```
+
+### Usage Example
+
+```kotlin
+webView.debug.enable()
+page.loadUrl("https://example.com")
+delay(2000)
+
+// Check health
+val snap = webView.debug.snapshot()
+if (snap.consoleErrorCount > 0 || snap.jsExceptionCount > 0) {
+    println("Page has errors")
+    snap.recentErrors.forEach { println(it) }
+}
+
+// Inspect network
+val netEvents = webView.debug.events.replayCache
+    .filterIsInstance<DebugEvent.NetworkRequest>()
+netEvents.forEach { println("${it.method} ${it.status} ${it.url}") }
+
+// Get response body
+val body = webView.debug.getResponseBody(netEvents.first().requestId)
+
+// Raw CDP escape hatch
+val result = webView.debug.executeCdp("DOM.getDocument", "{}")
+
+webView.debug.disable()
+```
+
+### Platform Support
+
+| Platform | Implementation |
+|----------|---------------|
+| JVM | Full CDP via `CefDevToolsClient` (in-process, no remote debugging port needed) |
+| Android/iOS | `KBDebugNoop` — all methods return empty/null |
+
+### Setup Timing
+
+`enable()` starts a background daemon thread that waits up to 15s for native browser creation, then attaches CDP listeners. Allow ~1-2s after `enable()` before expecting events.

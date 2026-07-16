@@ -594,3 +594,108 @@ object JcefChecker {
 ```
 
 检测当前 JDK 是否为包含 JCEF 的 JetBrains Runtime。`KBWebView` Composable 内部检查此值，若为 `false` 则显示提示文字。
+
+---
+
+## 9. 调试 API（KBDebug）
+
+`KBDebug` 接口通过 CDP（Chrome DevTools Protocol）提供 AI 驱动的浏览器诊断能力。通过 `webView.debug` 或 `page.debug` 访问。
+
+### KBDebug
+
+```kotlin
+interface KBDebug {
+    fun enable()
+    fun disable()
+    val events: SharedFlow<DebugEvent>
+    suspend fun snapshot(): DebugSnapshot
+    suspend fun getResponseBody(requestId: String): String?
+    suspend fun executeCdp(method: String, params: String): String?
+    fun onCdpEvent(listener: (method: String, params: String) -> Unit)
+}
+```
+
+| 方法 | 说明 |
+|------|------|
+| `enable()` | 开始捕获 console 日志、JS 异常、网络请求和渲染进程崩溃。崩溃时自动 reload 恢复。幂等。 |
+| `disable()` | 停止捕获，释放 CDP 资源，清空 replay 缓冲区。 |
+| `events` | `SharedFlow<DebugEvent>`，500 事件 replay 缓冲区（满时丢弃最旧）。无需持续收集即可通过 `events.replayCache` 获取最近事件。 |
+| `snapshot()` | 获取页面健康快照：JS 堆内存、DOM 节点数、错误计数、崩溃状态、最近错误事件列表。 |
+| `getResponseBody(requestId)` | 按 `requestId`（来自 `DebugEvent.NetworkRequest`）获取网络响应体。CDP 内部有缓存淘汰，请求完成后尽快调用。 |
+| `executeCdp(method, params)` | 原始 CDP 逃生舱口。如 `executeCdp("Runtime.evaluate", """{"expression":"1+1"}""")`。 |
+| `onCdpEvent(listener)` | 订阅原始 CDP 事件（未解析的 method + params JSON）。 |
+
+### DebugEvent
+
+```kotlin
+sealed class DebugEvent {
+    abstract val timestamp: Long
+
+    data class ConsoleLog(timestamp, level: ConsoleLevel, text, url?, lineNo?, columnNo?, stackTrace?)
+    data class JsException(timestamp, message, sourceUrl?, lineNo?, columnNo?, stackTrace?)
+    data class NetworkRequest(timestamp, requestId, url, method, status?, mimeType?, resourceType?, encodedDataLength?, failed, errorText?)
+    data class RenderCrash(timestamp, status: String, errorCode: Int, errorString?)
+}
+```
+
+- **ConsoleLog** — `console.log/info/warn/error/debug` 输出（CDP `Runtime.consoleAPICalled`）
+- **JsException** — 未捕获的 JS 异常（CDP `Runtime.exceptionThrown`）
+- **NetworkRequest** — 完成/失败的网络请求，每个请求生命周期产出一条事件
+- **RenderCrash** — 渲染进程崩溃（`enable()` 时自动 reload 恢复）
+
+### DebugSnapshot
+
+```kotlin
+data class DebugSnapshot(
+    val jsHeapUsedSize: Long,
+    val jsHeapTotalSize: Long,
+    val domNodeCount: Int,
+    val jsEventListeners: Int,
+    val documents: Int,
+    val consoleErrorCount: Int,
+    val jsExceptionCount: Int,
+    val failedRequestCount: Int,
+    val totalRequestCount: Int,
+    val crashedRecently: Boolean,
+    val recentErrors: List<DebugEvent>
+)
+```
+
+### 使用示例
+
+```kotlin
+webView.debug.enable()
+page.loadUrl("https://example.com")
+delay(2000)
+
+// 检查健康状态
+val snap = webView.debug.snapshot()
+if (snap.consoleErrorCount > 0 || snap.jsExceptionCount > 0) {
+    println("页面有错误")
+    snap.recentErrors.forEach { println(it) }
+}
+
+// 查看网络请求
+val netEvents = webView.debug.events.replayCache
+    .filterIsInstance<DebugEvent.NetworkRequest>()
+netEvents.forEach { println("${it.method} ${it.status} ${it.url}") }
+
+// 获取响应体
+val body = webView.debug.getResponseBody(netEvents.first().requestId)
+
+// 原始 CDP 调用
+val result = webView.debug.executeCdp("DOM.getDocument", "{}")
+
+webView.debug.disable()
+```
+
+### 平台支持
+
+| 平台 | 实现 |
+|------|------|
+| JVM | 完整 CDP 支持，通过 `CefDevToolsClient`（进程内，无需远程调试端口） |
+| Android/iOS | `KBDebugNoop` — 所有方法返回空/null |
+
+### 启动时序
+
+`enable()` 启动一个后台守护线程，等待最多 15 秒原生浏览器创建完成后绑定 CDP 监听。`enable()` 后约需 1-2 秒才能开始接收事件。
