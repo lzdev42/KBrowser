@@ -168,17 +168,19 @@ classDiagram
 
 ## 4. 渲染模式（JVM Desktop）
 
-在 JVM 上，JCEF 支持两种渲染模式，初始化时确定：
+在 JVM 上，JCEF 支持两种渲染模式，在初始化时确定。**OSR（`useOsr = true`）为默认模式**——是唯一支持在浏览器上方叠加 Compose UI 的模式。非 OSR 是性能优先场景的逃生舱，前提是接受绝不在浏览器上方绘制任何 Compose UI。
+
+### OSR 模式（离屏渲染，`useOsr = true`）— 默认
+
+JCEF 渲染到离屏缓冲区，结果作为轻量级组件绘制。这允许 Compose UI 层叠在 JCEF 视图之上。但鼠标和键盘事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应用户输入。这是已知问题，优先级较低。
+
+OSR 每帧需要 GPU → CPU → GPU 像素往返，因此 CPU/GPU 开销高于非 OSR。
 
 ### 非 OSR 模式（原生窗口，`useOsr = false`）
 
-JCEF 创建原生重量级窗口组件。浏览器通过原生窗口系统直接渲染，性能更优。但重量级组件渲染在所有轻量级 Swing/Compose 组件之上，无法在其上方叠加 Compose UI。
+JCEF 创建原生重量级窗口组件。浏览器通过原生窗口系统直接渲染，性能最佳。但重量级组件渲染在所有轻量级 Swing/Compose 组件之上，无法在其上方叠加 Compose UI。
 
-### OSR 模式（离屏渲染，`useOsr = true`）
-
-JCEF 渲染到离屏缓冲区，结果作为轻量级组件绘制。这允许 Compose UI 层叠在 JCEF 视图之上。但鼠标和键盘事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应用户输入。
-
-这是已知问题，优先级较低。如不需要在浏览器上方叠加 Compose UI，应使用非 OSR 模式以获得更好的性能和正确的事件处理。
+**macOS 实时缩放限制**：在 macOS 上，拖拽窗口或分隔条边框时浏览器内容不会实时更新——松开后才会刷新。这是 CEF + Core Animation 的架构限制（live-resize 期间 AWT 事件队列被阻塞，Core Animation 不提交帧），无法从 Java/AWT 侧绕过。详见 [jcef-resize-fix-plan.md](jcef-resize-fix-plan.md)。尽管如此，非 OSR 仍是完全可用的显示模式（当不需要叠加 Compose UI 且需要极限渲染性能时已在生产中使用）。
 
 ### OSR 模式下的中文输入
 
@@ -219,7 +221,7 @@ KBrowser 提供两套并行的交互模型，通过命名约定清晰区分：
 
 **初始化顺序（JVM 必须严格遵守）**：
 ```kotlin
-KBrowser.initializeConfig(storageDir = "/path/to/cache", useOsr = false)
+KBrowser.initializeConfig(storageDir = "/path/to/cache", useOsr = true) // 默认；仅在不叠加 Compose UI 且需极限性能时设为 false
 runBlocking { initializeKBrowser() }
 application { /* Compose UI */ }
 ```

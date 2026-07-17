@@ -21,7 +21,7 @@ fun main() {
     // 1. Configure storage path and rendering mode
     KBrowser.initializeConfig(
         storageDir = "/path/to/cache",
-        useOsr = false  // Set to true only if Compose UI overlay on JCEF is needed
+        useOsr = true   // default; set to false only for maximum performance with no Compose overlay
     )
 
     // 2. Initialize JCEF engine (must be called before any UI initialization)

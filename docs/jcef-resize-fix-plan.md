@@ -257,7 +257,7 @@ Compose Layout 尺寸变化
 - `onPaint` 中 `scheduleFallbackWasResized` 作为尺寸不匹配兜底
 - 首帧快速通道 `myFirstResizeSynced` 跳过首次节流，立即 `wasResized`
 
-### 8.2 非 OSR 模式 — 不可修复 ❌（CEF 架构限制）
+### 8.2 非 OSR 模式 live-resize — 不可修复 ❌（CEF 架构限制）
 
 经字节码分析确认，非 OSR 模式拖拽不跟手的根因是：
 
@@ -296,4 +296,4 @@ OSR 模式每帧需要 GPU → CPU → GPU 像素往返：
 - JetBrains Remote 模式 + SharedMemory 可缓解但无法消除此开销
 - `shared_texture_enabled`（CEF M125+）可避免像素往返，但 JCEF Java API 未暴露此能力
 
-在当前架构下，OSR 是 KBrowser 唯一可行的渲染模式（非 OSR 有 live-resize 限制）。
+非 OSR 是 KBrowser 支持的渲染模式，适用于不需要叠加 Compose UI、追求极限渲染性能的场景（已在生产中使用，显示、加载与交互均正常）。其唯一不可修复的局限是 macOS 上的 live-resize：拖拽窗口/分隔条边框时内容不实时更新，松开后才刷新——这是 CEF + Core Animation 的架构限制，不影响非 OSR 的正常使用。OSR 则是默认模式，叠加 UI 与 live-resize 均已修复。

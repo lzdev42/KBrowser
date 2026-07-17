@@ -114,13 +114,28 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         println("[KBCefApp] Adding app handler...")
         System.out.flush()
         CefApp.addAppHandler(object : CefAppHandlerAdapter(args.toTypedArray()) {
+            override fun onRegisterCustomSchemes(registrar: org.cef.callback.CefSchemeRegistrar) {
+                registrar.addCustomScheme(
+                    KBCefHtmlSchemeHandlerFactory.HTML_SCHEME_NAME,
+                    true, true, false, false, false, false, false
+                )
+            }
+
             override fun onContextInitialized() {
+                try {
+                    CefApp.getInstance().registerSchemeHandlerFactory(
+                        KBCefHtmlSchemeHandlerFactory.HTML_SCHEME_NAME,
+                        "",
+                        KBCefHtmlSchemeHandlerFactory()
+                    )
+                } catch (e: Exception) {
+                    println("[KBCefApp] Failed to register HTML scheme handler factory: ${e.message}")
+                }
                 println("[KBCefApp] Context Initialized")
                 System.out.flush()
             }
             
             override fun onBeforeChildProcessLaunch(commandLine: String?) {
-                // IDEA tracks GPU crashes here
                 if (commandLine?.contains("--type=gpu-process") == true) {
                     println("[KBCefApp] Launching GPU process...")
                     System.out.flush()

@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1224,7 +1225,40 @@ fun ScreenshotPreview(bytes: ByteArray?, axTree: xyz.kbrowser.webview.AxTreeData
 
 @Composable
 fun PureNonOsrWebViewScreen() {
-    val webView = rememberKBWebView("https://webglsamples.org/aquarium/aquarium.html", null)
+    val webView = rememberKBWebView(initialUrl = null, profile = null)
+    val htmlInput = remember { """
+        <html><head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #121214; color: #e0e0e0; padding: 24px; margin: 0; }
+          h1 { color: #64B5F6; }
+          h2 { color: #81C784; }
+          p { color: #9e9ea8; line-height: 1.6; }
+          .card { background: #1a1a1e; border: 1px solid #2e2e36; border-radius: 10px; padding: 16px; margin: 12px 0; }
+          code { background: #0f0f12; padding: 2px 6px; border-radius: 4px; font-size: 13px; color: #CE93D8; }
+          button { background: #64B5F6; color: #121214; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; margin: 8px 4px; }
+          button:hover { background: #42A5F5; }
+        </style>
+        </head><body>
+        <h1>✅ 非 OSR 模式 loadHtml 测试</h1>
+        <p>如果你能看到这个页面，说明 <code>loadHtml()</code> 在非 OSR 模式下工作正常！</p>
+        <div class="card">
+          <h2>测试内容</h2>
+          <p>这段 HTML 是通过 <code>webView.loadHtml(html)</code> 直接传入的 HTML 代码字符串，<strong>不是</strong>文件路径。</p>
+          <button onclick="document.getElementById('clickResult').textContent='点击成功！时间: ' + new Date().toLocaleTimeString()">点击测试 JS</button>
+          <div id="clickResult" style="color:#81C784; margin-top:8px; font-family:monospace;">等待点击...</div>
+        </div>
+        <div class="card">
+          <h2>渲染模式</h2>
+          <p>当前使用 <strong>kbhtml:// 自定义 scheme handler</strong> 方式加载 HTML 代码，而非 about:blank + executeJavaScript。</p>
+        </div>
+        </body></html>
+    """.trimIndent() }
+
+    LaunchedEffect(Unit) {
+        webView.loadHtml(htmlInput)
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -1235,14 +1269,23 @@ fun PureNonOsrWebViewScreen() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "非 OSR 模式 (WebGL Aquarium)",
+                text = "非 OSR 模式 - loadHtml 测试",
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp
             )
             Spacer(modifier = Modifier.weight(1f))
+            Button(
+                onClick = { webView.loadHtml(htmlInput) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64B5F6)),
+                shape = RoundedCornerShape(6.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("重新加载 HTML", color = Color(0xFF121214), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.width(12.dp))
             Text(
-                text = "系统原生窗口渲染 - 无法覆盖 Compose UI",
+                text = "系统原生窗口渲染",
                 color = Color.Gray,
                 fontSize = 12.sp
             )

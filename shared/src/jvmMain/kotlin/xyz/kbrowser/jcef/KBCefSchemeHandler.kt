@@ -10,11 +10,12 @@ import org.cef.network.CefRequest
 import org.cef.network.CefResponse
 import java.util.Collections
 import java.util.HashMap
+import java.util.Random
 import java.util.WeakHashMap
 
-class KBCefFileSchemeHandlerFactory : CefSchemeHandlerFactory {
+class KBCefHtmlSchemeHandlerFactory : CefSchemeHandlerFactory {
     companion object {
-        const val FILE_SCHEME_NAME = "file"
+        const val HTML_SCHEME_NAME = "kbhtml"
         val LOADHTML_REQUEST_MAP = WeakHashMap<CefBrowser, MutableMap<String, String>>()
 
         fun getInitMap(browser: CefBrowser): MutableMap<String, String> {
@@ -30,17 +31,20 @@ class KBCefFileSchemeHandlerFactory : CefSchemeHandlerFactory {
             }
             return map!!
         }
+
+        fun registerLoadHTMLRequest(browser: CefBrowser, html: String, origUrl: String): String {
+            val url = "$HTML_SCHEME_NAME://load/${Random().nextInt(Int.MAX_VALUE)}"
+            getInitMap(browser)[url] = html
+            return url
+        }
     }
 
     override fun create(browser: CefBrowser, frame: CefFrame, schemeName: String, request: CefRequest): CefResourceHandler? {
-        if (schemeName != FILE_SCHEME_NAME) return null
+        if (schemeName != HTML_SCHEME_NAME) return null
         val url = request.url ?: return null
         val map = LOADHTML_REQUEST_MAP[browser]
-        if (map != null) {
-            val html = map[url]
-            if (html != null) return KBCefLoadHtmlResourceHandler(html)
-        }
-        return null 
+        val html = map?.get(url)
+        return html?.let { KBCefLoadHtmlResourceHandler(it) }
     }
 }
 
@@ -69,6 +73,7 @@ class KBCefLoadHtmlResourceHandler(html: String) : CefResourceHandlerAdapter() {
             return true
         }
         bytesRead.set(0)
+        stream?.close()
         return false
     }
 }

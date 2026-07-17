@@ -168,17 +168,19 @@ classDiagram
 
 ## 4. Rendering Modes (JVM Desktop)
 
-On JVM, JCEF supports two rendering modes determined at initialization:
+On JVM, JCEF supports two rendering modes determined at initialization. **OSR (`useOsr = true`) is the default** — it is the only mode that supports overlaying Compose UI on top of the browser. Non-OSR is an escape hatch for performance-critical scenarios where you accept that no Compose UI may be drawn over the browser.
+
+### OSR Mode (Off-Screen Rendering, `useOsr = true`) — default
+
+JCEF renders into an off-screen buffer, and the result is painted as a lightweight component. This allows Compose UI to be layered on top of the JCEF view. However, mouse and keyboard events are dispatched to the underlying JCEF native view, not to overlay Compose components. Interactive Compose components placed over the JCEF area will not respond to user input. This is a known issue with low priority.
+
+Per frame, OSR requires a GPU → CPU → GPU pixel round-trip, so it has higher CPU/GPU overhead than non-OSR.
 
 ### Non-OSR Mode (Native Window, `useOsr = false`)
 
-JCEF creates a native heavyweight window component. The browser renders directly through the native window system, providing better performance. However, the heavyweight component renders on top of all lightweight Swing/Compose components, making it impossible to overlay Compose UI on top of the JCEF view.
+JCEF creates a native heavyweight window component. The browser renders directly through the native window system, providing the best performance. However, the heavyweight component renders on top of all lightweight Swing/Compose components, making it impossible to overlay Compose UI on top of the JCEF view.
 
-### OSR Mode (Off-Screen Rendering, `useOsr = true`)
-
-JCEF renders into an off-screen buffer, and the result is painted as a lightweight component. This allows Compose UI to be layered on top of the JCEF view. However, mouse and keyboard events are dispatched to the underlying JCEF native view, not to overlay Compose components. Interactive Compose components placed over the JCEF area will not respond to user input.
-
-This is a known issue with low priority. If you do not need to overlay Compose UI on the browser, use non-OSR mode for better performance and correct event handling.
+**macOS live-resize caveat**: On macOS, browser content does not update while dragging window or splitter edges — it refreshes once the drag is released. This is a CEF + Core Animation architecture limitation (the AWT event queue is blocked and Core Animation does not commit frames during live-resize) that cannot be worked around from Java/AWT. See [jcef-resize-fix-plan.md](jcef-resize-fix-plan.md). Non-OSR is nonetheless a fully supported mode for display and is used in production (e.g. when no Compose overlay is needed and maximum rendering performance is required).
 
 ### Chinese Input in OSR Mode
 
@@ -219,7 +221,7 @@ KBrowser provides two parallel interaction models, clearly separated by naming c
 
 **Initialization Order (JVM must strictly follow)**:
 ```kotlin
-KBrowser.initializeConfig(storageDir = "/path/to/cache", useOsr = false)
+KBrowser.initializeConfig(storageDir = "/path/to/cache", useOsr = true) // default; false only for max performance with no overlay
 runBlocking { initializeKBrowser() }
 application { /* Compose UI */ }
 ```

@@ -21,7 +21,7 @@ fun main() {
     // 1. 配置存储路径与渲染模式
     KBrowser.initializeConfig(
         storageDir = "/path/to/cache",
-        useOsr = false  // 仅在需要在 JCEF 上叠加 Compose UI 时设为 true
+        useOsr = true   // 默认；仅在需要极限性能且不叠加 Compose UI 时设为 false
     )
 
     // 2. 初始化 JCEF 引擎（必须在任何 UI 初始化之前调用）

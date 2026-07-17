@@ -96,14 +96,16 @@ On JVM, JCEF supports two rendering modes. The mode is determined at initializat
 
 | Mode | `useOsr` | Overlay Compose UI | Event Handling | Performance | Chinese Input |
 |------|----------|-------------------|----------------|-------------|---------------|
-| **Non-OSR (Native Window)** | `false` | ❌ Cannot overlay Compose UI on top of JCEF | ✅ Normal | ✅ Better | ✅ Native support |
-| **OSR (Off-Screen Rendering)** | `true` | ✅ Can overlay Compose UI on top of JCEF | ⚠️ Events are dispatched to the underlying JCEF view, not to overlay Compose components | Lower (higher CPU/GPU usage) | ⚠️ Requires JVM args |
+| **OSR (Off-Screen Rendering)** — default | `true` | ✅ Can overlay Compose UI on top of JCEF | ⚠️ Events are dispatched to the underlying JCEF view, not to overlay Compose components | Lower (pixel round-trip) | ⚠️ Requires JVM args |
+| **Non-OSR (Native Window)** | `false` | ❌ Cannot overlay Compose UI on top of JCEF | ✅ Normal | ✅ Best (native window) | ✅ Native support |
 
 **Known Issue (OSR mode)**: In OSR mode, JCEF renders off-screen, allowing Compose UI to be layered on top. However, mouse and keyboard events are received by the underlying JCEF native view, not by the Compose overlay. This means interactive Compose components placed over the JCEF area will not respond to user input. This issue has not been investigated yet and is currently low priority.
 
 **Chinese Input in OSR Mode**: Besides the JVM arguments above, OSR mode also requires focus synchronization for Chinese input — KBrowser handles this internally, no user action needed. For technical details, see the [Architecture Document](docs/KBrowser_Architecture_Design.md).
 
-**Recommendation**: Use non-OSR mode (`useOsr = false`) unless you specifically need to overlay Compose UI on top of the browser. Non-OSR mode provides better rendering performance, correct event handling, and Chinese input without extra configuration.
+**Recommendation**: OSR (`useOsr = true`, the default) is recommended for most applications — it is the only mode that supports overlaying Compose UI on top of the browser. Use non-OSR (`useOsr = false`) only when you need maximum rendering performance and can guarantee no Compose UI is ever drawn on top of the browser view. The API is identical for both modes; only the rendering pipeline differs.
+
+**macOS live-resize caveat (non-OSR)**: In non-OSR mode on macOS, browser content does not update while dragging window or splitter edges — it refreshes once the drag is released. This is a CEF + Core Animation architecture limitation (the AWT event queue is blocked and Core Animation does not commit frames during live-resize) that cannot be worked around from Java/AWT. See [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md).
 
 ---
 
@@ -111,11 +113,11 @@ On JVM, JCEF supports two rendering modes. The mode is determined at initializat
 
 This project includes a full demo application showcasing all KBrowser features.
 
-**Desktop**: On launch, you first choose a rendering mode (OSR / Non-OSR) — this is desktop-specific, since OSR mode has lower performance and requires extra JVM arguments for Chinese input. After selecting OSR, the main page offers:
+**Desktop**: On launch, you first choose a rendering mode (OSR / Non-OSR) — this is desktop-specific, letting you compare the two modes (OSR is the default and supports Compose overlay; non-OSR offers best performance but cannot overlay Compose UI). After selecting OSR, the main page offers:
 - **Browser Mode**: A full multi-tab browser + automation debug panel (AXTree, CDP interactions, screenshots, etc.)
 - **KBWebView Component Demo**: 6 separate pages demonstrating basic browsing, HTML content rendering, JS bidirectional communication, new window & file handling, lifecycle callbacks, and cache management
 
-Selecting Non-OSR directly shows a WebGL scene (demonstrating the limitation that Compose UI cannot be overlaid in Non-OSR mode).
+Selecting Non-OSR directly shows a WebGL scene (demonstrating the limitation that Compose UI cannot be overlaid in non-OSR mode).
 
 **Mobile**: No rendering mode selection (mobile WebView has no OSR concept), goes directly to the feature list. The 6 WebView component demo pages share code with the desktop. The browser automation page shows a warning that some features may not work on mobile.
 
@@ -136,7 +138,7 @@ fun main() {
     // 1. Configure cache directory and rendering mode (must be called once at startup)
     KBrowser.initializeConfig(
         storageDir = "/path/to/cache",
-        useOsr = false  // Set to true only if you need Compose UI overlay on top of JCEF
+        useOsr = true   // default; set to false only for maximum performance with no Compose overlay
     )
 
     // 2. Initialize JCEF engine (suspend function, must be called before any UI)

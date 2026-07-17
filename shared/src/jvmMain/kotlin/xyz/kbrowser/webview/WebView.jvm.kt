@@ -25,7 +25,6 @@ import org.cef.network.CefRequest
 import xyz.kbrowser.jcef.*
 import xyz.kbrowser.webview.debug.KBDebug
 import xyz.kbrowser.webview.debug.KBDebugJvm
-import java.awt.Component
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -37,6 +36,7 @@ import java.awt.event.MouseEvent
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -81,6 +81,10 @@ class JvmWebView(
     private val nativeReady = AtomicBoolean(false)
     private val pendingOps = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
     private val readyLock = Any()
+
+    private val pendingNav = AtomicReference<Runnable?>(null)
+    private val navigationScheduled = AtomicBoolean(false)
+    private var innerListenersInstalled = false
 
     private fun runWhenReady(op: () -> Unit) {
         if (isDestroyed.get()) return
@@ -221,7 +225,7 @@ class JvmWebView(
                     progress.value = 1f
                     loadingState.value = LoadingState.Finished
                     webViewClient?.onPageFinished(b.url ?: "")
-                    
+
                     // 重新注入 JS 回调，因为每次页面加载/刷新后 window 上下文会被重置
                     jsCallbacks.forEach { (name, query) ->
                         val script = """
@@ -401,52 +405,115 @@ class JvmWebView(
                 toRun = pendingOps.toList()
                 pendingOps.clear()
             }
+            SwingUtilities.invokeLater {
+                installInnerViewListenersOnce()
+                syncAndNavigateIfPossible()
+                SwingUtilities.invokeLater { syncAndNavigateIfPossible() }
+            }
             toRun.forEach { op -> try { op() } catch (_: Exception) {} }
         }, "KB-NativeReady-Wait").apply { isDaemon = true }.start()
     }
 
-    override fun loadUrl(url: String) {
-        runWhenReady {
-            if (!isDestroyed.get()) {
-                browser.loadURL(url)
+    private fun installInnerViewListenersOnce() {
+        if (innerListenersInstalled) return
+        innerListenersInstalled = true
+        val inner = cefBrowser.uiComponent ?: return
+        inner.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) {
+                syncAndNavigateIfPossible()
+            }
+            override fun componentShown(e: java.awt.event.ComponentEvent) {
+                syncAndNavigateIfPossible()
+            }
+        })
+        inner.addHierarchyListener { event ->
+            val relevant = java.awt.event.HierarchyEvent.DISPLAYABILITY_CHANGED.toLong() or
+                java.awt.event.HierarchyEvent.SHOWING_CHANGED.toLong() or
+                java.awt.event.HierarchyEvent.PARENT_CHANGED.toLong()
+            if ((event.changeFlags and relevant) != 0L) {
+                syncAndNavigateIfPossible()
             }
         }
     }
 
-    override fun loadHtml(html: String) {
-        runWhenReady {
-            if (!isDestroyed.get()) {
-                // 使用 about:blank + document.write 加载 HTML 字符串，避免 URL 变成 base64 data URI。
-                // 否则 JCEF 弹原生 JS 对话框时会把当前 URL（超长 base64）显示在标题里。
-                browser.loadURL("about:blank")
-                // 等待 about:blank 真正加载完成，避免固定的 50ms 在慢机器上不够导致 document.write 失败。
-                val deadline = System.currentTimeMillis() + 2000
-                while (System.currentTimeMillis() < deadline) {
-                    val ready = try {
-                        cefBrowser.url == "about:blank"
-                    } catch (_: Exception) {
-                        false
-                    }
-                    if (ready) break
-                    try {
-                        Thread.sleep(20)
-                    } catch (e: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        return@runWhenReady
-                    }
-                }
-                val encoded = Base64.getEncoder().encodeToString(html.toByteArray(Charsets.UTF_8))
-                val js = """
-                    (function() {
-                        var html = decodeURIComponent(escape(atob('$encoded')));
-                        document.open();
-                        document.write(html);
-                        document.close();
-                    })();
-                """.trimIndent()
-                cefBrowser.executeJavaScript(js, "about:blank", 0)
+    private fun syncAndNavigateIfPossible() {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            SwingUtilities.invokeLater { syncAndNavigateIfPossible() }
+            return
+        }
+        if (isDestroyed.get()) return
+        if (!nativeReady.get()) return
+
+        val inner = cefBrowser.uiComponent ?: return
+        val outer = browser.getComponent()
+
+        outer.invalidate()
+        outer.doLayout()
+        outer.revalidate()
+        inner.invalidate()
+        inner.doLayout()
+        inner.revalidate()
+
+        val nav = pendingNav.get() ?: return
+
+        if (!inner.isDisplayable || inner.width <= 0 || inner.height <= 0) {
+            scheduleOneRetry()
+            return
+        }
+
+        if (pendingNav.compareAndSet(nav, null)) {
+            SwingUtilities.invokeLater {
+                if (!isDestroyed.get()) nav.run()
             }
         }
+    }
+
+    private fun scheduleOneRetry() {
+        if (!navigationScheduled.compareAndSet(false, true)) return
+        javax.swing.Timer(50) {
+            navigationScheduled.set(false)
+            syncAndNavigateIfPossible()
+        }.apply { isRepeats = false; start() }
+    }
+
+    private fun requestNavigate(op: Runnable) {
+        if (isDestroyed.get()) return
+        pendingNav.set(op)
+        if (!nativeReady.get()) return
+        SwingUtilities.invokeLater { syncAndNavigateIfPossible() }
+    }
+
+    private fun nudgeNativeView() {
+        val inner = cefBrowser.uiComponent ?: return
+        val w = inner.width
+        val h = inner.height
+        if (w <= 0 || h <= 0) return
+        inner.setSize(w - 1, h)
+        SwingUtilities.invokeLater {
+            if (isDestroyed.get()) return@invokeLater
+            inner.setSize(w, h)
+        }
+    }
+
+    override fun loadUrl(url: String) {
+        requestNavigate(Runnable {
+            if (!isDestroyed.get()) {
+                browser.loadURL(url)
+                nudgeNativeView()
+            }
+        })
+    }
+
+    override fun loadHtml(html: String) {
+        requestNavigate(Runnable {
+            if (!isDestroyed.get()) {
+                val kbhtmlUrl = KBCefHtmlSchemeHandlerFactory.registerLoadHTMLRequest(
+                    cefBrowser, html, "about:blank"
+                )
+                browser.loadURL(kbhtmlUrl)
+                nudgeNativeView()
+            }
+        })
     }
 
     // ── 交互锁定 + 鼠标轨迹 + 点击动画渲染（AWT 层）────────────────────────

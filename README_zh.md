@@ -96,14 +96,16 @@ compose.desktop {
 
 | 模式 | `useOsr` | 叠加 Compose UI | 事件响应 | 性能 | 中文输入 |
 |------|----------|-----------------|---------|------|---------|
-| **非 OSR（原生窗口）** | `false` | ❌ 无法在 JCEF 上叠加 Compose UI | ✅ 正常 | ✅ 较优 | ✅ 原生支持 |
-| **OSR（离屏渲染）** | `true` | ✅ 可在 JCEF 上叠加 Compose UI | ⚠️ 事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应 | 较低（CPU/GPU 占用更高） | ⚠️ 需配置 JVM 参数 |
+| **OSR（离屏渲染）** — 默认 | `true` | ✅ 可在 JCEF 上叠加 Compose UI | ⚠️ 事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应 | 较低（像素往返开销） | ⚠️ 需配置 JVM 参数 |
+| **非 OSR（原生窗口）** | `false` | ❌ 无法在 JCEF 上叠加 Compose UI | ✅ 正常 | ✅ 最佳（原生窗口） | ✅ 原生支持 |
 
 **已知问题（OSR 模式）**：在 OSR 模式下，JCEF 离屏渲染，允许 Compose UI 层叠在其上。但鼠标和键盘事件会被底层 JCEF 原生视图接收，而非上层 Compose 组件。这意味着放置在 JCEF 区域上方的交互式 Compose 组件不会响应用户输入。此问题尚未开始研究，目前优先级较低。
 
 **OSR 模式下的中文输入**：除上述 JVM 参数外，OSR 模式还需要焦点同步才能输入中文——KBrowser 内部已自动处理，无需用户操作。技术细节见[架构文档](docs/KBrowser_Architecture_Design_zh.md)。
 
-**建议**：除非明确需要在浏览器上方叠加 Compose UI，否则应使用非 OSR 模式（`useOsr = false`）。非 OSR 模式提供更好的渲染性能，且 JCEF 视图本身的事件处理正常，中文输入也无需额外配置。
+**建议**：默认使用 OSR 模式（`useOsr = true`）——这是唯一支持在浏览器上方叠加 Compose UI 的模式。仅在需要极限渲染性能、且能保证绝不在浏览器视图上方绘制任何 Compose UI 时，才使用非 OSR 模式（`useOsr = false`）。两种模式的 API 完全一致，仅渲染管线不同。
+
+**macOS 实时缩放限制（非 OSR）**：在 macOS 的非 OSR 模式下，拖拽窗口或分隔条边框时浏览器内容不会实时更新——松开后才会刷新。这是 CEF + Core Animation 的架构限制（live-resize 期间 AWT 事件队列被阻塞，Core Animation 不提交帧），无法从 Java/AWT 侧绕过。详见 [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md)。
 
 ---
 
@@ -111,7 +113,7 @@ compose.desktop {
 
 本项目附带一个完整的 Demo 应用，展示 KBrowser 的全部功能。
 
-**桌面端**：启动后首先选择渲染模式（OSR / Non-OSR），这是桌面端特有的步骤——因为 OSR 模式性能较低且需要额外 JVM 参数才能输入中文。选择 OSR 后进入主页面，包含：
+**桌面端**：启动后首先选择渲染模式（OSR / Non-OSR），这是桌面端特有的步骤，用于对比两种模式（OSR 为默认模式，支持 Compose 叠加；非 OSR 性能最佳但无法叠加 Compose UI）。选择 OSR 后进入主页面，包含：
 - **浏览器模式**：完整的多标签页浏览器 + 自动化调试面板（AXTree、CDP 交互、截图等）
 - **KBWebView 组件演示**：6 个独立页面分别演示基础浏览、HTML 内容渲染、JS 双向通信、新窗口与文件处理、生命周期回调、缓存管理
 
@@ -136,7 +138,7 @@ fun main() {
     // 1. 配置缓存目录与渲染模式（必须在启动时确定，不可更改）
     KBrowser.initializeConfig(
         storageDir = "/path/to/cache",
-        useOsr = false  // 仅在需要在 JCEF 上叠加 Compose UI 时设为 true
+        useOsr = true   // 默认；仅在需要极限性能且不叠加 Compose UI 时设为 false
     )
 
     // 2. 初始化 JCEF 引擎（挂起函数，必须在任何 UI 初始化之前调用）
