@@ -23,6 +23,7 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
             isFocusable = false
             // 启用 IME 作为安全网（当焦点意外落在此 JPanel 时仍能处理 IME 事件）
             enableInputMethods(true)
+            background = java.awt.Color.BLACK
         }
 
         override fun getPreferredSize(): Dimension {
@@ -98,5 +99,20 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
 
     fun loadURL(url: String) {
         myCefBrowser.loadURL(url)
+    }
+
+    /**
+     * 设置浏览器背景色，同时作用于：
+     * - 外层 Swing 容器 myComponent（非 OSR 模式下用户能直接看到的底色）
+     * - 内层 KBCefOsrComponent（OSR 模式下的渲染底色）
+     * 必须在 EDT 上调用，因为涉及 Swing 组件属性修改。
+     */
+    fun setBrowserBackgroundColor(color: java.awt.Color) {
+        if (!javax.swing.SwingUtilities.isEventDispatchThread()) {
+            javax.swing.SwingUtilities.invokeLater { setBrowserBackgroundColor(color) }
+            return
+        }
+        myComponent.background = color
+        findOsrComponent()?.background = color
     }
 }

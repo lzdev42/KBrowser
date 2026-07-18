@@ -2,6 +2,7 @@ package xyz.kbrowser.webview
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.flow.StateFlow
 import xyz.kbrowser.webview.debug.KBDebug
 
@@ -79,6 +80,13 @@ interface KBWebView {
 
     // 网页截图，截图像素与 CSS 坐标 1:1 对齐
     suspend fun takeScreenshot(): KBScreenshot?
+
+    /**
+     * 网页背景色，默认黑色。
+     * JVM Desktop: 同时设置外层 Swing 容器和 CEF 渲染层底色（OSR/非 OSR 都生效）。
+     * Android/iOS: 空实现属性，底层由 WebView 自身的 CSS 决定。
+     */
+    var backgroundColor: Color
 
     /**
      * 新窗口/新标签页请求回调。

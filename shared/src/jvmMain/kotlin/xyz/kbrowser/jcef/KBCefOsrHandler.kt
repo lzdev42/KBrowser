@@ -14,9 +14,9 @@ import java.awt.image.DataBufferInt
 import java.awt.image.VolatileImage
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JComponent
+import javax.swing.RepaintManager
 import javax.swing.SwingUtilities
 import javax.swing.Timer
 import kotlin.math.ceil
@@ -54,20 +54,10 @@ open class KBCefOsrHandler(
         protected set
 
     private val myLocationOnScreenRef = AtomicReference(Point())
+    @Volatile
     private var myResizePusherAlarm: Timer? = null
     private var resizePushStarted: Long = 0
     private val RESIZE_PUSHER_TIMEOUT_MS: Long = 2000
-
-    /**
-     * onPaint 尺寸不匹配兜底节流字段。
-     *
-     * onPaint 在 CEF 渲染线程高频回调，若每次 mismatch 都直接 wasResized 会高频
-     * 触发 native 调用，存在崩溃风险。这里用时间节流（与 reshape 的 100ms 一致）
-     * + pending 标志（防止 invokeLater 在 EDT 堆积）双重保护。
-     */
-    private val myLastFallbackWasResizedMs = AtomicLong(0L)
-    @Volatile private var myFallbackResizePending = false
-    private val FALLBACK_RESIZE_THROTTLE_MS: Long = 100L
 
     /**
      * IME 光标监听器，用于将 CEF 的 OnImeCompositionRangeChanged/OnTextSelectionChanged
@@ -133,11 +123,6 @@ open class KBCefOsrHandler(
         val h = rect.height * pixelDensity
         if (w != width.toDouble() || h != height.toDouble()) {
             startResizePusher(browser, false)
-            // 兜底：尺寸不匹配时，除 invalidate 外，节流地再触发一次 wasResized。
-            // 仅 invalidate 只会重绘当前帧，不会让 CEF 重新读 viewRect 做自适应布局；
-            // 必须由 wasResized 才能推动 CEF 重新 layout。这能兜住 reshape 节流窗口
-            // 内或任何时序遗漏导致的视口不同步。节流到 100ms + pending 防堆积。
-            scheduleFallbackWasResized(browser)
         } else {
             stopResizePusher()
         }
@@ -159,8 +144,18 @@ open class KBCefOsrHandler(
 
         myContentOutdated = true
         SwingUtilities.invokeLater {
-            if (!browser.uiComponent.isShowing) return@invokeLater
-            browser.uiComponent.repaint()
+            val comp = browser.uiComponent
+            if (!comp.isShowing) return@invokeLater
+            val root = SwingUtilities.getRootPane(comp)
+            if (root != null) {
+                val rm = RepaintManager.currentManager(root)
+                val dirtySrc = Rectangle(0, 0, comp.width, comp.height)
+                val dirtyDst = SwingUtilities.convertRectangle(comp, dirtySrc, root)
+                val dx = 1
+                rm.addDirtyRegion(root, dirtyDst.x - dx, dirtyDst.y - dx, dirtyDst.width + dx * 2, dirtyDst.height + dx * 2)
+            } else {
+                comp.repaint()
+            }
         }
     }
 
@@ -225,9 +220,11 @@ open class KBCefOsrHandler(
         frameSize ?: return
         var vi = myVolatileImage
 
+        // BufferedImage 是物理像素，VolatileImage 需要用逻辑像素尺寸创建，
+        // 这样 g.drawImage(vi, 0, 0, component.width, component.height, null) 在 HiDPI 下才正确。
         val scale = if (pixelDensity > 0.0) pixelDensity else 1.0
-        val logicalW = (frameSize.width / scale).toInt()
-        val logicalH = (frameSize.height / scale).toInt()
+        val logicalW = (frameSize.width / scale).toInt().coerceAtLeast(1)
+        val logicalH = (frameSize.height / scale).toInt().coerceAtLeast(1)
 
         do {
             val contentOutdated = myContentOutdated
@@ -239,13 +236,11 @@ open class KBCefOsrHandler(
             }
 
             when (vi!!.validate(g.deviceConfiguration)) {
-                VolatileImage.IMAGE_RESTORED -> {
-                    notifyFullRepaintRequired()
-                    drawVolatileImage(vi)
-                }
+                VolatileImage.IMAGE_RESTORED -> drawVolatileImage(vi)
                 VolatileImage.IMAGE_INCOMPATIBLE -> vi = createVolatileImage(g, logicalW, logicalH)
             }
 
+            // drawImage 到组件尺寸：稳态时 1:1，resize 过渡期拉伸跟手
             g.drawImage(vi, 0, 0, component.width, component.height, null)
         } while (vi.contentsLost())
 
@@ -269,6 +264,7 @@ open class KBCefOsrHandler(
             g.composite = AlphaComposite.Src
             g.clearRect(0, 0, vi.width, vi.height)
             if (image != null) {
+                // BufferedImage 是物理像素，缩放到 VolatileImage 的逻辑尺寸（由 Graphics DPI transform 处理设备像素映射）
                 g.drawImage(image, 0, 0, vi.width, vi.height, null)
             }
         } finally {
@@ -283,7 +279,6 @@ open class KBCefOsrHandler(
         gimg.composite = AlphaComposite.Src
         gimg.clearRect(0, 0, image.width, image.height)
         gimg.dispose()
-        notifyFullRepaintRequired()
         drawVolatileImage(image)
         return image
     }
@@ -294,36 +289,11 @@ open class KBCefOsrHandler(
         return Color(image.getRGB(x, y), true)
     }
 
-    open fun notifyFullRepaintRequired() {}
-
     fun startResizePusher(browser: CefBrowser, resetTimeout: Boolean) {
         SwingUtilities.invokeLater {
             if (component.isShowing) {
                 startResizePusherImpl(browser, resetTimeout)
             }
-        }
-    }
-
-    /**
-     * onPaint 尺寸不匹配时的兜底 wasResized 触发（节流到 EDT）。
-     *
-     * 设计要点：
-     * - onPaint 在 CEF 渲染线程高频回调，直接 wasResized 有崩溃风险，必须转 EDT。
-     * - [myFallbackResizePending] 防止 invokeLater 在 EDT 队列堆积；已有一份待执行时跳过。
-     * - [myLastFallbackWasResizedMs] 时间节流（100ms），与 reshape 节流窗口对齐，
-     *   避免与 KBCefOsrComponent.reshape 的节流逻辑产生竞争或过度触发。
-     * - 组件未显示时跳过，避免向 CEF 传入无意义尺寸。
-     */
-    private fun scheduleFallbackWasResized(browser: CefBrowser) {
-        val now = System.currentTimeMillis()
-        if (now - myLastFallbackWasResizedMs.get() < FALLBACK_RESIZE_THROTTLE_MS) return
-        if (myFallbackResizePending) return
-        myFallbackResizePending = true
-        myLastFallbackWasResizedMs.set(now)
-        SwingUtilities.invokeLater {
-            myFallbackResizePending = false
-            if (!component.isShowing) return@invokeLater
-            browser.wasResized(0, 0)
         }
     }
 
@@ -348,6 +318,8 @@ open class KBCefOsrHandler(
     }
 
     fun stopResizePusher() {
+        // CEF 渲染线程预检查：pusher 已停止时不排 invokeLater，避免稳态每帧无用 EDT 排队
+        if (myResizePusherAlarm == null) return
         SwingUtilities.invokeLater {
             myResizePusherAlarm?.stop()
             myResizePusherAlarm = null

@@ -16,25 +16,18 @@ import java.util.WeakHashMap
 class KBCefHtmlSchemeHandlerFactory : CefSchemeHandlerFactory {
     companion object {
         const val HTML_SCHEME_NAME = "kbhtml"
-        val LOADHTML_REQUEST_MAP = WeakHashMap<CefBrowser, MutableMap<String, String>>()
+        private val LOADHTML_REQUEST_MAP = WeakHashMap<CefBrowser, MutableMap<String, String>>()
 
-        fun getInitMap(browser: CefBrowser): MutableMap<String, String> {
-            var map = LOADHTML_REQUEST_MAP[browser]
-            if (map == null) {
-                synchronized(LOADHTML_REQUEST_MAP) {
-                    map = LOADHTML_REQUEST_MAP[browser]
-                    if (map == null) {
-                        map = Collections.synchronizedMap(HashMap<String, String>())
-                        LOADHTML_REQUEST_MAP[browser] = map
-                    }
-                }
-            }
-            return map!!
-        }
-
-        fun registerLoadHTMLRequest(browser: CefBrowser, html: String, origUrl: String): String {
+        fun registerLoadHTMLRequest(browser: CefBrowser, html: String): String {
             val url = "$HTML_SCHEME_NAME://load/${Random().nextInt(Int.MAX_VALUE)}"
-            getInitMap(browser)[url] = html
+            synchronized(LOADHTML_REQUEST_MAP) {
+                var map = LOADHTML_REQUEST_MAP[browser]
+                if (map == null) {
+                    map = Collections.synchronizedMap(HashMap<String, String>())
+                    LOADHTML_REQUEST_MAP[browser] = map
+                }
+                map[url] = html
+            }
             return url
         }
     }
@@ -42,8 +35,7 @@ class KBCefHtmlSchemeHandlerFactory : CefSchemeHandlerFactory {
     override fun create(browser: CefBrowser, frame: CefFrame, schemeName: String, request: CefRequest): CefResourceHandler? {
         if (schemeName != HTML_SCHEME_NAME) return null
         val url = request.url ?: return null
-        val map = LOADHTML_REQUEST_MAP[browser]
-        val html = map?.get(url)
+        val html = LOADHTML_REQUEST_MAP[browser]?.get(url)
         return html?.let { KBCefLoadHtmlResourceHandler(it) }
     }
 }

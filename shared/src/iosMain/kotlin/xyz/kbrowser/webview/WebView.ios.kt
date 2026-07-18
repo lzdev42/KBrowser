@@ -2,6 +2,7 @@ package xyz.kbrowser.webview
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import xyz.kbrowser.webview.debug.KBDebug
@@ -187,6 +188,8 @@ class IosWebView(
     override val progress = MutableStateFlow(0f)
     override val canGoBack = MutableStateFlow(false)
     override val canGoForward = MutableStateFlow(false)
+
+    override var backgroundColor: Color = Color.Black
 
     private var webView: WKWebView? = null
     internal var webViewClient: KBWebViewClient? = null

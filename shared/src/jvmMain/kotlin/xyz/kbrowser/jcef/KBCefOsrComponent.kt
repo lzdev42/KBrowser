@@ -54,7 +54,7 @@ class KBCefOsrComponent : JPanel() {
 
     init {
         preferredSize = Dimension(800, 600)
-        background = Color.WHITE
+        background = Color.BLACK
 
         enableEvents(
             AWTEvent.KEY_EVENT_MASK or

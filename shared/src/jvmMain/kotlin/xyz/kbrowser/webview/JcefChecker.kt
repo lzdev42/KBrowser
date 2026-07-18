@@ -1,5 +1,6 @@
 package xyz.kbrowser.webview
 
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import xyz.kbrowser.webview.debug.KBDebug
@@ -25,6 +26,8 @@ class FallbackWebView(initialUrl: String) : KBWebView {
     override val progress = MutableStateFlow(1f)
     override val canGoBack = MutableStateFlow(false)
     override val canGoForward = MutableStateFlow(false)
+
+    override var backgroundColor: Color = Color.Black
 
     override fun loadUrl(url: String) {
         currentUrl.value = url

@@ -10,6 +10,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -32,6 +34,12 @@ class AndroidWebView(
     override val progress = MutableStateFlow(0f)
     override val canGoBack = MutableStateFlow(false)
     override val canGoForward = MutableStateFlow(false)
+
+    override var backgroundColor: Color = Color.Black
+        set(value) {
+            field = value
+            webView?.setBackgroundColor(value.toArgb())
+        }
 
     private var webView: WebView? = null
     private var webViewClient: KBWebViewClient? = null

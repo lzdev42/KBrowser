@@ -78,6 +78,9 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         // JCEF Settings
         settings.windowless_rendering_enabled = xyz.kbrowser.webview.KBrowser.useOsrMode
         settings.log_severity = CefSettings.LogSeverity.LOGSEVERITY_INFO
+
+        // 默认背景色黑色（在网页渲染前 CEF 使用的底色）
+        settings.background_color = settings.ColorType(0, 0, 0, 255)
         
         // Ensure Alloy rendering mode by disabling Chrome Runtime
         try {

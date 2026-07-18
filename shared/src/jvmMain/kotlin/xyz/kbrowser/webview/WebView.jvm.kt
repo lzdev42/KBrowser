@@ -3,6 +3,7 @@ package xyz.kbrowser.webview
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.cef.network.CefCookieManager
@@ -78,6 +79,7 @@ class JvmWebView(
     private val isDestroyed = AtomicBoolean(false)
     private var headlessFrame: javax.swing.JFrame? = null
 
+
     private val nativeReady = AtomicBoolean(false)
     private val pendingOps = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
     private val readyLock = Any()
@@ -107,6 +109,18 @@ class JvmWebView(
 
     override val canGoBack = MutableStateFlow(false)
     override val canGoForward = MutableStateFlow(false)
+
+    override var backgroundColor: Color = Color.Black
+        set(value) {
+            field = value
+            val awtColor = java.awt.Color(
+                (value.red * 255).toInt(),
+                (value.green * 255).toInt(),
+                (value.blue * 255).toInt(),
+                (value.alpha * 255).toInt()
+            )
+            browser.setBrowserBackgroundColor(awtColor)
+        }
 
     override val debug: KBDebug by lazy { KBDebugJvm(cefBrowser, browser.myCefClient) }
 
@@ -507,9 +521,7 @@ class JvmWebView(
     override fun loadHtml(html: String) {
         requestNavigate(Runnable {
             if (!isDestroyed.get()) {
-                val kbhtmlUrl = KBCefHtmlSchemeHandlerFactory.registerLoadHTMLRequest(
-                    cefBrowser, html, "about:blank"
-                )
+                val kbhtmlUrl = KBCefHtmlSchemeHandlerFactory.registerLoadHTMLRequest(cefBrowser, html)
                 browser.loadURL(kbhtmlUrl)
                 nudgeNativeView()
             }
