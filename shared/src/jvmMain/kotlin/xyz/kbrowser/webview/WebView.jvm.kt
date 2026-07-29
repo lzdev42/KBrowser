@@ -1,5 +1,7 @@
 package xyz.kbrowser.webview
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
@@ -1766,12 +1768,16 @@ object JcefWebViewRender {
     fun render(webView: KBWebView, modifier: Modifier) {
         val jvmWebView = webView as? JvmWebView ?: return
 
-        SwingPanel(
-            factory = {
-                jvmWebView.browser.getComponent()
-            },
-            modifier = modifier
-        )
+        androidx.compose.foundation.layout.Box(
+            modifier = modifier.background(androidx.compose.ui.graphics.Color.Black)
+        ) {
+            SwingPanel(
+                factory = {
+                    jvmWebView.browser.getComponent()
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 

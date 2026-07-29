@@ -25,7 +25,7 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
     val myCefClient: KBCefClient = builder.myClient ?: KBCefApp.getInstance().createClient()
     protected val myCefBrowser: CefBrowser
     private val myDefaultCefClient: Boolean = builder.myClient == null
-    private val myIsOffScreenRendering: Boolean = builder.myIsOffScreenRendering
+    protected val myIsOffScreenRendering: Boolean = builder.myIsOffScreenRendering
     private val myIsDisposed = AtomicBoolean(false)
 
     init {

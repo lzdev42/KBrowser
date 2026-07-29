@@ -13,7 +13,7 @@ English | [简体中文](README_zh.md)
 
 **KBrowser** is a Kotlin Multiplatform library that provides:
 
-1. **`KBWebView`** — A cross-platform WebView UI component for Android, iOS, and Desktop (JVM). It is a pure WebView abstraction with a unified API similar to `WKWebView` / Android `WebView`.
+1. **`KBWebView`** — A cross-platform WebView UI component for Android, iOS, Desktop (JVM), and WasmJs (Browser). It is a pure WebView abstraction with a unified API similar to `WKWebView` / Android `WebView`.
 2. **`KBPage`** — A Playwright-inspired browser automation wrapper around `KBWebView` for Desktop (JVM). Built on Chrome DevTools Protocol (CDP), it provides AXTree extraction, CSP-safe element location, anti-detection physical clicks, screenshot capture, and coroutine-based thread safety.
 
 ---
@@ -23,10 +23,11 @@ English | [简体中文](README_zh.md)
 | Platform | KBWebView UI | KBPage Automation | Test Status |
 |----------|-------------|-------------------|-------------|
 | **Desktop (JVM)** | ✅ | ✅ Primary target | ✅ Actively tested |
+| **WasmJs (Browser)** | ✅ | ❌ | ⚠️ Experimental |
 | Android | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
 | iOS | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
 
-> Automation features (AXTree, CDP-based interactions, screenshots) are Desktop-only. On Android and iOS, `KBLocator` falls back to JS injection.
+> Automation features (AXTree, CDP-based interactions, screenshots) are Desktop-only. On Android and iOS, `KBLocator` falls back to JS injection. On WasmJs, `KBWebView` renders via an HTML `<iframe>` overlay on top of the Compose canvas; automation APIs are not yet implemented.
 
 ---
 
@@ -48,6 +49,14 @@ Package: JDK + JCEF
 | Android | API 34 (Android 14) |
 | iOS | iOS 17.0+ |
 
+### WasmJs (Browser)
+
+Requires Chrome 103+ (or any browser supporting the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)). The app requests permission to enumerate and load all system fonts at startup. If the user denies font access, a modal dialog blocks entry until permission is granted.
+
+**Chrome vs other browsers:**
+- **Chrome 103+**: Full support. The browser prompts for font access permission. All system fonts are enumerated via `queryLocalFonts()` and loaded into Skia for rendering.
+- **Safari / Firefox / others**: The Local Font Access API is not supported. The app shows a "未授权使用字体" (font access denied) modal and cannot proceed.
+
 ---
 
 ## Setup
@@ -58,7 +67,7 @@ In `gradle/libs.versions.toml`:
 
 ```toml
 [versions]
-kbrowser = "0.1.0-alpha31"
+kbrowser = "0.1.0-alpha45"
 
 [libraries]
 kbrowser = { module = "io.github.lzdev42:kbrowser", version.ref = "kbrowser" }
@@ -120,6 +129,8 @@ This project includes a full demo application showcasing all KBrowser features.
 Selecting Non-OSR directly shows a WebGL scene (demonstrating the limitation that Compose UI cannot be overlaid in non-OSR mode).
 
 **Mobile**: No rendering mode selection (mobile WebView has no OSR concept), goes directly to the feature list. The 6 WebView component demo pages share code with the desktop. The browser automation page shows a warning that some features may not work on mobile.
+
+**WasmJs (Browser)**: On launch, the app requests Local Font Access permission. Once granted, all system fonts are loaded into Skia and the main UI renders. The `KBWebView` component uses an HTML `<iframe>` overlay positioned on top of the Compose canvas. WebView demo pages (basic browsing, HTML content, JS communication) are available; automation features are not yet supported.
 
 ---
 

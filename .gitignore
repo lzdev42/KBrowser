@@ -69,3 +69,9 @@ iosApp/iosApp.xcodeproj/xcuserdata/
 hs_err_pid*
 replay_pid*axtree_*.txt
 axtree_*.json
+
+# Native libraries (JCEF etc.)
+lib/
+
+# composeResources generated
+*/build/generated/

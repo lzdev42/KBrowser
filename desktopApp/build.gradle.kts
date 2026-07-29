@@ -201,3 +201,16 @@ tasks.register<JavaExec>("runKBDebugTest") {
     )
     workingDir = rootProject.projectDir
 }
+
+tasks.register<JavaExec>("runOsrSizeRawTest") {
+    group = "application"
+    mainClass.set("xyz.kbrowser.webview.OsrSizeRawTestKt")
+    val compileKotlin = tasks.named("compileKotlin")
+    classpath = files(compileKotlin, sourceSets.main.get().runtimeClasspath)
+    jvmArgs(
+        "--enable-native-access=jcef",
+        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+    )
+    workingDir = rootProject.projectDir
+}

@@ -13,7 +13,7 @@
 
 **KBrowser** 是一个 Kotlin Multiplatform 库，提供：
 
-1. **`KBWebView`** — 跨平台 WebView UI 组件，支持 Android、iOS 和 Desktop (JVM)。它是纯净的 WebView 抽象，API 风格对齐 `WKWebView` 与 Android `WebView`。
+1. **`KBWebView`** — 跨平台 WebView UI 组件，支持 Android、iOS、Desktop (JVM) 和 WasmJs (浏览器)。它是纯净的 WebView 抽象，API 风格对齐 `WKWebView` 与 Android `WebView`。
 2. **`KBPage`** — 面向 Desktop (JVM) 的 Playwright 风格浏览器自动化封装，基于 Chrome DevTools Protocol (CDP)。提供 AXTree 语义树提取、CSP 安全元素定位、防检测物理点击、截图捕获以及基于协程的线程安全保障。
 
 ---
@@ -23,10 +23,11 @@
 | 平台 | KBWebView UI | KBPage 自动化 | 测试状态 |
 |------|-------------|--------------|---------|
 | **Desktop (JVM)** | ✅ | ✅ 主要目标 | ✅ 持续测试中 |
+| **WasmJs (浏览器)** | ✅ | ❌ | ⚠️ 实验性 |
 | Android | ✅ | ⚠️ 部分（JS 降级） | ❌ 未测试 |
 | iOS | ✅ | ⚠️ 部分（JS 降级） | ❌ 未测试 |
 
-> 自动化功能（AXTree、基于 CDP 的交互、截图）目前仅限 Desktop 平台。在 Android 和 iOS 上，`KBLocator` 降级为 JS 注入方式。
+> 自动化功能（AXTree、基于 CDP 的交互、截图）目前仅限 Desktop 平台。在 Android 和 iOS 上，`KBLocator` 降级为 JS 注入方式。WasmJs 平台的 `KBWebView` 通过在 Compose Canvas 上叠加 HTML `<iframe>` 实现，自动化 API 尚未实现。
 
 ---
 
@@ -48,6 +49,14 @@ Package: JDK + JCEF
 | Android | API 34 (Android 14) |
 | iOS | iOS 17.0+ |
 
+### WasmJs（浏览器）
+
+需要 Chrome 103+（或任何支持 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) 的浏览器）。应用启动时会申请枚举并加载系统所有字体的权限。如果用户拒绝字体授权，模态窗会阻止进入应用，直到用户授权。
+
+**Chrome 与其他浏览器的区别：**
+- **Chrome 103+**：完整支持。浏览器会弹出字体访问权限请求。通过 `queryLocalFonts()` 枚举所有系统字体并加载到 Skia 渲染引擎。
+- **Safari / Firefox / 其他**：不支持 Local Font Access API，应用会显示"未授权使用字体"模态窗，无法进入。
+
 ---
 
 ## 配置
@@ -58,7 +67,7 @@ Package: JDK + JCEF
 
 ```toml
 [versions]
-kbrowser = "0.1.0-alpha31"
+kbrowser = "0.1.0-alpha45"
 
 [libraries]
 kbrowser = { module = "io.github.lzdev42:kbrowser", version.ref = "kbrowser" }
@@ -120,6 +129,8 @@ compose.desktop {
 选择 Non-OSR 后直接展示 WebGL 场景（直观演示 Non-OSR 模式下无法叠加 Compose UI 的限制）。
 
 **移动端**：无渲染模式选择（移动端 WebView 不存在 OSR 概念），直接进入功能列表。6 个 WebView 组件演示页面与桌面端共享代码。浏览器自动化页面标注了警告：移动端部分功能可能不可用。
+
+**WasmJs（浏览器）**：启动时申请 Local Font Access 字体访问权限，授权后所有系统字体加载到 Skia 引擎并渲染主界面。`KBWebView` 组件使用叠加在 Compose Canvas 上的 HTML `<iframe>` 实现。可使用 WebView 演示页面（基础浏览、HTML 内容、JS 通信），自动化功能暂不支持。
 
 ---
 

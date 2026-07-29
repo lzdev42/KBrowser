@@ -65,9 +65,11 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
                 true
             }
             // 启用/禁用 Remote 模式和离屏渲染
+            // OSR 模式下启用 remote（独立 JCEF 进程），非 OSR 模式下不启用
+            // 注：IDEA 默认不启用 remote，但 KBrowser 历史 behavior 是 OSR + remote
             val useOsr = xyz.kbrowser.webview.KBrowser.useOsrMode
             CefApp.setIsRemoteEnabled(useOsr)
-            println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: $useOsr (config reported: $isRemote)")
+            println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: $useOsr")
         } catch (e: Throwable) {
             println("[KBCefApp] Failed to set remote mode: ${e.message}")
         }
@@ -78,6 +80,12 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         // JCEF Settings
         settings.windowless_rendering_enabled = xyz.kbrowser.webview.KBrowser.useOsrMode
         settings.log_severity = CefSettings.LogSeverity.LOGSEVERITY_INFO
+
+        // 与 IDEA 对齐：macOS 从 java 进程启动时禁用 sandbox（否则 dlopen 会失败）
+        // 参考 IDEA SettingsHelper.loadSettings() 第 92-100 行
+        if (System.getProperty("os.name").lowercase().contains("mac")) {
+            settings.no_sandbox = true
+        }
 
         // 默认背景色黑色（在网页渲染前 CEF 使用的底色）
         settings.background_color = settings.ColorType(0, 0, 0, 255)
