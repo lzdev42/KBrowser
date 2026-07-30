@@ -15,56 +15,72 @@ import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.readResourceBytes
 import kotlin.io.encoding.Base64
 
+enum class FontMode {
+    /** Chrome only: uses queryLocalFonts(), no bundled fonts. Non-Chrome browsers get no fonts. */
+    CHROME_ONLY,
+
+    /** Chrome first, falls back to bundled fonts on non-Chrome. Default. */
+    CHROME_WITH_FALLBACK,
+
+    /** Only uses bundled fonts, never calls queryLocalFonts(). No permission prompt. */
+    CUSTOM_ONLY,
+}
+
 /**
- * Loads system fonts into Skia for correct text rendering on WasmJs.
+ * Loads fonts into Skia for correct text rendering on WasmJs.
  *
- * On Chrome 103+, uses the Local Font Access API to enumerate and load all system fonts.
- * On other browsers (Safari, Firefox), loads developer-provided font files from Compose resources.
+ * Automatically discovers bundled fonts from composeResources/font/ via the
+ * GenerateFontPaths Gradle task. No manual font path listing needed.
  *
- * @param fontResourcePaths List of resource paths to font files (e.g. "font/NotoSansSC.ttf")
- *   placed under `composeResources/` in commonMain. Used as fallback for non-Chrome browsers.
- *   Ignored on Chrome 103+ where system fonts are available.
+ * @param mode Font loading strategy. Defaults to [FontMode.CHROME_WITH_FALLBACK].
+ * @param fontResourcePaths Additional font paths to load (beyond auto-discovered ones).
+ *   Paths are relative to composeResources/, e.g. "font/MyFont.ttf".
  *
- * Example:
+ * ## Usage
+ *
+ * Apply the font-paths plugin in build.gradle.kts:
  * ```
- * // Place font files at:
- * //   src/commonMain/composeResources/font/NotoSansSC.ttf
+ * plugins {
+ *     id("xyz.kbrowser.font-paths")
+ * }
+ * kbrowserFontPaths {
+ *     packageName.set("com.example.app")
+ * }
+ * ```
  *
- * // wasmJsMain:
+ * Place font files under `src/commonMain/composeResources/font/`.
+ *
+ * In wasmJsMain:
+ * ```kotlin
  * ComposeViewport {
- *     WithFontResourcesLoaded(
- *         fontResourcePaths = listOf("font/NotoSansSC.ttf")
- *     ) {
- *         App()
- *     }
+ *     WithFontResourcesLoaded { App() }  // CHROME_WITH_FALLBACK by default
  * }
  * ```
  */
 @Composable
 fun WithFontResourcesLoaded(
-    vararg fontResourcePaths: String,
-    content: @Composable () -> Unit
-) {
-    WithFontResourcesLoaded(fontResourcePaths.toList(), content)
-}
-
-/**
- * Loads system fonts into Skia for correct text rendering on WasmJs.
- *
- * Chrome 103+: uses Local Font Access API to load all system fonts (any language).
- * Non-Chrome: loads developer-provided [fontResourcePaths] into Skia.
- * Non-Chrome with empty [fontResourcePaths]: proceeds without extra fonts.
- */
-@Composable
-fun WithFontResourcesLoaded(
+    mode: FontMode = FontMode.CHROME_WITH_FALLBACK,
     fontResourcePaths: List<String> = emptyList(),
     content: @Composable () -> Unit
 ) {
+    val allPaths = fontResourcePaths + tryGetGeneratedPaths()
     var state by remember { mutableStateOf(FontAccessState.Loading) }
     val resolver = androidx.compose.ui.platform.LocalFontFamilyResolver.current
 
-    LaunchedEffect(Unit) {
-        startFontAccessFlow()
+    LaunchedEffect(mode, allPaths) {
+        when (mode) {
+            FontMode.CHROME_ONLY -> {
+                startChromeFontAccess()
+            }
+            FontMode.CUSTOM_ONLY -> {
+                loadCustomFonts(allPaths, resolver)
+                state = FontAccessState.Granted
+            }
+            FontMode.CHROME_WITH_FALLBACK -> {
+                startChromeFontAccess()
+            }
+        }
+
         while (state == FontAccessState.Loading) {
             delay(80)
             when (readFontStatus()) {
@@ -84,17 +100,17 @@ fun WithFontResourcesLoaded(
                     state = FontAccessState.Granted
                 }
                 3 -> {
-                    for (path in fontResourcePaths) {
-                        try {
-                            val bytes = readResourceBytes("composeResources/$path")
-                            val familyName = path.substringAfterLast("/").substringBeforeLast(".")
-                            val font = Font(familyName, bytes, FontWeight.Normal, FontStyle.Normal)
-                            resolver.preload(FontFamily(font))
-                        } catch (e: Throwable) {}
-                    }
+                    loadCustomFonts(allPaths, resolver)
                     state = FontAccessState.Granted
                 }
-                2 -> state = FontAccessState.Denied
+                2 -> {
+                    if (mode == FontMode.CHROME_WITH_FALLBACK) {
+                        loadCustomFonts(allPaths, resolver)
+                        state = FontAccessState.Granted
+                    } else {
+                        state = FontAccessState.Denied
+                    }
+                }
             }
         }
     }
@@ -102,14 +118,35 @@ fun WithFontResourcesLoaded(
     if (state == FontAccessState.Granted) content()
 }
 
+private suspend fun loadCustomFonts(
+    paths: List<String>,
+    resolver: androidx.compose.ui.text.font.FontFamily.Resolver
+) {
+    for (path in paths) {
+        try {
+            val resourcePath = if (path.startsWith("composeResources/")) path else "composeResources/$path"
+            val bytes = readResourceBytes(resourcePath)
+            val familyName = path.substringAfterLast("/").substringBeforeLast(".")
+            val font = Font(familyName, bytes, FontWeight.Normal, FontStyle.Normal)
+            resolver.preload(FontFamily(font))
+        } catch (e: Throwable) {}
+    }
+}
+
 private enum class FontAccessState { Loading, Granted, Denied }
+
+private fun tryGetGeneratedPaths(): List<String> = try {
+    generatedFontPaths
+} catch (e: Throwable) {
+    emptyList()
+}
 
 private fun readFontStatus(): Int = js("(window.__kbFontStatus || 0)")
 private fun readFontCount(): Int = js("(window.__kbFontData ? window.__kbFontData.length : 0)")
 private fun readFontBase64(index: Int): String = js("window.__kbFontData[index].base64")
 private fun readFontFamily(index: Int): String = js("window.__kbFontData[index].family")
 
-private fun startFontAccessFlow() {
+private fun startChromeFontAccess() {
     js("""
         window.__kbFontStatus = 0;
         window.__kbFontData = [];
@@ -147,45 +184,50 @@ private fun startFontAccessFlow() {
         async function tryAccess() {
             setLoading('Loading system fonts...');
 
-            if ('queryLocalFonts' in window) {
-                try {
-                    var fonts = await window.queryLocalFonts();
-                    console.log('[FontAccess] queryLocalFonts returned', fonts.length, 'fonts');
+            if (!('queryLocalFonts' in window)) {
+                console.log('[FontAccess] queryLocalFonts not available, falling back to custom fonts');
+                overlay.remove();
+                window.__kbFontStatus = 3;
+                return;
+            }
 
-                    var seenFamilies = {};
-                    var toLoad = [];
+            try {
+                var fonts = await window.queryLocalFonts();
+                console.log('[FontAccess] queryLocalFonts returned', fonts.length, 'fonts');
 
-                    for (var i = 0; i < fonts.length; i++) {
-                        var f = fonts[i];
-                        var family = f.family;
-                        if (seenFamilies[family]) continue;
-                        seenFamilies[family] = true;
-                        toLoad.push(f);
-                    }
+                var seenFamilies = {};
+                var toLoad = [];
 
-                    for (var k = 0; k < toLoad.length; k++) {
-                        setLoading('Loading system fonts<br/>' + (k+1) + ' / ' + toLoad.length + '<br/><span style="color:#888;font-size:13px">' + toLoad[k].family + '</span>');
-                        try {
-                            var base64 = await blobToBase64(await toLoad[k].blob());
-                            window.__kbFontData.push({
-                                family: toLoad[k].family,
-                                base64: base64
-                            });
-                        } catch(e) {}
-                    }
-
-                    if (window.__kbFontData.length > 0) {
-                        overlay.remove();
-                        window.__kbFontStatus = 1;
-                        return;
-                    }
-
-                    console.log('[FontAccess] Chrome API returned 0 fonts, falling back');
-                    window.__kbFontData = [];
-                } catch(e) {
-                    console.log('[FontAccess] Chrome API error, falling back:', e);
-                    window.__kbFontData = [];
+                for (var i = 0; i < fonts.length; i++) {
+                    var f = fonts[i];
+                    var family = f.family;
+                    if (seenFamilies[family]) continue;
+                    seenFamilies[family] = true;
+                    toLoad.push(f);
                 }
+
+                for (var k = 0; k < toLoad.length; k++) {
+                    setLoading('Loading system fonts<br/>' + (k+1) + ' / ' + toLoad.length + '<br/><span style="color:#888;font-size:13px">' + toLoad[k].family + '</span>');
+                    try {
+                        var base64 = await blobToBase64(await toLoad[k].blob());
+                        window.__kbFontData.push({
+                            family: toLoad[k].family,
+                            base64: base64
+                        });
+                    } catch(e) {}
+                }
+
+                if (window.__kbFontData.length > 0) {
+                    overlay.remove();
+                    window.__kbFontStatus = 1;
+                    return;
+                }
+
+                console.log('[FontAccess] Chrome API returned 0 fonts, falling back');
+                window.__kbFontData = [];
+            } catch(e) {
+                console.log('[FontAccess] Chrome API error, falling back:', e);
+                window.__kbFontData = [];
             }
 
             overlay.remove();

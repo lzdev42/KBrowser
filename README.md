@@ -51,43 +51,82 @@ Package: JDK + JCEF
 
 ### WasmJs (Browser)
 
-On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system - it does **not** read `document.fonts` or CSS `@font-face`. KBrowser provides `WithFontResourcesLoaded` to solve this, working in two modes:
+On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system - it does **not** read `document.fonts` or CSS `@font-face`. KBrowser provides `WithFontResourcesLoaded` to solve this, with three modes:
 
-**Chrome 103+ mode (automatic):**
+**Mode 1: Chrome-only (`FontMode.CHROME_ONLY`)**
 - Uses the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) (`queryLocalFonts()`) to enumerate all system fonts
-- Reads each font's binary data and registers it directly into Skia
+- Reads each font's binary data and registers it into Skia
 - Supports any language - whatever fonts are installed on the user's system, Skia gets them all
 - Browser will prompt user for font access permission
-- No developer configuration needed
+- Non-Chrome browsers: no fonts loaded (text may show as tofu boxes)
 
-**Non-Chrome browser mode (developer-provided fonts):**
-- The Local Font Access API is not available, so system font data cannot be obtained
-- Developer provides font file paths via `fontResourcePaths` parameter
-- Font files must be placed under `src/commonMain/composeResources/font/` in the consuming project
-- KBrowser reads these files at runtime and loads them into Skia
-- Developer is responsible for choosing which fonts to bundle (e.g. Noto Sans for broad language coverage)
+**Mode 2: Chrome with fallback (`FontMode.CHROME_WITH_FALLBACK`) - default**
+- Chrome: same as Mode 1 (all system fonts, any language)
+- Non-Chrome: automatically loads bundled font files from `composeResources/font/`
+- Requires applying the `font-paths` Gradle plugin (see below)
 
-**Usage:**
+**Mode 3: Custom only (`FontMode.CUSTOM_ONLY`)**
+- Only uses bundled font files, never calls `queryLocalFonts()`
+- No permission prompt, consistent experience across all browsers
+- Developer must provide font files covering target languages
+
+#### Gradle Plugin: Auto-discover fonts
+
+Apply the `font-paths` plugin in your `build.gradle.kts`:
+
+```kotlin
+plugins {
+    id("xyz.kbrowser.font-paths")
+}
+
+kbrowserFontPaths {
+    packageName.set("com.example.app")  // must match your wasmJsMain package
+}
+```
+
+Place font files under `src/commonMain/composeResources/font/` (e.g. `NotoSansSC.ttf`, `NotoSansArabic.ttf`). The plugin auto-discovers all `.ttf`/`.otf`/`.woff`/`.woff2` files at build time and generates a `FontPaths.generated.kt` file. No manual path listing needed.
+
+#### Usage
+
 ```kotlin
 import xyz.kbrowser.WithFontResourcesLoaded
+import xyz.kbrowser.FontMode
 
-// Chrome-only (no bundled fonts, non-Chrome will have no CJK fonts):
+// Default: Chrome with fallback to bundled fonts
 ComposeViewport {
     WithFontResourcesLoaded {
         App()
     }
 }
 
-// Cross-browser (bundled fonts for non-Chrome fallback):
-// Place font at: src/commonMain/composeResources/font/NotoSansSC.ttf
+// Chrome only (no bundled fonts)
 ComposeViewport {
-    WithFontResourcesLoaded(
-        fontResourcePaths = listOf("font/NotoSansSC.ttf")
-    ) {
+    WithFontResourcesLoaded(mode = FontMode.CHROME_ONLY) {
+        App()
+    }
+}
+
+// Custom only (no Chrome API, uses bundled fonts exclusively)
+ComposeViewport {
+    WithFontResourcesLoaded(mode = FontMode.CUSTOM_ONLY) {
         App()
     }
 }
 ```
+
+#### How it works
+
+1. **Chrome 103+**: `queryLocalFonts()` enumerates all system fonts → reads binary data via `blob()` → transfers to Kotlin via base64 → registers into Skia via `Font(identity, bytes)` + `FontFamilyResolver.preload()`. Supports any language - Arabic, Chinese, Thai, Hebrew, etc.
+
+2. **Non-Chrome (Safari/Firefox)**: Reads bundled font files from `composeResources/font/` (auto-discovered by the Gradle plugin) → registers into Skia. Developer is responsible for choosing which fonts to bundle.
+
+3. **Cross-platform**: `commonMain` UI code is shared. Desktop (JVM) uses system fonts natively. WasmJs uses `WithFontResourcesLoaded`. No platform-specific font code in UI layer.
+
+#### Notes
+
+- The `font-paths` Gradle plugin is in `buildSrc/`. It's part of the KBrowser repo. Consumer projects apply it via `id("xyz.kbrowser.font-paths")`.
+- If no font files are placed in `composeResources/font/`, the generated list is empty. Mode 2 and Mode 3 will have no fonts to load on non-Chrome browsers.
+- Chrome API failure (user denies permission) in Mode 2 falls back to bundled fonts automatically.
 
 ---
 
@@ -198,11 +237,26 @@ fun main() {
 
 ### 1b. WasmJs Setup (Browser)
 
-#### One-line font loading with `WithFontResourcesLoaded`
+#### Font loading with `WithFontResourcesLoaded`
 
-On WasmJs, Compose renders to a `<canvas>` via Skia, which has a separate font system from the browser's CSS. Without explicit font loading, Chinese/CJK and other non-Latin text will render as tofu boxes. KBrowser provides `WithFontResourcesLoaded` to handle this automatically.
+On WasmJs, Compose renders to a `<canvas>` via Skia, which has a separate font system from the browser's CSS. Without explicit font loading, Chinese/CJK and other non-Latin text will render as tofu boxes. KBrowser provides `WithFontResourcesLoaded` to handle this.
 
-**Chrome 103+** (no extra setup needed):
+**Step 1**: Apply the font-paths plugin in `build.gradle.kts`:
+
+```kotlin
+plugins {
+    id("xyz.kbrowser.font-paths")
+}
+
+kbrowserFontPaths {
+    packageName.set("com.example.app")  // match your wasmJsMain package
+}
+```
+
+**Step 2** (optional): Place font files under `src/commonMain/composeResources/font/`. The plugin auto-discovers them. Skip this if you only need Chrome support.
+
+**Step 3**: Wrap your content:
+
 ```kotlin
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
@@ -218,33 +272,25 @@ fun main() {
 }
 ```
 
-**Cross-browser** (Chrome + Safari/Firefox, with bundled font fallback):
-```kotlin
-// 1. Place font file at: src/commonMain/composeResources/font/NotoSansSC.ttf
+On Chrome 103+, all system fonts are loaded automatically (any language). On non-Chrome browsers, bundled fonts from `composeResources/font/` are used as fallback. See the [WasmJs section](#wasmjs-browser) above for mode details.
 
-// 2. In wasmJsMain:
-@OptIn(ExperimentalComposeUiApi::class)
-fun main() {
-    ComposeViewport {
-        WithFontResourcesLoaded(
-            fontResourcePaths = listOf("font/NotoSansSC.ttf")
-        ) {
-            App()
-        }
-    }
+#### Cross-platform single codebase
+
+```kotlin
+// commonMain - shared UI, no platform-specific font code
+@Composable
+expect fun App()
+
+// wasmJsMain
+fun main() = ComposeViewport {
+    WithFontResourcesLoaded { App() }
+}
+
+// jvmMain - standard desktop, no font wrapper needed
+fun main() = application {
+    Window(onCloseRequest = ::exitApplication) { App() }
 }
 ```
-
-On Chrome, `WithFontResourcesLoaded` will:
-1. Call `queryLocalFonts()` to enumerate all system fonts
-2. Read each font's binary data, transfer to Kotlin, register into Skia
-3. Render content with full system font support (any language)
-
-On non-Chrome browsers (Safari/Firefox), `WithFontResourcesLoaded` will:
-1. Skip the unavailable Local Font Access API
-2. Read developer-provided font files from `composeResources/font/`
-3. Register them into Skia
-4. Render content with the bundled fonts
 
 #### Cross-platform single codebase
 

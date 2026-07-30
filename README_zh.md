@@ -51,43 +51,82 @@ Package: JDK + JCEF
 
 ### WasmJs（浏览器）
 
-在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统--它**不读取** `document.fonts` 或 CSS `@font-face`。KBrowser 提供 `WithFontResourcesLoaded` 解决此问题，分两种模式：
+在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统--它**不读取** `document.fonts` 或 CSS `@font-face`。KBrowser 提供 `WithFontResourcesLoaded` 解决此问题，支持三种模式：
 
-**Chrome 103+ 模式（自动）：**
+**模式 1：仅 Chrome（`FontMode.CHROME_ONLY`）**
 - 使用 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)（`queryLocalFonts()`）枚举系统所有字体
 - 读取每个字体的二进制数据，直接注册到 Skia
 - 支持任意语言--系统装了什么字体，Skia 就能用什么字体
 - 浏览器会弹出字体访问权限请求
-- 开发者无需额外配置
+- 非 Chrome 浏览器：不加载任何字体（文字可能显示为豆腐块）
 
-**非 Chrome 浏览器模式（开发者提供字体）：**
-- Local Font Access API 不可用，无法获取系统字体二进制数据
-- 开发者通过 `fontResourcePaths` 参数传入字体文件路径
-- 字体文件需放在 `src/commonMain/composeResources/font/` 目录下
-- KBrowser 在运行时读取这些文件并加载到 Skia
-- 开发者自行决定打包哪些字体（例如 Noto Sans 系列覆盖多语言）
+**模式 2：Chrome 优先 + 降级（`FontMode.CHROME_WITH_FALLBACK`）--默认**
+- Chrome：与模式 1 相同（系统所有字体，任意语言）
+- 非 Chrome：自动加载 `composeResources/font/` 目录下打包的字体文件
+- 需要 apply `font-paths` Gradle 插件（见下文）
 
-**用法：**
+**模式 3：仅自定义字体（`FontMode.CUSTOM_ONLY`）**
+- 只使用打包的字体文件，不调用 `queryLocalFonts()`
+- 不弹权限请求，所有浏览器体验一致
+- 开发者需提供覆盖目标语言的字体文件
+
+#### Gradle 插件：自动发现字体
+
+在 `build.gradle.kts` 中 apply `font-paths` 插件：
+
+```kotlin
+plugins {
+    id("xyz.kbrowser.font-paths")
+}
+
+kbrowserFontPaths {
+    packageName.set("com.example.app")  // 必须与你的 wasmJsMain 包名一致
+}
+```
+
+将字体文件放到 `src/commonMain/composeResources/font/` 目录下（如 `NotoSansSC.ttf`、`NotoSansArabic.ttf`）。插件在构建时自动扫描所有 `.ttf`/`.otf`/`.woff`/`.woff2` 文件，生成 `FontPaths.generated.kt`。无需手动列出字体路径。
+
+#### 用法
+
 ```kotlin
 import xyz.kbrowser.WithFontResourcesLoaded
+import xyz.kbrowser.FontMode
 
-// 仅 Chrome（不打包字体，非 Chrome 浏览器将无中文字体）：
+// 默认：Chrome 优先，非 Chrome 降级到打包字体
 ComposeViewport {
     WithFontResourcesLoaded {
         App()
     }
 }
 
-// 跨浏览器（打包字体作为非 Chrome 降级方案）：
-// 字体文件放在: src/commonMain/composeResources/font/NotoSansSC.ttf
+// 仅 Chrome（不打包字体）
 ComposeViewport {
-    WithFontResourcesLoaded(
-        fontResourcePaths = listOf("font/NotoSansSC.ttf")
-    ) {
+    WithFontResourcesLoaded(mode = FontMode.CHROME_ONLY) {
+        App()
+    }
+}
+
+// 仅自定义字体（不走 Chrome API，只用打包字体）
+ComposeViewport {
+    WithFontResourcesLoaded(mode = FontMode.CUSTOM_ONLY) {
         App()
     }
 }
 ```
+
+#### 工作原理
+
+1. **Chrome 103+**：`queryLocalFonts()` 枚举系统所有字体 -> 通过 `blob()` 读取二进制数据 -> base64 传输到 Kotlin -> 通过 `Font(identity, bytes)` + `FontFamilyResolver.preload()` 注册到 Skia。支持任意语言--阿拉伯文、中文、泰文、希伯来文等。
+
+2. **非 Chrome（Safari/Firefox）**：读取 `composeResources/font/` 目录下的打包字体文件（由 Gradle 插件自动发现）-> 注册到 Skia。开发者自行决定打包哪些字体。
+
+3. **跨平台**：`commonMain` 的 UI 代码共享。Desktop (JVM) 原生使用系统字体。WasmJs 使用 `WithFontResourcesLoaded`。UI 层不需要平台特定的字体代码。
+
+#### 注意事项
+
+- `font-paths` Gradle 插件位于 `buildSrc/`，是 KBrowser 仓库的一部分。消费者项目通过 `id("xyz.kbrowser.font-paths")` apply。
+- 如果 `composeResources/font/` 目录下没有字体文件，生成的列表为空。模式 2 和模式 3 在非 Chrome 浏览器上没有字体可加载。
+- 模式 2 中 Chrome API 失败（用户拒绝授权）时，自动降级到打包字体。
 
 ---
 
@@ -202,7 +241,22 @@ fun main() {
 
 在 WasmJs 平台，Compose 通过 Skia 渲染到 `<canvas>`，Skia 有独立于浏览器 CSS 的字体系统。不显式加载字体的话，中文/CJK 等非拉丁文字会显示为豆腐块。KBrowser 提供 `WithFontResourcesLoaded` 自动处理。
 
-**Chrome 103+**（无需额外配置）：
+**第 1 步**：在 `build.gradle.kts` 中 apply 字体插件：
+
+```kotlin
+plugins {
+    id("xyz.kbrowser.font-paths")
+}
+
+kbrowserFontPaths {
+    packageName.set("com.example.app")  // 与你的 wasmJsMain 包名一致
+}
+```
+
+**第 2 步**（可选）：将字体文件放到 `src/commonMain/composeResources/font/` 目录下。插件会自动发现。如果只需要 Chrome 支持，跳过此步。
+
+**第 3 步**：包裹你的内容：
+
 ```kotlin
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
@@ -218,33 +272,25 @@ fun main() {
 }
 ```
 
-**跨浏览器**（Chrome + Safari/Firefox，打包字体降级）：
-```kotlin
-// 1. 字体文件放在: src/commonMain/composeResources/font/NotoSansSC.ttf
+Chrome 103+ 上自动加载系统所有字体（任意语言）。非 Chrome 浏览器上使用 `composeResources/font/` 下的打包字体作为降级。模式详情见上方 [WasmJs 章节](#wasmjs浏览器)。
 
-// 2. wasmJsMain:
-@OptIn(ExperimentalComposeUiApi::class)
-fun main() {
-    ComposeViewport {
-        WithFontResourcesLoaded(
-            fontResourcePaths = listOf("font/NotoSansSC.ttf")
-        ) {
-            App()
-        }
-    }
+#### 跨平台单代码库
+
+```kotlin
+// commonMain - 共享 UI，无平台特定字体代码
+@Composable
+expect fun App()
+
+// wasmJsMain
+fun main() = ComposeViewport {
+    WithFontResourcesLoaded { App() }
+}
+
+// jvmMain - 标准桌面入口，不需要字体包装
+fun main() = application {
+    Window(onCloseRequest = ::exitApplication) { App() }
 }
 ```
-
-Chrome 上 `WithFontResourcesLoaded` 会：
-1. 调用 `queryLocalFonts()` 枚举系统所有字体
-2. 读取二进制数据传到 Kotlin，注册到 Skia
-3. 用系统字体渲染内容（支持任意语言）
-
-非 Chrome 浏览器（Safari/Firefox）上 `WithFontResourcesLoaded` 会：
-1. 跳过不可用的 Local Font Access API
-2. 读取开发者提供的 `composeResources/font/` 下的字体文件
-3. 注册到 Skia
-4. 用打包的字体渲染内容
 
 ### 2. KBWebView — UI 组件
 
