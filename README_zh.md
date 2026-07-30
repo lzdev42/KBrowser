@@ -51,11 +51,13 @@ Package: JDK + JCEF
 
 ### WasmJs（浏览器）
 
-需要 Chrome 103+（或任何支持 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) 的浏览器）。应用启动时会申请枚举并加载系统所有字体的权限。如果用户拒绝字体授权，模态窗会阻止进入应用，直到用户授权。
+需要 Chrome 103+（或任何支持 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) 的浏览器）。
+
+在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统——它**不读取** `document.fonts` 或 CSS `@font-face`。这意味着通过资源打包或 CSS Font Loading API 加载的字体无法在 Compose UI 中渲染中文/CJK 文字。KBrowser 通过 `WithFontResourcesLoaded` 解决此问题：使用 Local Font Access API 枚举系统所有字体，读取其二进制数据，直接通过 `Typeface.makeFromData()` 注册到 Skia。
 
 **Chrome 与其他浏览器的区别：**
-- **Chrome 103+**：完整支持。浏览器会弹出字体访问权限请求。通过 `queryLocalFonts()` 枚举所有系统字体并加载到 Skia 渲染引擎。
-- **Safari / Firefox / 其他**：不支持 Local Font Access API，应用会显示"未授权使用字体"模态窗，无法进入。
+- **Chrome 103+**：完整支持。浏览器会弹出字体访问权限请求。通过 `queryLocalFonts()` 枚举所有系统字体并加载到 Skia。支持任意语言——系统装了什么字体，Skia 就能用什么字体。
+- **Safari / Firefox / 其他**：不支持 Local Font Access API，应用显示模态窗并阻止进入。（未来版本可能增加降级策略。）
 
 ---
 
@@ -163,6 +165,61 @@ fun main() {
     }
 }
 ```
+
+### 1b. WasmJs 配置（浏览器）
+
+#### 用 `WithFontResourcesLoaded` 一行加载字体
+
+在 WasmJs 平台，Compose 通过 Skia 渲染到 `<canvas>`，Skia 有独立于浏览器 CSS 的字体系统。不显式加载字体的话，中文/CJK 等非拉丁文字会显示为豆腐块。KBrowser 提供 `WithFontResourcesLoaded`——一个即插即用的包装器，自动处理一切：
+
+```kotlin
+// src/wasmJsMain/kotlin/main.kt
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.window.ComposeViewport
+import xyz.kbrowser.WithFontResourcesLoaded
+
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() {
+    ComposeViewport {
+        WithFontResourcesLoaded {
+            // 你的应用内容
+            App()
+        }
+    }
+}
+```
+
+就这样。`WithFontResourcesLoaded` 会自动：
+1. 显示 DOM 加载层（带进度提示）
+2. 调用 `queryLocalFonts()` 枚举系统所有字体（Chrome 会弹权限请求）
+3. 通过 `blob()` 读取每个字体的二进制数据，base64 传输到 Kotlin
+4. 通过 `Font(identity, data)` + `FontFamilyResolver.preload()` 注册到 Skia
+5. 移除加载层，渲染应用内容
+
+如果用户拒绝字体授权或浏览器不支持该 API，显示模态窗和重试按钮，用户必须授权才能进入应用。
+
+#### 跨平台单代码库
+
+在同时支持 Desktop (JVM) 和 WasmJs 的 Compose Multiplatform 项目中，用 `expect`/`actual` 隔离平台入口：
+
+```kotlin
+// commonMain
+@Composable
+expect fun App()
+
+// wasmJsMain — 包裹字体加载
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() = ComposeViewport {
+    WithFontResourcesLoaded { App() }
+}
+
+// jvmMain — 标准桌面入口，不需要字体包装
+fun main() = application {
+    Window(onCloseRequest = ::exitApplication) { App() }
+}
+```
+
+Desktop (JVM) 通过 Skia 的系统字体管理器原生访问字体，无需额外处理。WasmJs 需要 `WithFontResourcesLoaded`，因为浏览器沙箱中 Skia 无法直接访问系统字体。共享的 `App()` 组合函数在两个平台上无需修改即可运行。
 
 ### 2. KBWebView — UI 组件
 

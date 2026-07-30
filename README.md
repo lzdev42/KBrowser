@@ -51,11 +51,13 @@ Package: JDK + JCEF
 
 ### WasmJs (Browser)
 
-Requires Chrome 103+ (or any browser supporting the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)). The app requests permission to enumerate and load all system fonts at startup. If the user denies font access, a modal dialog blocks entry until permission is granted.
+Requires Chrome 103+ (or any browser supporting the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)). 
+
+On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system — it does **not** read `document.fonts` or CSS `@font-face`. This means fonts bundled as resources or loaded via the CSS Font Loading API won't render Chinese/CJK text in the Compose UI. KBrowser solves this with `WithFontResourcesLoaded`, which uses the Local Font Access API to enumerate all system fonts, read their binary data, and register them directly into Skia via `Typeface.makeFromData()`.
 
 **Chrome vs other browsers:**
-- **Chrome 103+**: Full support. The browser prompts for font access permission. All system fonts are enumerated via `queryLocalFonts()` and loaded into Skia for rendering.
-- **Safari / Firefox / others**: The Local Font Access API is not supported. The app shows a "未授权使用字体" (font access denied) modal and cannot proceed.
+- **Chrome 103+**: Full support. The browser prompts for font access permission. All system fonts are enumerated via `queryLocalFonts()` and loaded into Skia. Supports any language — whatever fonts are installed on the system, Skia gets them all.
+- **Safari / Firefox / others**: The Local Font Access API is not supported. The app shows a modal dialog and cannot proceed. (Future versions may add fallback strategies.)
 
 ---
 
@@ -163,6 +165,61 @@ fun main() {
     }
 }
 ```
+
+### 1b. WasmJs Setup (Browser)
+
+#### One-line font loading with `WithFontResourcesLoaded`
+
+On WasmJs, Compose renders to a `<canvas>` via Skia, which has a separate font system from the browser's CSS. Without explicit font loading, Chinese/CJK and other non-Latin text will render as tofu boxes. KBrowser provides `WithFontResourcesLoaded` — a drop-in wrapper that handles everything:
+
+```kotlin
+// src/wasmJsMain/kotlin/main.kt
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.window.ComposeViewport
+import xyz.kbrowser.WithFontResourcesLoaded
+
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() {
+    ComposeViewport {
+        WithFontResourcesLoaded {
+            // Your app content here
+            App()
+        }
+    }
+}
+```
+
+That's it. `WithFontResourcesLoaded` will:
+1. Show a DOM overlay with a loading progress UI
+2. Call `queryLocalFonts()` to enumerate all system fonts (Chrome will prompt the user for permission)
+3. Read each font's binary data via `blob()`, transfer to Kotlin via base64
+4. Register each font into Skia via `Font(identity, data)` + `FontFamilyResolver.preload()`
+5. Remove the overlay and render your content
+
+If the user denies font access or the browser doesn't support the API, a modal dialog is shown with a retry button. The user cannot proceed until font access is granted.
+
+#### Cross-platform single codebase
+
+In a Compose Multiplatform project targeting both Desktop (JVM) and WasmJs, use `expect`/`actual` to isolate the platform-specific entry point:
+
+```kotlin
+// commonMain
+@Composable
+expect fun App()
+
+// wasmJsMain - wrap with font loading
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() = ComposeViewport {
+    WithFontResourcesLoaded { App() }
+}
+
+// jvmMain - standard desktop entry, no font wrapper needed
+fun main() = application {
+    Window(onCloseRequest = ::exitApplication) { App() }
+}
+```
+
+Desktop (JVM) uses system fonts natively via Skia's font manager. WasmJs needs `WithFontResourcesLoaded` because Skia in the browser sandbox has no system font access. The shared `App()` composable works on both platforms without modification.
 
 ### 2. KBWebView — UI Component
 
