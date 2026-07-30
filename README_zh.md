@@ -51,13 +51,20 @@ Package: JDK + JCEF
 
 ### WasmJs（浏览器）
 
-需要 Chrome 103+（或任何支持 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) 的浏览器）。
+在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统--它**不读取** `document.fonts` 或 CSS `@font-face`。这意味着通过资源打包或 CSS Font Loading API 加载的字体无法在 Compose UI 中渲染中文/CJK 文字。KBrowser 通过 `WithFontResourcesLoaded` 解决此问题，根据浏览器支持情况自动选择两种模式：
 
-在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统——它**不读取** `document.fonts` 或 CSS `@font-face`。这意味着通过资源打包或 CSS Font Loading API 加载的字体无法在 Compose UI 中渲染中文/CJK 文字。KBrowser 通过 `WithFontResourcesLoaded` 解决此问题：使用 Local Font Access API 枚举系统所有字体，读取其二进制数据，直接通过 `Typeface.makeFromData()` 注册到 Skia。
+**Chrome 103+ 模式（首选）：**
+- 使用 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)（`queryLocalFonts()`）枚举系统所有字体
+- 读取每个字体的二进制数据，通过 `Font(identity, data)` 直接注册到 Skia
+- 支持任意语言--系统装了什么字体，Skia 就能用什么字体
+- 浏览器会弹出字体访问权限请求
 
-**Chrome 与其他浏览器的区别：**
-- **Chrome 103+**：完整支持。浏览器会弹出字体访问权限请求。通过 `queryLocalFonts()` 枚举所有系统字体并加载到 Skia。支持任意语言——系统装了什么字体，Skia 就能用什么字体。
-- **Safari / Firefox / 其他**：不支持 Local Font Access API，应用显示模态窗并阻止进入。（未来版本可能增加降级策略。）
+**非 Chrome 浏览器模式（Safari、Firefox 等）：**
+- Local Font Access API 不可用，无法获取字体二进制数据
+- 降级为通过 Skia 的 `FontMgr.default.legacyMakeTypeface()`（`SystemFont`）按名称注册字体
+- 使用预定义的常见字体名称列表，覆盖 CJK、Latin、韩文、日文等
+- Skia 默认字体管理器尝试将这些名称与系统已安装字体匹配
+- 匹配成功的字体名可正常渲染，不匹配的名称会被静默跳过
 
 ---
 

@@ -51,13 +51,20 @@ Package: JDK + JCEF
 
 ### WasmJs (Browser)
 
-Requires Chrome 103+ (or any browser supporting the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)). 
+On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system - it does **not** read `document.fonts` or CSS `@font-face`. This means fonts bundled as resources or loaded via the CSS Font Loading API won't render Chinese/CJK text in the Compose UI. KBrowser solves this with `WithFontResourcesLoaded`, which works in two modes depending on browser support:
 
-On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system — it does **not** read `document.fonts` or CSS `@font-face`. This means fonts bundled as resources or loaded via the CSS Font Loading API won't render Chinese/CJK text in the Compose UI. KBrowser solves this with `WithFontResourcesLoaded`, which uses the Local Font Access API to enumerate all system fonts, read their binary data, and register them directly into Skia via `Typeface.makeFromData()`.
+**Chrome 103+ mode (preferred):**
+- Uses the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) (`queryLocalFonts()`) to enumerate all system fonts
+- Reads each font's binary data and registers it directly into Skia via `Font(identity, data)`
+- Supports any language - whatever fonts are installed on the system, Skia gets them all
+- Browser will prompt user for font access permission
 
-**Chrome vs other browsers:**
-- **Chrome 103+**: Full support. The browser prompts for font access permission. All system fonts are enumerated via `queryLocalFonts()` and loaded into Skia. Supports any language — whatever fonts are installed on the system, Skia gets them all.
-- **Safari / Firefox / others**: The Local Font Access API is not supported. The app shows a modal dialog and cannot proceed. (Future versions may add fallback strategies.)
+**Non-Chrome browser mode (Safari, Firefox, etc.):**
+- The Local Font Access API is not available, so font binary data cannot be obtained
+- Falls back to registering font names via Skia's `FontMgr.default.legacyMakeTypeface()` (using `SystemFont`)
+- Uses a predefined list of common font names covering CJK, Latin, Korean, Japanese, etc.
+- Skia's default font manager attempts to match these names against the system's installed fonts
+- If a font name matches a system font, Skia can render it; unmatched names are silently skipped
 
 ---
 

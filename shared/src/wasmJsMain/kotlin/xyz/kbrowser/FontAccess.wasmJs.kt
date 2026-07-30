@@ -1,6 +1,7 @@
 @file:OptIn(
     kotlin.js.ExperimentalWasmJsInterop::class,
-    kotlin.io.encoding.ExperimentalEncodingApi::class
+    kotlin.io.encoding.ExperimentalEncodingApi::class,
+    androidx.compose.ui.text.ExperimentalTextApi::class
 )
 
 package xyz.kbrowser
@@ -10,6 +11,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.platform.Font
+import androidx.compose.ui.text.platform.SystemFont
 import kotlinx.coroutines.delay
 import kotlin.io.encoding.Base64
 
@@ -34,6 +36,19 @@ fun WithFontResourcesLoaded(
                             try {
                                 val bytes = Base64.decode(base64)
                                 val font = Font(family, bytes, FontWeight.Normal, FontStyle.Normal)
+                                resolver.preload(FontFamily(font))
+                            } catch (e: Throwable) {}
+                        }
+                    }
+                    state = FontAccessState.Granted
+                }
+                3 -> {
+                    val count = readFontCount()
+                    for (i in 0 until count) {
+                        val family = readFontFamily(i)
+                        if (family.isNotEmpty()) {
+                            try {
+                                val font = SystemFont(family, FontWeight.Normal, FontStyle.Normal)
                                 resolver.preload(FontFamily(font))
                             } catch (e: Throwable) {}
                         }
@@ -90,14 +105,41 @@ private fun startFontAccessFlow() {
             return btoa(binary);
         }
 
-        async function tryAccess() {
-            setLoading('Requesting font access...');
+        var fontNameList = [
+            'PingFang SC', 'PingFang TC', 'PingFang HK',
+            'Heiti SC', 'Heiti TC',
+            'STHeiti', 'STHeiti Light', 'STHeiti Medium',
+            'STSong', 'STKaiti', 'STFangsong', 'STXihei',
+            'Songti SC', 'Kaiti SC', 'Baoli SC', 'Yuanti SC',
+            'Hiragino Sans GB', 'Hiragino Sans CNS',
+            'Microsoft YaHei', 'Microsoft YaHei UI',
+            'SimHei', 'SimSun', 'NSimSun',
+            'DengXian', 'FangSong', 'KaiTi',
+            'Source Han Sans CN', 'Source Han Sans SC',
+            'Source Han Serif CN', 'Source Han Serif SC',
+            'Noto Sans CJK SC', 'Noto Sans CJK TC',
+            'Noto Serif CJK SC', 'Noto Serif CJK TC',
+            'Noto Sans', 'Noto Serif',
+            'Yu Gothic', 'Yu Gothic UI', 'Meiryo',
+            'Hiragino Kaku Gothic ProN', 'Hiragino Maru Gothic ProN',
+            'MS Gothic', 'MS Mincho',
+            'Malgun Gothic', 'Malgun Gothic Semilight',
+            'Nanum Gothic', 'Nanum Myeongjo',
+            'AppleGothic',
+            'Segoe UI', 'Segoe UI Semibold',
+            'Arial', 'Helvetica', 'Helvetica Neue',
+            'Times New Roman', 'Georgia',
+            'Roboto', 'Open Sans',
+            'DejaVu Sans', 'DejaVu Serif', 'DejaVu Sans Mono',
+            'Liberation Sans', 'Liberation Serif',
+            'Menlo', 'Monaco', 'Consolas', 'Courier New',
+            'SF Pro Display', 'SF Pro Text',
+            '.AppleSystemUIFont', '.AppleSystemUIFontSerif',
+            'system-ui', 'sans-serif', 'serif', 'monospace'
+        ];
 
-            if (!('queryLocalFonts' in window)) {
-                showDenied('Local Font Access API is not supported in this browser. Please use Chrome 103+.');
-                window.__kbFontStatus = 2;
-                return;
-            }
+        async function tryChromeFontAccess() {
+            setLoading('Requesting font access...');
 
             try {
                 var fonts = await window.queryLocalFonts();
@@ -128,14 +170,40 @@ private fun startFontAccessFlow() {
                 if (window.__kbFontData.length > 0) {
                     overlay.remove();
                     window.__kbFontStatus = 1;
-                } else {
-                    showDenied('No font data could be loaded.');
-                    window.__kbFontStatus = 2;
+                    return true;
                 }
             } catch(e) {
-                showDenied('Font access denied: ' + (e.message || e.name));
-                window.__kbFontStatus = 2;
+                console.log('[FontAccess] Chrome API error, falling back to local mode:', e);
             }
+            return false;
+        }
+
+        function tryLocalMode() {
+            setLoading('Loading system fonts (local mode)...');
+
+            for (var i = 0; i < fontNameList.length; i++) {
+                window.__kbFontData.push({
+                    family: fontNameList[i],
+                    base64: ''
+                });
+            }
+
+            console.log('[FontAccess] Local mode: registered', fontNameList.length, 'font names');
+            overlay.remove();
+            window.__kbFontStatus = 3;
+        }
+
+        async function tryAccess() {
+            setLoading('Loading system fonts...');
+
+            if ('queryLocalFonts' in window) {
+                var ok = await tryChromeFontAccess();
+                if (ok) return;
+                console.log('[FontAccess] Chrome API failed, falling back to local mode');
+                window.__kbFontData = [];
+            }
+
+            tryLocalMode();
         }
 
         tryAccess();
