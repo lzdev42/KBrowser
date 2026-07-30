@@ -51,20 +51,43 @@ Package: JDK + JCEF
 
 ### WasmJs (Browser)
 
-On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system - it does **not** read `document.fonts` or CSS `@font-face`. This means fonts bundled as resources or loaded via the CSS Font Loading API won't render Chinese/CJK text in the Compose UI. KBrowser solves this with `WithFontResourcesLoaded`, which works in two modes depending on browser support:
+On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system - it does **not** read `document.fonts` or CSS `@font-face`. KBrowser provides `WithFontResourcesLoaded` to solve this, working in two modes:
 
-**Chrome 103+ mode (preferred):**
+**Chrome 103+ mode (automatic):**
 - Uses the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) (`queryLocalFonts()`) to enumerate all system fonts
-- Reads each font's binary data and registers it directly into Skia via `Font(identity, data)`
-- Supports any language - whatever fonts are installed on the system, Skia gets them all
+- Reads each font's binary data and registers it directly into Skia
+- Supports any language - whatever fonts are installed on the user's system, Skia gets them all
 - Browser will prompt user for font access permission
+- No developer configuration needed
 
-**Non-Chrome browser mode (Safari, Firefox, etc.):**
-- The Local Font Access API is not available, so font binary data cannot be obtained
-- Falls back to registering font names via Skia's `FontMgr.default.legacyMakeTypeface()` (using `SystemFont`)
-- Uses a predefined list of common font names covering CJK, Latin, Korean, Japanese, etc.
-- Skia's default font manager attempts to match these names against the system's installed fonts
-- If a font name matches a system font, Skia can render it; unmatched names are silently skipped
+**Non-Chrome browser mode (developer-provided fonts):**
+- The Local Font Access API is not available, so system font data cannot be obtained
+- Developer provides font file paths via `fontResourcePaths` parameter
+- Font files must be placed under `src/commonMain/composeResources/font/` in the consuming project
+- KBrowser reads these files at runtime and loads them into Skia
+- Developer is responsible for choosing which fonts to bundle (e.g. Noto Sans for broad language coverage)
+
+**Usage:**
+```kotlin
+import xyz.kbrowser.WithFontResourcesLoaded
+
+// Chrome-only (no bundled fonts, non-Chrome will have no CJK fonts):
+ComposeViewport {
+    WithFontResourcesLoaded {
+        App()
+    }
+}
+
+// Cross-browser (bundled fonts for non-Chrome fallback):
+// Place font at: src/commonMain/composeResources/font/NotoSansSC.ttf
+ComposeViewport {
+    WithFontResourcesLoaded(
+        fontResourcePaths = listOf("font/NotoSansSC.ttf")
+    ) {
+        App()
+    }
+}
+```
 
 ---
 
@@ -177,10 +200,10 @@ fun main() {
 
 #### One-line font loading with `WithFontResourcesLoaded`
 
-On WasmJs, Compose renders to a `<canvas>` via Skia, which has a separate font system from the browser's CSS. Without explicit font loading, Chinese/CJK and other non-Latin text will render as tofu boxes. KBrowser provides `WithFontResourcesLoaded` — a drop-in wrapper that handles everything:
+On WasmJs, Compose renders to a `<canvas>` via Skia, which has a separate font system from the browser's CSS. Without explicit font loading, Chinese/CJK and other non-Latin text will render as tofu boxes. KBrowser provides `WithFontResourcesLoaded` to handle this automatically.
 
+**Chrome 103+** (no extra setup needed):
 ```kotlin
-// src/wasmJsMain/kotlin/main.kt
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
 import xyz.kbrowser.WithFontResourcesLoaded
@@ -189,21 +212,39 @@ import xyz.kbrowser.WithFontResourcesLoaded
 fun main() {
     ComposeViewport {
         WithFontResourcesLoaded {
-            // Your app content here
             App()
         }
     }
 }
 ```
 
-That's it. `WithFontResourcesLoaded` will:
-1. Show a DOM overlay with a loading progress UI
-2. Call `queryLocalFonts()` to enumerate all system fonts (Chrome will prompt the user for permission)
-3. Read each font's binary data via `blob()`, transfer to Kotlin via base64
-4. Register each font into Skia via `Font(identity, data)` + `FontFamilyResolver.preload()`
-5. Remove the overlay and render your content
+**Cross-browser** (Chrome + Safari/Firefox, with bundled font fallback):
+```kotlin
+// 1. Place font file at: src/commonMain/composeResources/font/NotoSansSC.ttf
 
-If the user denies font access or the browser doesn't support the API, a modal dialog is shown with a retry button. The user cannot proceed until font access is granted.
+// 2. In wasmJsMain:
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() {
+    ComposeViewport {
+        WithFontResourcesLoaded(
+            fontResourcePaths = listOf("font/NotoSansSC.ttf")
+        ) {
+            App()
+        }
+    }
+}
+```
+
+On Chrome, `WithFontResourcesLoaded` will:
+1. Call `queryLocalFonts()` to enumerate all system fonts
+2. Read each font's binary data, transfer to Kotlin, register into Skia
+3. Render content with full system font support (any language)
+
+On non-Chrome browsers (Safari/Firefox), `WithFontResourcesLoaded` will:
+1. Skip the unavailable Local Font Access API
+2. Read developer-provided font files from `composeResources/font/`
+3. Register them into Skia
+4. Render content with the bundled fonts
 
 #### Cross-platform single codebase
 

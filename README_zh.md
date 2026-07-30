@@ -51,20 +51,43 @@ Package: JDK + JCEF
 
 ### WasmJs（浏览器）
 
-在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统--它**不读取** `document.fonts` 或 CSS `@font-face`。这意味着通过资源打包或 CSS Font Loading API 加载的字体无法在 Compose UI 中渲染中文/CJK 文字。KBrowser 通过 `WithFontResourcesLoaded` 解决此问题，根据浏览器支持情况自动选择两种模式：
+在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统--它**不读取** `document.fonts` 或 CSS `@font-face`。KBrowser 提供 `WithFontResourcesLoaded` 解决此问题，分两种模式：
 
-**Chrome 103+ 模式（首选）：**
+**Chrome 103+ 模式（自动）：**
 - 使用 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)（`queryLocalFonts()`）枚举系统所有字体
-- 读取每个字体的二进制数据，通过 `Font(identity, data)` 直接注册到 Skia
+- 读取每个字体的二进制数据，直接注册到 Skia
 - 支持任意语言--系统装了什么字体，Skia 就能用什么字体
 - 浏览器会弹出字体访问权限请求
+- 开发者无需额外配置
 
-**非 Chrome 浏览器模式（Safari、Firefox 等）：**
-- Local Font Access API 不可用，无法获取字体二进制数据
-- 降级为通过 Skia 的 `FontMgr.default.legacyMakeTypeface()`（`SystemFont`）按名称注册字体
-- 使用预定义的常见字体名称列表，覆盖 CJK、Latin、韩文、日文等
-- Skia 默认字体管理器尝试将这些名称与系统已安装字体匹配
-- 匹配成功的字体名可正常渲染，不匹配的名称会被静默跳过
+**非 Chrome 浏览器模式（开发者提供字体）：**
+- Local Font Access API 不可用，无法获取系统字体二进制数据
+- 开发者通过 `fontResourcePaths` 参数传入字体文件路径
+- 字体文件需放在 `src/commonMain/composeResources/font/` 目录下
+- KBrowser 在运行时读取这些文件并加载到 Skia
+- 开发者自行决定打包哪些字体（例如 Noto Sans 系列覆盖多语言）
+
+**用法：**
+```kotlin
+import xyz.kbrowser.WithFontResourcesLoaded
+
+// 仅 Chrome（不打包字体，非 Chrome 浏览器将无中文字体）：
+ComposeViewport {
+    WithFontResourcesLoaded {
+        App()
+    }
+}
+
+// 跨浏览器（打包字体作为非 Chrome 降级方案）：
+// 字体文件放在: src/commonMain/composeResources/font/NotoSansSC.ttf
+ComposeViewport {
+    WithFontResourcesLoaded(
+        fontResourcePaths = listOf("font/NotoSansSC.ttf")
+    ) {
+        App()
+    }
+}
+```
 
 ---
 
@@ -175,12 +198,12 @@ fun main() {
 
 ### 1b. WasmJs 配置（浏览器）
 
-#### 用 `WithFontResourcesLoaded` 一行加载字体
+#### 用 `WithFontResourcesLoaded` 加载字体
 
-在 WasmJs 平台，Compose 通过 Skia 渲染到 `<canvas>`，Skia 有独立于浏览器 CSS 的字体系统。不显式加载字体的话，中文/CJK 等非拉丁文字会显示为豆腐块。KBrowser 提供 `WithFontResourcesLoaded`——一个即插即用的包装器，自动处理一切：
+在 WasmJs 平台，Compose 通过 Skia 渲染到 `<canvas>`，Skia 有独立于浏览器 CSS 的字体系统。不显式加载字体的话，中文/CJK 等非拉丁文字会显示为豆腐块。KBrowser 提供 `WithFontResourcesLoaded` 自动处理。
 
+**Chrome 103+**（无需额外配置）：
 ```kotlin
-// src/wasmJsMain/kotlin/main.kt
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
 import xyz.kbrowser.WithFontResourcesLoaded
@@ -189,44 +212,39 @@ import xyz.kbrowser.WithFontResourcesLoaded
 fun main() {
     ComposeViewport {
         WithFontResourcesLoaded {
-            // 你的应用内容
             App()
         }
     }
 }
 ```
 
-就这样。`WithFontResourcesLoaded` 会自动：
-1. 显示 DOM 加载层（带进度提示）
-2. 调用 `queryLocalFonts()` 枚举系统所有字体（Chrome 会弹权限请求）
-3. 通过 `blob()` 读取每个字体的二进制数据，base64 传输到 Kotlin
-4. 通过 `Font(identity, data)` + `FontFamilyResolver.preload()` 注册到 Skia
-5. 移除加载层，渲染应用内容
-
-如果用户拒绝字体授权或浏览器不支持该 API，显示模态窗和重试按钮，用户必须授权才能进入应用。
-
-#### 跨平台单代码库
-
-在同时支持 Desktop (JVM) 和 WasmJs 的 Compose Multiplatform 项目中，用 `expect`/`actual` 隔离平台入口：
-
+**跨浏览器**（Chrome + Safari/Firefox，打包字体降级）：
 ```kotlin
-// commonMain
-@Composable
-expect fun App()
+// 1. 字体文件放在: src/commonMain/composeResources/font/NotoSansSC.ttf
 
-// wasmJsMain — 包裹字体加载
+// 2. wasmJsMain:
 @OptIn(ExperimentalComposeUiApi::class)
-fun main() = ComposeViewport {
-    WithFontResourcesLoaded { App() }
-}
-
-// jvmMain — 标准桌面入口，不需要字体包装
-fun main() = application {
-    Window(onCloseRequest = ::exitApplication) { App() }
+fun main() {
+    ComposeViewport {
+        WithFontResourcesLoaded(
+            fontResourcePaths = listOf("font/NotoSansSC.ttf")
+        ) {
+            App()
+        }
+    }
 }
 ```
 
-Desktop (JVM) 通过 Skia 的系统字体管理器原生访问字体，无需额外处理。WasmJs 需要 `WithFontResourcesLoaded`，因为浏览器沙箱中 Skia 无法直接访问系统字体。共享的 `App()` 组合函数在两个平台上无需修改即可运行。
+Chrome 上 `WithFontResourcesLoaded` 会：
+1. 调用 `queryLocalFonts()` 枚举系统所有字体
+2. 读取二进制数据传到 Kotlin，注册到 Skia
+3. 用系统字体渲染内容（支持任意语言）
+
+非 Chrome 浏览器（Safari/Firefox）上 `WithFontResourcesLoaded` 会：
+1. 跳过不可用的 Local Font Access API
+2. 读取开发者提供的 `composeResources/font/` 下的字体文件
+3. 注册到 Skia
+4. 用打包的字体渲染内容
 
 ### 2. KBWebView — UI 组件
 

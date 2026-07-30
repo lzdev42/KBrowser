@@ -1,7 +1,7 @@
 @file:OptIn(
     kotlin.js.ExperimentalWasmJsInterop::class,
     kotlin.io.encoding.ExperimentalEncodingApi::class,
-    androidx.compose.ui.text.ExperimentalTextApi::class
+    org.jetbrains.compose.resources.InternalResourceApi::class
 )
 
 package xyz.kbrowser
@@ -11,12 +11,53 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.platform.Font
-import androidx.compose.ui.text.platform.SystemFont
 import kotlinx.coroutines.delay
+import org.jetbrains.compose.resources.readResourceBytes
 import kotlin.io.encoding.Base64
 
+/**
+ * Loads system fonts into Skia for correct text rendering on WasmJs.
+ *
+ * On Chrome 103+, uses the Local Font Access API to enumerate and load all system fonts.
+ * On other browsers (Safari, Firefox), loads developer-provided font files from Compose resources.
+ *
+ * @param fontResourcePaths List of resource paths to font files (e.g. "font/NotoSansSC.ttf")
+ *   placed under `composeResources/` in commonMain. Used as fallback for non-Chrome browsers.
+ *   Ignored on Chrome 103+ where system fonts are available.
+ *
+ * Example:
+ * ```
+ * // Place font files at:
+ * //   src/commonMain/composeResources/font/NotoSansSC.ttf
+ *
+ * // wasmJsMain:
+ * ComposeViewport {
+ *     WithFontResourcesLoaded(
+ *         fontResourcePaths = listOf("font/NotoSansSC.ttf")
+ *     ) {
+ *         App()
+ *     }
+ * }
+ * ```
+ */
 @Composable
 fun WithFontResourcesLoaded(
+    vararg fontResourcePaths: String,
+    content: @Composable () -> Unit
+) {
+    WithFontResourcesLoaded(fontResourcePaths.toList(), content)
+}
+
+/**
+ * Loads system fonts into Skia for correct text rendering on WasmJs.
+ *
+ * Chrome 103+: uses Local Font Access API to load all system fonts (any language).
+ * Non-Chrome: loads developer-provided [fontResourcePaths] into Skia.
+ * Non-Chrome with empty [fontResourcePaths]: proceeds without extra fonts.
+ */
+@Composable
+fun WithFontResourcesLoaded(
+    fontResourcePaths: List<String> = emptyList(),
     content: @Composable () -> Unit
 ) {
     var state by remember { mutableStateOf(FontAccessState.Loading) }
@@ -43,15 +84,13 @@ fun WithFontResourcesLoaded(
                     state = FontAccessState.Granted
                 }
                 3 -> {
-                    val count = readFontCount()
-                    for (i in 0 until count) {
-                        val family = readFontFamily(i)
-                        if (family.isNotEmpty()) {
-                            try {
-                                val font = SystemFont(family, FontWeight.Normal, FontStyle.Normal)
-                                resolver.preload(FontFamily(font))
-                            } catch (e: Throwable) {}
-                        }
+                    for (path in fontResourcePaths) {
+                        try {
+                            val bytes = readResourceBytes("composeResources/$path")
+                            val familyName = path.substringAfterLast("/").substringBeforeLast(".")
+                            val font = Font(familyName, bytes, FontWeight.Normal, FontStyle.Normal)
+                            resolver.preload(FontFamily(font))
+                        } catch (e: Throwable) {}
                     }
                     state = FontAccessState.Granted
                 }
@@ -105,105 +144,52 @@ private fun startFontAccessFlow() {
             return btoa(binary);
         }
 
-        var fontNameList = [
-            'PingFang SC', 'PingFang TC', 'PingFang HK',
-            'Heiti SC', 'Heiti TC',
-            'STHeiti', 'STHeiti Light', 'STHeiti Medium',
-            'STSong', 'STKaiti', 'STFangsong', 'STXihei',
-            'Songti SC', 'Kaiti SC', 'Baoli SC', 'Yuanti SC',
-            'Hiragino Sans GB', 'Hiragino Sans CNS',
-            'Microsoft YaHei', 'Microsoft YaHei UI',
-            'SimHei', 'SimSun', 'NSimSun',
-            'DengXian', 'FangSong', 'KaiTi',
-            'Source Han Sans CN', 'Source Han Sans SC',
-            'Source Han Serif CN', 'Source Han Serif SC',
-            'Noto Sans CJK SC', 'Noto Sans CJK TC',
-            'Noto Serif CJK SC', 'Noto Serif CJK TC',
-            'Noto Sans', 'Noto Serif',
-            'Yu Gothic', 'Yu Gothic UI', 'Meiryo',
-            'Hiragino Kaku Gothic ProN', 'Hiragino Maru Gothic ProN',
-            'MS Gothic', 'MS Mincho',
-            'Malgun Gothic', 'Malgun Gothic Semilight',
-            'Nanum Gothic', 'Nanum Myeongjo',
-            'AppleGothic',
-            'Segoe UI', 'Segoe UI Semibold',
-            'Arial', 'Helvetica', 'Helvetica Neue',
-            'Times New Roman', 'Georgia',
-            'Roboto', 'Open Sans',
-            'DejaVu Sans', 'DejaVu Serif', 'DejaVu Sans Mono',
-            'Liberation Sans', 'Liberation Serif',
-            'Menlo', 'Monaco', 'Consolas', 'Courier New',
-            'SF Pro Display', 'SF Pro Text',
-            '.AppleSystemUIFont', '.AppleSystemUIFontSerif',
-            'system-ui', 'sans-serif', 'serif', 'monospace'
-        ];
-
-        async function tryChromeFontAccess() {
-            setLoading('Requesting font access...');
-
-            try {
-                var fonts = await window.queryLocalFonts();
-                console.log('[FontAccess] queryLocalFonts returned', fonts.length, 'fonts');
-
-                var seenFamilies = {};
-                var toLoad = [];
-
-                for (var i = 0; i < fonts.length; i++) {
-                    var f = fonts[i];
-                    var family = f.family;
-                    if (seenFamilies[family]) continue;
-                    seenFamilies[family] = true;
-                    toLoad.push(f);
-                }
-
-                for (var k = 0; k < toLoad.length; k++) {
-                    setLoading('Loading system fonts<br/>' + (k+1) + ' / ' + toLoad.length + '<br/><span style="color:#888;font-size:13px">' + toLoad[k].family + '</span>');
-                    try {
-                        var base64 = await blobToBase64(await toLoad[k].blob());
-                        window.__kbFontData.push({
-                            family: toLoad[k].family,
-                            base64: base64
-                        });
-                    } catch(e) {}
-                }
-
-                if (window.__kbFontData.length > 0) {
-                    overlay.remove();
-                    window.__kbFontStatus = 1;
-                    return true;
-                }
-            } catch(e) {
-                console.log('[FontAccess] Chrome API error, falling back to local mode:', e);
-            }
-            return false;
-        }
-
-        function tryLocalMode() {
-            setLoading('Loading system fonts (local mode)...');
-
-            for (var i = 0; i < fontNameList.length; i++) {
-                window.__kbFontData.push({
-                    family: fontNameList[i],
-                    base64: ''
-                });
-            }
-
-            console.log('[FontAccess] Local mode: registered', fontNameList.length, 'font names');
-            overlay.remove();
-            window.__kbFontStatus = 3;
-        }
-
         async function tryAccess() {
             setLoading('Loading system fonts...');
 
             if ('queryLocalFonts' in window) {
-                var ok = await tryChromeFontAccess();
-                if (ok) return;
-                console.log('[FontAccess] Chrome API failed, falling back to local mode');
-                window.__kbFontData = [];
+                try {
+                    var fonts = await window.queryLocalFonts();
+                    console.log('[FontAccess] queryLocalFonts returned', fonts.length, 'fonts');
+
+                    var seenFamilies = {};
+                    var toLoad = [];
+
+                    for (var i = 0; i < fonts.length; i++) {
+                        var f = fonts[i];
+                        var family = f.family;
+                        if (seenFamilies[family]) continue;
+                        seenFamilies[family] = true;
+                        toLoad.push(f);
+                    }
+
+                    for (var k = 0; k < toLoad.length; k++) {
+                        setLoading('Loading system fonts<br/>' + (k+1) + ' / ' + toLoad.length + '<br/><span style="color:#888;font-size:13px">' + toLoad[k].family + '</span>');
+                        try {
+                            var base64 = await blobToBase64(await toLoad[k].blob());
+                            window.__kbFontData.push({
+                                family: toLoad[k].family,
+                                base64: base64
+                            });
+                        } catch(e) {}
+                    }
+
+                    if (window.__kbFontData.length > 0) {
+                        overlay.remove();
+                        window.__kbFontStatus = 1;
+                        return;
+                    }
+
+                    console.log('[FontAccess] Chrome API returned 0 fonts, falling back');
+                    window.__kbFontData = [];
+                } catch(e) {
+                    console.log('[FontAccess] Chrome API error, falling back:', e);
+                    window.__kbFontData = [];
+                }
             }
 
-            tryLocalMode();
+            overlay.remove();
+            window.__kbFontStatus = 3;
         }
 
         tryAccess();
