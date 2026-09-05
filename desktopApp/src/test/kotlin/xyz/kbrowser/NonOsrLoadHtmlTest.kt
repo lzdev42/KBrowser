@@ -8,12 +8,13 @@ import xyz.kbrowser.webview.initializeKBrowser
 import kotlin.system.exitProcess
 
 /**
- * 非 OSR 模式下三种加载方式的综合测试：
- * 1. loadHtml(htmlString) - 直接传入 HTML 代码字符串
- * 2. loadUrl("file:///path/to/file.html") - 本地文件路径
- * 3. loadUrl("https://www.example.com") - 网络 URL
+ * Comprehensive test of the three loading methods in non-OSR mode:
+ * 1. loadHtml(htmlString) - HTML source string passed directly
+ * 2. loadUrl("file:///path/to/file.html") - local file path
+ * 3. loadUrl("https://www.example.com") - network URL
  *
- * 目的：确认修复 loadHtml 白屏问题后，三种加载方式都能在非 OSR 模式下正常工作。
+ * Purpose: verify that after the loadHtml blank-screen fix, all three methods work
+ * in non-OSR mode.
  */
 fun main() {
     System.setProperty("jcef.chrome.runtime.enabled", "false")
@@ -26,7 +27,7 @@ fun main() {
         initializeKBrowser()
         delay(5000)
 
-        val page = KBrowser.newHeadlessTab()
+        val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)
         delay(3000)
 
         suspend fun pollForMarker(marker: String, timeoutMs: Long = 20000): String? {
@@ -41,7 +42,6 @@ fun main() {
             return null
         }
 
-        // === Test 1: loadHtml (HTML 代码字符串) ===
         println("\n[Test 1] === loadHtml with HTML code string ===")
         val htmlMarker = "LOADHTML_OK_${System.currentTimeMillis()}"
         val htmlContent = "<html><head><meta charset='utf-8'></head><body><div id='m'>$htmlMarker</div><h1>HTML String Test</h1></body></html>"
@@ -55,14 +55,12 @@ fun main() {
             allPassed = false
         }
 
-        // === Test 2: loadUrl with file:// URL ===
         println("\n[Test 2] === loadUrl with file:// URL ===")
-        val fileUrl = "file:" + System.getProperty("user.dir") + "/desktopApp/src/test/resources/headless_viewport_test.html"
+        val fileUrl = "file:" + System.getProperty("user.dir") + "/desktopApp/src/test/resources/viewport_test.html"
         println("[Test 2] loading file URL: $fileUrl")
         page.webView.loadUrl(fileUrl)
-        // 读取文件里的 marker
         val fileContent = try {
-            java.io.File(System.getProperty("user.dir") + "/desktopApp/src/test/resources/headless_viewport_test.html").readText()
+            java.io.File(System.getProperty("user.dir") + "/desktopApp/src/test/resources/viewport_test.html").readText()
         } catch (e: Exception) {
             println("[Test 2] ❌ Cannot read test HTML file: ${e.message}")
             ""
@@ -79,7 +77,6 @@ fun main() {
             println("[Test 2] current URL: $url")
         }
 
-        // === Test 3: loadUrl with https:// URL ===
         println("\n[Test 3] === loadUrl with https:// URL ===")
         val networkUrl = "https://example.com"
         println("[Test 3] loading network URL: $networkUrl")

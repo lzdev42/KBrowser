@@ -264,12 +264,11 @@ actual fun rememberKBWebView(
     }
 }
 
-internal actual fun createHeadlessWebView(
+internal actual fun createPageWebView(
     initialUrl: String?,
     profile: KBProfile?,
     viewportWidth: Int?,
-    viewportHeight: Int?,
-    headless: Boolean
+    viewportHeight: Int?
 ): KBWebView {
     return WasmKBWebView(initialUrl = initialUrl, profile = profile)
 }

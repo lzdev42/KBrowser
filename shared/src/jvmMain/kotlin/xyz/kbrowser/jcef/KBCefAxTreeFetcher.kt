@@ -6,15 +6,15 @@ import xyz.kbrowser.webview.AxTreeData
 import java.util.concurrent.TimeUnit
 
 /**
- * 通过 CDP 获取完整的 Accessibility 树 + 节点坐标。
+ * Fetches the full accessibility tree plus node coordinates over CDP.
  *
- * 策略：
- * 1. CDP Accessibility.getFullAXTree  → 语义信息（role / name / backendDOMNodeId）
- * 2. CDP Runtime.evaluate 一次调用    → 批量获取所有节点的 getBoundingClientRect 坐标
- *    （用 backendDOMNodeId 作为 key，通过 DOM.resolveNode 拿到 objectId，
- *     再用 Runtime.callFunctionOn 批量查询）
+ * Strategy:
+ * 1. CDP Accessibility.getFullAXTree  → semantic info (role / name / backendDOMNodeId)
+ * 2. One CDP Runtime.evaluate call    → batched getBoundingClientRect coordinates for
+ *    all nodes (keyed by backendDOMNodeId, resolved to objectId via DOM.resolveNode,
+ *    then queried in bulk via Runtime.callFunctionOn)
  *
- * 完全不注入持久化 JS，不受 CSP 限制，不污染页面状态。
+ * No persistent JS is injected, so page CSP does not apply and page state is untouched.
  */
 object KBCefAxTreeFetcher {
 
@@ -23,11 +23,10 @@ object KBCefAxTreeFetcher {
     private const val BATCH_SIZE = 80
 
     fun fetch(browser: org.cef.browser.CefBrowser): AxTreeData {
-        // ── 0. RemoteBrowser: 等待 native browser 创建完成 ─────────────────
-        // 在 JBR 远程模式下，CefBrowser 是 RemoteBrowser，其 native peer 在
-        // cef_server 进程中异步创建。必须等待 isNativeBrowserCreated() == true，
-        // 否则 addDevToolsMessageObserver 返回 null，导致 CefDevToolsClient
-        // 处于 "closed" 状态，所有 CDP 调用立即失败。
+        // In JBR remote mode the CefBrowser is a RemoteBrowser whose native peer is
+        // created asynchronously in the cef_server process. Wait until
+        // isNativeBrowserCreated(), otherwise addDevToolsMessageObserver returns null,
+        // the CefDevToolsClient stays "closed", and every CDP call fails immediately.
         if (!waitForNativeBrowser(browser)) {
             return AxTreeData()
         }
@@ -37,13 +36,11 @@ object KBCefAxTreeFetcher {
             return AxTreeData()
         }
 
-        // ── 1. 页面基础信息 ────────────────────────────────────────────────
         val pageInfo = fetchPageInfoViaCDP(devTools, browser) ?: fetchPageInfoViaJs(devTools)
         if (pageInfo == null) {
             return AxTreeData()
         }
 
-        // ── 2. CDP AX 树（语义） ───────────────────────────────────────────
         val axJson = try {
             devTools.executeDevToolsMethod("Accessibility.getFullAXTree", "{}")
                 .get(TIMEOUT_SEC, TimeUnit.SECONDS)
@@ -55,18 +52,18 @@ object KBCefAxTreeFetcher {
         }
 
         val axRoot = Json.parseToJsonElement(axJson).jsonObject
-        // 自适应三种格式：
-        //   Remote 模式: {"nodes":[...]}  (顶层直接是 nodes)
-        //   本地模式:    {"result":{"nodes":[...]}}  (一层 result)
-        //   可能的:      {"result":{"result":{"nodes":[...]}}}  (两层 result)
+        // The response shape differs between modes, so try three layouts:
+        //   Remote mode: {"nodes":[...]}
+        //   Local mode:  {"result":{"nodes":[...]}}
+        //   Possibly:    {"result":{"result":{"nodes":[...]}}}
         val axNodes = axRoot["nodes"]?.jsonArray
             ?: axRoot["result"]?.jsonObject?.get("nodes")?.jsonArray
             ?: axRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("nodes")?.jsonArray
             ?: return AxTreeData()
 
-        // ── 3. 收集有效节点（有 backendDOMNodeId、非 ignored） ──
-        // 注意：不过滤 role 为空的节点，普通 div/span/p 等容器元素 role 可能为空或 "none"，
-        // 但它们仍然是有效的 DOM 节点，需要包含在结果中。
+        // Do not filter out nodes with an empty role: plain containers (div/span/p)
+        // may have an empty or "none" role but are still valid DOM nodes that must
+        // be included in the result.
         data class SemNode(
             val nodeId: String,
             val backendNodeId: Int,
@@ -126,15 +123,11 @@ object KBCefAxTreeFetcher {
             innerHeight = pageInfo.innerHeight
         )
 
-        // ── 4. 批量获取坐标 + 元数据 + 选择器 + 遮挡检测 (纯 CDP) ──
         val resultNodes = mutableListOf<AxNode>()
 
-        // 选择器生成函数（Runtime.callFunctionOn，不注入持久化 JS）
         val selectorFn = xyz.kbrowser.webview.JsScripts.BUILD_SELECTOR_CALL_FN
 
-        // backendNodeId → refid 映射，用于遮挡检测时把 backendNodeId 转成 refid
         val backendIdToRefid = semNodes.associate { it.backendNodeId to "r${it.backendNodeId}" }
-        // nodeId → refid 映射，用于将 CDP AX 树的 childIds（引用 nodeId）转换为 refid
         val nodeIdToRefid = semNodes.associate { it.nodeId to "r${it.backendNodeId}" }
 
         for (batch in semNodes.chunked(BATCH_SIZE)) {
@@ -183,7 +176,6 @@ object KBCefAxTreeFetcher {
 
                 val meta = parseDescribeNodeResponse(describeFuture)
 
-                // 选择器生成
                 val selector: String = try {
                     val resolveJson = resolveFuture.get(BOX_TIMEOUT_SEC, TimeUnit.SECONDS)
                     val objectId = if (resolveJson != null) {
@@ -208,7 +200,8 @@ object KBCefAxTreeFetcher {
                     } else ""
                 } catch (_: Exception) { "" }
 
-                // 遮挡检测：只对可交互节点检测，容器节点跳过（中心点被子元素覆盖是正常的）
+                // Occlusion is checked only for interactive nodes; containers are skipped,
+                // since being covered by a child at their center point is normal.
                 val interactiveRoles = setOf("button", "link", "checkbox", "radio", "textbox",
                     "combobox", "menuitem", "tab", "option", "slider", "spinbutton")
                 val interactiveTags = setOf("a", "button", "input", "select", "textarea", "label")
@@ -229,7 +222,6 @@ object KBCefAxTreeFetcher {
                             val topBackendId = locRoot["backendNodeId"]?.jsonPrimitive?.intOrNull
                                 ?: locRoot["result"]?.jsonObject?.get("backendNodeId")?.jsonPrimitive?.intOrNull
                                 ?: locRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("backendNodeId")?.jsonPrimitive?.intOrNull
-                            // 顶层节点不是自己 → 被遮挡，返回遮挡物的 refid
                             if (topBackendId != null && topBackendId != sem.backendNodeId) {
                                 backendIdToRefid[topBackendId] ?: "r$topBackendId"
                             } else null
@@ -237,8 +229,8 @@ object KBCefAxTreeFetcher {
                     } catch (_: Exception) { null }
                 } else null
 
-                // 将 CDP AX 树的 childIds（引用 nodeId）转换为 refid 列表
-                // 过滤掉无法映射的 childId（对应被 ignored 的节点，不在结果集中）
+                // childIds reference AX nodeIds; drop the ones with no mapping
+                // (ignored nodes, which are not in the result set)
                 val childRefids = sem.childIds.mapNotNull { cid -> nodeIdToRefid[cid] }
 
                 resultNodes.add(
@@ -284,8 +276,6 @@ object KBCefAxTreeFetcher {
         )
     }
 
-    // ── DOM.describeNode 响应解析 ──────────────────────────────────────────
-
     private data class NodeMeta(
         val tagName: String,
         val id: String,
@@ -296,11 +286,11 @@ object KBCefAxTreeFetcher {
     private val EMPTY_META = NodeMeta(tagName = "", id = "", className = "", attributes = emptyMap())
 
     /**
-     * 解析 DOM.describeNode 的 CompletableFuture 响应，提取 tagName、id、className 和 attributes。
-     * 失败时返回空元数据（不跳过节点）。
+     * Parses a DOM.describeNode response into tagName/id/className/attributes.
+     * Returns empty metadata on failure (the node is not skipped).
      *
-     * 响应格式三层 fallback：
-     *   {"node": {...}}  OR  {"result": {"node": {...}}}  OR  {"result": {"result": {"node": {...}}}}
+     * The response nests inconsistently, so try all three layouts:
+     * {"node":{...}} / {"result":{"node":{...}}} / {"result":{"result":{"node":{...}}}}
      */
     private fun parseDescribeNodeResponse(future: java.util.concurrent.CompletableFuture<String>): NodeMeta {
         val json = try {
@@ -309,16 +299,14 @@ object KBCefAxTreeFetcher {
 
         return try {
             val root = Json.parseToJsonElement(json).jsonObject
-            // 三层 fallback 解析 node 对象
             val node = root["node"]?.jsonObject
                 ?: root["result"]?.jsonObject?.get("node")?.jsonObject
                 ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("node")?.jsonObject
                 ?: return EMPTY_META
 
-            // nodeName → tagName（转小写）
             val tagName = node["nodeName"]?.jsonPrimitive?.content?.lowercase() ?: ""
 
-            // attributes 数组：[name, value, name, value, ...] 交替格式
+            // attributes is a flat alternating array: [name, value, name, value, ...]
             val attrsArray = node["attributes"]?.jsonArray
             var id = ""
             var className = ""
@@ -344,46 +332,12 @@ object KBCefAxTreeFetcher {
         }
     }
 
-    // ── 内部数据类 ─────────────────────────────────────────────────────────
-
     /**
-     * 等待 RemoteBrowser 的 native peer 在 cef_server 中创建完成。
-     * 对于非 RemoteBrowser（本地模式），直接返回 true。
-     * 超时后返回 false。
+     * Waits until the RemoteBrowser native peer is created in the cef_server process.
+     * Returns true immediately for non-remote (local) browsers, false on timeout.
      */
     private fun waitForNativeBrowser(browser: org.cef.browser.CefBrowser): Boolean {
-        // 尝试通过反射调用 isNativeBrowserCreated()
-        val isNativeCreatedMethod = try {
-            browser.javaClass.getMethod("isNativeBrowserCreated").also {
-                it.isAccessible = true
-            }
-        } catch (e: NoSuchMethodException) {
-            // 不是 RemoteBrowser，本地模式直接 OK
-            return true
-        } catch (e: Exception) {
-            // 其他异常（SecurityException 等），假设 ready
-            return true
-        }
-
-        val deadlineMs = System.currentTimeMillis() + TIMEOUT_SEC * 1000
-        var lastLog = 0L
-        while (System.currentTimeMillis() < deadlineMs) {
-            val ready = try {
-                isNativeCreatedMethod.invoke(browser) as? Boolean ?: return true
-            } catch (e: Exception) {
-                // 反射调用失败（模块访问限制等），假设 ready
-                return true
-            }
-            if (ready) {
-                return true
-            }
-            val now = System.currentTimeMillis()
-            if (now - lastLog > 500) {
-                lastLog = now
-            }
-            Thread.sleep(50)
-        }
-        return false
+        return CefNativeReadyLatch.awaitBlocking(browser, TIMEOUT_SEC)
     }
 
     private data class PageInfo(
@@ -393,12 +347,9 @@ object KBCefAxTreeFetcher {
         val dpr: Double, val iframeCount: Int
     )
 
-    // ── 辅助函数 ───────────────────────────────────────────────────────────
-
     /**
-     * 通过 CDP Page.getLayoutMetrics 获取页面布局信息。
-     * 不执行任何 JavaScript，纯 CDP 原生调用。
-     * 5 秒超时，失败返回 null（调用方可 fallback 到 fetchPageInfoViaJs）。
+     * Fetches page layout info via CDP Page.getLayoutMetrics — pure CDP, no JavaScript.
+     * 5s timeout; returns null on failure so the caller can fall back to fetchPageInfoViaJs.
      */
     private fun fetchPageInfoViaCDP(devTools: org.cef.browser.CefDevToolsClient, browser: org.cef.browser.CefBrowser? = null): PageInfo? {
         val json = try {
@@ -410,7 +361,6 @@ object KBCefAxTreeFetcher {
 
         val root = Json.parseToJsonElement(json).jsonObject
 
-        // 三层 fallback 解析：顶层 / result / result.result
         val cssLayoutViewport = root["cssLayoutViewport"]?.jsonObject
             ?: root["result"]?.jsonObject?.get("cssLayoutViewport")?.jsonObject
             ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("cssLayoutViewport")?.jsonObject
@@ -421,7 +371,7 @@ object KBCefAxTreeFetcher {
             ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("cssContentSize")?.jsonObject
 
         // DPR = layoutViewport.clientWidth / cssLayoutViewport.clientWidth
-        // (scale 字段是页面缩放比，不是设备像素比)
+        // (the scale field is page zoom, not the device pixel ratio)
         val layoutViewport = root["layoutViewport"]?.jsonObject
             ?: root["result"]?.jsonObject?.get("layoutViewport")?.jsonObject
             ?: root["result"]?.jsonObject?.get("result")?.jsonObject?.get("layoutViewport")?.jsonObject
@@ -430,7 +380,7 @@ object KBCefAxTreeFetcher {
         val cssW  = cssLayoutViewport["clientWidth"]?.jsonPrimitive?.double
         val dpr = if (physW != null && cssW != null && cssW > 0) physW / cssW else 1.0
 
-        // URL 从 browser.url 获取（Page.getLayoutMetrics 不返回 URL）
+        // Page.getLayoutMetrics does not return a URL, so read it from browser.url
         val url = try { browser?.url ?: "" } catch (_: Exception) { "" }
 
         return PageInfo(
@@ -442,7 +392,7 @@ object KBCefAxTreeFetcher {
             docWidth    = cssContentSize?.get("contentWidth")?.jsonPrimitive?.int ?: 0,
             docHeight   = cssContentSize?.get("contentHeight")?.jsonPrimitive?.int ?: 0,
             dpr         = dpr,
-            iframeCount = 0  // Page.getLayoutMetrics 不提供 iframe 计数，后续可通过其他方式补充
+            iframeCount = 0  // Page.getLayoutMetrics does not report iframe counts
         )
     }
 
@@ -473,7 +423,6 @@ object KBCefAxTreeFetcher {
 
         val parsed = Json.parseToJsonElement(json).jsonObject
         val resultObj = parsed["result"]?.jsonObject
-        // 自适应：顶层 value / 一层 result.value / 两层 result.result.value
         val str = parsed["value"]?.jsonPrimitive?.content
             ?: resultObj?.get("value")?.jsonPrimitive?.content
             ?: resultObj?.get("result")?.jsonObject?.get("value")?.jsonPrimitive?.content

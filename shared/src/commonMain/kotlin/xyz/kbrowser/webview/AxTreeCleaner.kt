@@ -1,10 +1,10 @@
 package xyz.kbrowser.webview
 
 /**
- * 清洗 AXTree：只保留视口内的节点。
+ * Cleans the AX tree: keeps only nodes inside the viewport.
  *
- * 视口范围：centerX ∈ [scrollX, scrollX + innerWidth], centerY ∈ [scrollY, scrollY + innerHeight]
- * 和 toYamlSnapshot(SnapshotMode.VIEWPORT) 使用完全相同的视口过滤逻辑。
+ * Viewport range: centerX ∈ [scrollX, scrollX + innerWidth], centerY ∈ [scrollY, scrollY + innerHeight].
+ * Uses the same viewport filtering as [toYamlSnapshot] with [SnapshotMode.VIEWPORT].
  */
 fun AxTreeData.getCleanedAxTree(): AxTreeData {
     val left = scrollX

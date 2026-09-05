@@ -8,8 +8,6 @@ class AxTreeSnapshotTest {
 
     @Test
     fun testToYamlSnapshotClean() {
-        // 构造一个模拟的 AxTreeData
-        // 视口大小：innerWidth=1000, innerHeight=800, scrollX=0, scrollY=0
         val rootNode = AxNode(
             refid = "r1",
             tagName = "#document",
@@ -32,9 +30,9 @@ class AxTreeSnapshotTest {
             height = 800,
             isVisible = true,
             nodeId = "2",
-            childIds = listOf("r3", "r5") // r3 在视口内，r5 在视口外
+            childIds = listOf("r3", "r5") // r3 is in the viewport, r5 is outside
         )
-        // 3 是个空的 generic div，里面包含 4 (button)
+        // r3 is an empty generic div containing r4 (button)
         val divNode = AxNode(
             refid = "r3",
             tagName = "div",
@@ -71,7 +69,7 @@ class AxTreeSnapshotTest {
             isVisible = true,
             nodeId = "4-text"
         )
-        // 5 是一个在视口外的按钮 (centerY = 1000, 视口 bottom = 800)
+        // r5 is a button outside the viewport (centerY = 1000, viewport bottom = 800)
         val outOfViewportButton = AxNode(
             refid = "r5",
             tagName = "button",
@@ -110,13 +108,9 @@ class AxTreeSnapshotTest {
         val cleanYaml = axTreeData.toYamlSnapshot(SnapshotMode.VIEWPORT)
         println(cleanYaml)
 
-        // 验证：
-        // 1. 包含 url
         assertTrue(cleanYaml.contains("url: \"https://example.com\""))
-        // 2. 按钮 r4 应该被包含，且文本被合并为 "确认"
         assertTrue(cleanYaml.contains("refid: \"r4\""))
         assertTrue(cleanYaml.contains("text: \"确认\""))
-        // 3. 按钮 r5 在视口外，应该被过滤掉
         assertTrue(!cleanYaml.contains("refid: \"r5\""))
         assertTrue(!cleanYaml.contains("视口外按钮"))
     }
@@ -147,7 +141,7 @@ class AxTreeSnapshotTest {
             nodeId = "2",
             childIds = listOf("r3")
         )
-        // r3 是一个空的 generic div，里面包含 r4 (button) 和 r6 (button)
+        // r3 is an empty generic div containing r4 (button) and r6 (button)
         val divNode = AxNode(
             refid = "r3",
             tagName = "div",
@@ -222,10 +216,8 @@ class AxTreeSnapshotTest {
         val cleanYaml = axTreeData.toYamlSnapshot(SnapshotMode.VIEWPORT)
         println(cleanYaml)
 
-        // 验证：
-        // 1. r3 作为一个分组容器必须被保留，因为它含有两个有效子节点
+        // r3 must be kept as a group container because it holds two valid children
         assertTrue(cleanYaml.contains("refid: \"r3\""), "r3 容器节点应该保留")
-        // 2. r4 和 r6 在 r3 之下被缩进输出
         assertTrue(cleanYaml.contains("refid: \"r4\""), "r4 应该包含")
         assertTrue(cleanYaml.contains("refid: \"r6\""), "r6 应该包含")
     }

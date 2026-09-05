@@ -38,7 +38,6 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
                 val component = factory.createComponent(builder.myMouseWheelEventEnable)
                 val handler = factory.createCefRenderHandler(component)
 
-                // 构建 CefBrowserSettings（设置 windowless_frame_rate），对应 IDEA 的做法
                 val settings: Any? = try {
                     val settingsClass = Class.forName("org.cef.CefBrowserSettings")
                     val s = settingsClass.getDeclaredConstructor().newInstance()
@@ -50,7 +49,6 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
                     null
                 }
 
-                // 判断是否是 Remote 模式
                 val isRemote = try {
                     val clazz = Class.forName("org.cef.CefApp")
                     val method = clazz.getMethod("isRemoteEnabled")
@@ -63,7 +61,6 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
                 if (isRemote) {
                     try {
                         val rendering = CefRendering.CefRenderingWithHandler(handler, component)
-                        // 远程模式下，使用 createBrowser 并传递 isOffscreen = true
                         cefBrowser = myCefClient.cefClient.createBrowser(
                             builder.myUrl, rendering, true, builder.myRequestContext
                         )
@@ -72,7 +69,7 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
                         println("[KBCefBrowserBase] 远程 OSR 浏览器创建失败: ${e.message}")
                     }
                 } else {
-                    // 本地模式，直接反射使用 CefBrowserOsrWithHandler
+                    // Local mode: instantiate CefBrowserOsrWithHandler via reflection; its constructor is not public.
                     try {
                         val clazz = Class.forName("org.cef.browser.CefBrowserOsrWithHandler")
                         val settingsClass = if (settings != null) Class.forName("org.cef.CefBrowserSettings") else null
@@ -117,7 +114,7 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
                 }
 
                 if (!osrCreated) {
-                    // 降级：使用 CefRenderingWithHandler（不走 CefBrowserOsrWithHandler）
+                    // Fallback: use CefRenderingWithHandler instead of CefBrowserOsrWithHandler.
                     val rendering = CefRendering.CefRenderingWithHandler(handler, component)
                     cefBrowser = myCefClient.cefClient.createBrowser(
                         builder.myUrl, rendering, false, builder.myRequestContext

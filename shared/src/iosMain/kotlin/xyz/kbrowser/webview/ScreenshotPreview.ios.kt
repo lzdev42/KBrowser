@@ -1,4 +1,4 @@
 package xyz.kbrowser.webview
 
-// 截图预览窗口仅在 JVM/Desktop 平台提供，iOS 上为空操作。
+// The screenshot preview window is JVM/Desktop only; no-op on iOS.
 actual fun showScreenshotPreview(bytes: ByteArray) = Unit

@@ -22,22 +22,25 @@ data class AxNode(
     val iframeSrc: String? = null,
     val selector: String = "",
     /**
-     * 遮挡该节点中心点的元素的 refid。
-     * 非 null 表示坐标点击会打到遮挡物而非该节点本身。
-     * AI 应先处理遮挡物（关闭弹窗/广告），或改用 locator(selector).fill() 绕过坐标。
+     * refid of the element occluding this node's center point.
+     * Non-null means a coordinate click would hit the occluder instead of this node.
+     * Handle the occluder first (close the popup/ad), or bypass coordinates with
+     * locator(selector).fill().
      */
     val occludedBy: String? = null,
     /**
-     * CDP AX 节点 ID（来自 Accessibility.getFullAXTree 的 nodeId 字段）。
-     * 用于通过 childIds 构建真实的 DOM 层级关系，替代坐标包含关系重建。
-     * JS 注入路径下为 refid 本身。
+     * CDP AX node ID (the nodeId field from Accessibility.getFullAXTree).
+     * Used to build the real DOM hierarchy via childIds instead of rebuilding it from
+     * coordinate containment.
+     * On the JS injection path this equals the refid.
      */
     val nodeId: String = "",
     /**
-     * CDP AX 子节点 ID 列表（来自 Accessibility.getFullAXTree 的 childIds 字段）。
-     * 引用其他 AX 节点的 nodeId，用于构建真实的 DOM 层级关系。
-     * 绝对定位元素（下拉菜单、弹窗等）的视觉坐标不在 DOM 父节点内，
-     * 坐标包含关系会错误分配父节点，childIds 提供了正确的层级信息。
+     * CDP AX child node IDs (the childIds field from Accessibility.getFullAXTree).
+     * References the nodeId of other AX nodes, used to build the real DOM hierarchy.
+     * Absolutely positioned elements (dropdowns, popups, etc.) can lie outside their DOM
+     * parent's visual bounds, so coordinate containment assigns the wrong parent; childIds
+     * provide the correct hierarchy.
      */
     val childIds: List<String> = emptyList()
 )

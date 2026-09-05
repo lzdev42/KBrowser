@@ -27,7 +27,6 @@ fun main() {
     KBrowser.initializeConfig(storageDir)
     runBlocking { initializeKBrowser() }
 
-    // Create temporary test files
     val testFileA = File.createTempFile("upload_test_a", ".txt").apply {
         writeText("Hello from KBrowser upload test A!")
         deleteOnExit()
@@ -51,7 +50,6 @@ fun main() {
     println("  C1: ${testFileC1.absolutePath} (${testFileC1.length()} bytes)")
     println("  C2: ${testFileC2.absolutePath} (${testFileC2.length()} bytes)")
 
-    // Locate the test HTML file
     val htmlFile = File("desktopApp/src/test/resources/file_upload_test.html")
     if (!htmlFile.exists()) {
         println("[ERROR] Test HTML not found: ${htmlFile.absolutePath}")
@@ -65,16 +63,14 @@ fun main() {
         var failed = 0
 
         try {
-            val page = KBrowser.newHeadlessTab()
-            page.loadUrl(htmlUrl) // suspend，返回时加载完成
+            val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)
+            page.loadUrl(htmlUrl) // suspending; returns once the load completes
 
             println("\n[INFO] Page loaded: ${page.webView.currentUrl.value}")
 
-            // Get AX tree to find elements
             val tree = page.snapshot().rawTree
             println("[INFO] AX tree nodes: ${tree.nodes.size}")
 
-            // Print relevant nodes
             tree.nodes.forEach { node ->
                 if (node.id.isNotEmpty()) {
                     println("  refid=${node.refid} tag=${node.tagName} id=${node.id} " +
@@ -82,7 +78,6 @@ fun main() {
                 }
             }
 
-            // ========== Test A: Visible file input (refid) ==========
             println("\n====== Test A: Visible file input (via refid) ======")
             try {
                 val visibleInput = tree.nodes.find { it.id == "visibleInput" }
@@ -109,7 +104,6 @@ fun main() {
                 failed++
             }
 
-            // ========== Test B: Hidden file input (via CSS selector) ==========
             println("\n====== Test B: Hidden input (via CSS selector) ======")
             try {
                 // Hidden input is NOT in AX tree, use CSS selector directly
@@ -131,7 +125,6 @@ fun main() {
                 failed++
             }
 
-            // ========== Test C: Multiple file upload ==========
             println("\n====== Test C: Multiple file upload ======")
             try {
                 val multiInput = tree.nodes.find { it.id == "multiInput" }
@@ -158,10 +151,8 @@ fun main() {
                 failed++
             }
 
-            // ========== Test D: Verify JS sees the files (DataTransfer check) ==========
             println("\n====== Test D: Verify file list content via JS ======")
             try {
-                // Upload again via selector and verify JS can read the File objects
                 page.uploadFileBySelector("#visibleInput", listOf(testFileA.absolutePath))
                 delay(500)
                 val fileCount = page.evaluateJavascript(
@@ -189,17 +180,14 @@ fun main() {
                 failed++
             }
 
-            // ========== Summary ==========
             println("\n====== Test Summary ======")
             println("Passed: $passed")
             println("Failed: $failed")
             println("Total:  ${passed + failed}")
 
-            // Print event log from page
             val eventLog = page.evaluateJavascript("document.getElementById('log').textContent")
             println("\n[Page Event Log]\n$eventLog")
 
-            // Cleanup
             KBrowser.shutdown()
 
         } catch (e: Exception) {

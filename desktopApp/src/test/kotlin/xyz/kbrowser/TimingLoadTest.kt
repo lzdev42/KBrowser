@@ -7,11 +7,14 @@ import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.initializeKBrowser
 
 /**
- * 回归测试：创建 headless webView 后立即 loadHtml / evaluateJavascript，
- * 验证 native peer 未就绪时操作被排队而非静默丢弃。
+ * Regression test: call loadHtml / evaluateJavascript immediately after creating a
+ * background page, to verify operations are queued rather than silently dropped while
+ * the native peer is not ready yet.
  *
- * 修复前：loadHtml 被静默忽略，evaluateJavascript 的 callback 永不触发 → 超时失败。
- * 修复后：loadHtml / evaluateJavascript 排队等 native peer 就绪后执行 → 通过。
+ * Before the fix: loadHtml was silently ignored and evaluateJavascript's callback never
+ * fired, causing a timeout failure.
+ * After the fix: loadHtml / evaluateJavascript queue until the native peer is ready,
+ * then execute.
  */
 fun main() {
     System.setProperty("jcef.chrome.runtime.enabled", "false")
@@ -23,7 +26,7 @@ fun main() {
         initializeKBrowser()
         delay(3000)
 
-        val page = KBrowser.newHeadlessTab()
+        val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)
         println("[Test] page created, immediately calling loadHtml (no delay)")
 
         val marker = "TIMING_OK_${System.currentTimeMillis()}"

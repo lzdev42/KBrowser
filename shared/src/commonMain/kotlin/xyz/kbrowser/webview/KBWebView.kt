@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.StateFlow
 import xyz.kbrowser.webview.debug.KBDebug
 
 interface KBWebView {
-    // 响应式 Compose 状态
     val currentUrl: StateFlow<String?>
     val currentTitle: StateFlow<String?>
     val loadingState: StateFlow<LoadingState>
@@ -15,7 +14,6 @@ interface KBWebView {
     val canGoBack: StateFlow<Boolean>
     val canGoForward: StateFlow<Boolean>
 
-    // 基础导航控制
     fun loadUrl(url: String)
     fun loadHtml(html: String)
     fun reload()
@@ -23,16 +21,16 @@ interface KBWebView {
     fun goBack()
     fun goForward()
 
-    // JS <-> Native 交互与通信
     fun evaluateJavascript(script: String, callback: ((String) -> Unit)? = null)
 
     /**
-     * 注册单向通知回调（Fire-and-Forget）。
-     * JS 端调用 window.[name](data)，Native 收到 data 字符串，无返回值。
+     * Registers a one-way (fire-and-forget) notification callback.
+     * JS calls window.[name](data); the native side receives the data string, with no return value.
      *
-     * 适用场景：埋点上报、事件通知、日志等不需要等待结果的场景。
+     * Suited for analytics reporting, event notifications, logging, and other cases that
+     * don't need to wait for a result.
      *
-     * JS 调用方式：
+     * JS usage:
      * ```javascript
      * window.onUserAction("click");
      * ```
@@ -41,69 +39,69 @@ interface KBWebView {
     fun unregisterJsCallback(name: String)
 
     /**
-     * 注册支持 Promise 的双向请求处理器（Request-Response）。
-     * JS 端 await window.[name](data) 可直接拿到 Kotlin handler 的返回值。
+     * Registers a bidirectional request handler with Promise support (request-response).
+     * JS can `await window.[name](data)` and get the Kotlin handler's return value directly.
      *
-     * 适用场景：JS 向 Native 请求数据、配置、计算结果等需要等待响应的场景。
+     * Suited for cases where JS requests data, configuration, or computed results from native
+     * and needs to wait for the response.
      *
-     * Kotlin 注册：
+     * Kotlin registration:
      * ```kotlin
      * webView.registerJsHandler("getConfig") { jsonString ->
      *     """{"theme":"dark","version":"1.0"}"""
      * }
      * ```
      *
-     * JS 调用（支持 async/await）：
+     * JS usage (async/await supported):
      * ```javascript
      * const config = await window.getConfig(JSON.stringify({ key: "theme" }));
      * console.log(JSON.parse(config).theme); // "dark"
      * ```
      *
-     * 注意：handler 在后台线程执行，不要在其中直接操作 UI。
-     * 如需注销，调用 [unregisterJsHandler]。
+     * Note: the handler runs on a background thread; do not touch the UI from it.
+     * Call [unregisterJsHandler] to unregister.
      */
     fun registerJsHandler(name: String, handler: (String) -> String)
     fun unregisterJsHandler(name: String)
 
-    // 会话生命周期与清理
     fun clearCacheAndCookies()
 
-    // 回调代理设置
     fun setWebViewClient(client: KBWebViewClient?)
     fun setWebChromeClient(client: KBWebChromeClient?)
 
-    // 释放资源
     fun destroy()
 
-    // 调试 API（统一事件流、健康快照、CDP 逃生舱口）
+    /** Debug API: unified event stream, health snapshot, and a CDP escape hatch. */
     val debug: KBDebug
 
-    // 网页截图，截图像素与 CSS 坐标 1:1 对齐
+    /** Takes a screenshot of the page; screenshot pixels align 1:1 with CSS coordinates. */
     suspend fun takeScreenshot(): KBScreenshot?
 
     /**
-     * 网页背景色，默认黑色。
-     * JVM Desktop: 同时设置外层 Swing 容器和 CEF 渲染层底色（OSR/非 OSR 都生效）。
-     * Android/iOS: 空实现属性，底层由 WebView 自身的 CSS 决定。
+     * Page background color. Defaults to black.
+     * JVM Desktop: sets the background of both the outer Swing container and the CEF
+     * rendering layer (works in OSR and non-OSR modes).
+     * Android/iOS: no-op property; the background is determined by the WebView's own CSS.
      */
     var backgroundColor: Color
 
     /**
-     * 新窗口/新标签页请求回调。
-     * 当页面通过 target="_blank"、window.open() 等方式请求打开新窗口时触发。
-     * 设置此回调后，默认的弹窗行为会被阻止，URL 交由调用方处理。
-     * 不设置时，新窗口请求会被静默丢弃（不会打开任何东西）。
+     * Callback for new window/tab requests.
+     * Fired when a page requests a new window via target="_blank", window.open(), etc.
+     * Once set, the default popup behavior is suppressed and the URL is left to the caller.
+     * When unset, new window requests are silently dropped (nothing is opened).
      */
     var onNewWindowRequest: ((url: String) -> Unit)?
 
     /**
-     * 文件对话框请求回调。
-     * 当页面通过 <input type="file"> 或上传按钮触发文件选择时调用。
+     * Callback for file dialog requests.
+     * Invoked when a file selection is triggered via <input type="file"> or an upload button.
      *
-     * JVM Desktop: 设置后文件选择交由调用方通过 callback 返回文件路径；
-     * 不设置时静默取消（不弹原生对话框，OSR 模式下无法弹出）。
+     * JVM Desktop: when set, the caller returns file paths through the callback;
+     * when unset, the request is silently cancelled (no native dialog is shown; it cannot be
+     * shown in OSR mode).
      *
-     * Android/iOS: 空实现属性，文件上传走平台原生流程。
+     * Android/iOS: no-op property; file uploads go through the platform's native flow.
      */
     var onFileDialogRequest: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)?
 }
@@ -120,12 +118,18 @@ expect fun rememberKBWebView(
     profile: KBProfile? = null
 ): KBWebView
 
-internal expect fun createHeadlessWebView(
+/**
+ * Creates a platform WebView.
+ *
+ * When [viewportWidth] / [viewportHeight] are non-null, the result is a background automation
+ * page: no UI is attached and the render size is fixed to the viewport. When null, the size is
+ * determined by the attached Compose modifier.
+ */
+internal expect fun createPageWebView(
     initialUrl: String? = null,
     profile: KBProfile? = null,
     viewportWidth: Int? = null,
-    viewportHeight: Int? = null,
-    headless: Boolean = true
+    viewportHeight: Int? = null
 ): KBWebView
 
 internal expect suspend fun performClickByCoordinates(

@@ -60,13 +60,12 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
                 val method = config.javaClass.getMethod("isRemoteEnabled")
                 method.invoke(config) as Boolean
             } catch (e: Exception) {
-                // JCefAppConfig 没有 isRemoteEnabled 方法时，默认开启 remote
-                // Remote 模式是零拷贝 OSR 的前提条件（SharedMemory + NativeRasterLoader）
+                // Older JCefAppConfig builds lack isRemoteEnabled; default to remote,
+                // which is the prerequisite for zero-copy OSR (SharedMemory + NativeRasterLoader)
                 true
             }
-            // 启用/禁用 Remote 模式和离屏渲染
-            // OSR 模式下启用 remote（独立 JCEF 进程），非 OSR 模式下不启用
-            // 注：IDEA 默认不启用 remote，但 KBrowser 历史 behavior 是 OSR + remote
+            // Remote mode (a separate JCEF process) is enabled only in OSR mode; IDEA
+            // does not enable it by default, but this library always runs OSR.
             val useOsr = xyz.kbrowser.webview.KBrowser.useOsrMode
             CefApp.setIsRemoteEnabled(useOsr)
             println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: $useOsr")
@@ -76,18 +75,17 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
 
         val macCefFrameworkPathOSX = config.cefFrameworkPathOSX
         val settings = config.cefSettings
-        
-        // JCEF Settings
+
         settings.windowless_rendering_enabled = xyz.kbrowser.webview.KBrowser.useOsrMode
         settings.log_severity = CefSettings.LogSeverity.LOGSEVERITY_INFO
 
-        // 与 IDEA 对齐：macOS 从 java 进程启动时禁用 sandbox（否则 dlopen 会失败）
-        // 参考 IDEA SettingsHelper.loadSettings() 第 92-100 行
+        // Aligned with IDEA (SettingsHelper.loadSettings): on macOS the sandbox must be
+        // disabled when CEF is loaded from a java process, otherwise dlopen fails
         if (System.getProperty("os.name").lowercase().contains("mac")) {
             settings.no_sandbox = true
         }
 
-        // 默认背景色黑色（在网页渲染前 CEF 使用的底色）
+        // Default background color (what CEF shows before the page renders)
         settings.background_color = settings.ColorType(0, 0, 0, 255)
         
         // Ensure Alloy rendering mode by disabling Chrome Runtime
@@ -95,20 +93,17 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
             val chromeRuntimeField = settings.javaClass.getField("chrome_runtime")
             chromeRuntimeField.set(settings, false)
         } catch (e: Exception) {
-            // 忽略找不到字段或设置失败的情况
+            // older JCEF builds may lack the field; ignore failures
         }
         
-        // Disable remote debugging port by default
         settings.remote_debugging_port = 0
         
-        // Set explicit cache path using the provided storageDir
         settings.cache_path = storageDir
         
         val args = config.appArgs.toMutableList()
         println("[KBCefApp] Raw Args from Config: $args")
         println("[KBCefApp] Server Exe: ${config.serverExe}")
         
-        // Ensure standard IDEA args are present
         if (!args.contains("--autoplay-policy=no-user-gesture-required")) {
             args.add("--autoplay-policy=no-user-gesture-required")
         }
@@ -173,7 +168,6 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         println("[KBCefApp] Calling CefApp.getInstance...")
         System.out.flush()
         
-        // Fix: Pass args to getInstance
         myCefApp = CefApp.getInstance(args.toTypedArray(), settings, config.serverExe)
         println("[KBCefApp] CefApp.getInstance returned successfully!")
         System.out.flush()

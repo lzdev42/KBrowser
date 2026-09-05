@@ -18,7 +18,7 @@ import kotlin.math.roundToInt
 class KBCefOsrComponent : JPanel() {
 
     companion object {
-        /** 与 IDEA 保持一致：100ms 节流，防止高频 wasResized 导致 JCEF native 崩溃 */
+        /** Matches IDEA: 100ms throttle; high-frequency wasResized calls crash JCEF's native layer. */
         private const val RESIZE_DELAY_MS = 100
     }
 
@@ -30,11 +30,13 @@ class KBCefOsrComponent : JPanel() {
     @Volatile
     private var myCefFocusState = false
 
-    /** IME 适配器，参照 IntelliJ 的 JBCefInputMethodAdapter */
+    /** IME adapter, modeled after IntelliJ's JBCefInputMethodAdapter. */
     private val myInputMethodAdapter = KBCefInputMethodAdapter(this)
 
-    // ---- Resize 节流（对应 IDEA 的 myResizeAlarm + myScheduleResizeMs）----
-    // 使用 javax.swing.Timer（在 EDT 回调，线程安全），生命周期跟随 addNotify/removeNotify
+    // Uses javax.swing.Timer, which fires on the EDT (thread-safe).
+    // Created in init rather than addNotify: background-page components are never
+    // attached to any container, so addNotify never fires and the reshape throttle
+    // must always be available.
     private var myResizeAlarm: Timer? = null
     private val myScheduleResizeMs = AtomicLong(-1L)
     private val myScaleInitialized = AtomicBoolean(false)
@@ -48,14 +50,11 @@ class KBCefOsrComponent : JPanel() {
             AWTEvent.MOUSE_EVENT_MASK or
             AWTEvent.MOUSE_WHEEL_EVENT_MASK or
             AWTEvent.MOUSE_MOTION_EVENT_MASK or
-            AWTEvent.INPUT_METHOD_EVENT_MASK or  // 启用输入法事件派发
-            AWTEvent.FOCUS_EVENT_MASK           // 启用焦点事件派发，用于同步 CEF 焦点状态
+            AWTEvent.INPUT_METHOD_EVENT_MASK or
+            AWTEvent.FOCUS_EVENT_MASK  // needed to sync CEF focus state
         )
 
-        // 启用输入法支持，使 OS IME 能向组件发送组合/提交事件
         enableInputMethods(true)
-
-        // 注册输入法监听器，将 OS IME 事件转发给 CEF
         addInputMethodListener(myInputMethodAdapter)
 
         isFocusable = true
@@ -71,11 +70,12 @@ class KBCefOsrComponent : JPanel() {
             }
         })
 
-        // graphicsConfiguration 变更（分辨率切换、移动到另一块屏幕）
-        // 对应 IDEA：第一次不延迟，后续延迟 1000ms，避免 browser 内部状态被打断
+        // graphicsConfiguration changes (DPI switch, moving to another screen).
+        // Matches IDEA: the first change is applied immediately, later ones are
+        // delayed 1000ms to avoid interrupting internal browser state.
         addPropertyChangeListener("graphicsConfiguration") {
             if (myScaleInitialized.get()) {
-                // 已初始化过，延迟 1000ms 再更新，对应 IDEA 的 JBR-7335 workaround
+                // JBR-7335 workaround
                 SwingUtilities.invokeLater {
                     Timer(1000) { onGraphicsConfigurationChanged() }.also {
                         it.isRepeats = false
@@ -87,22 +87,28 @@ class KBCefOsrComponent : JPanel() {
                 myScaleInitialized.set(true)
             }
         }
+
+        myResizeAlarm = createResizeAlarm()
     }
 
-    /** 供 [KBCefInputMethodAdapter] 访问 pixelDensity 用于 DPI 坐标转换 */
+    private fun createResizeAlarm(): Timer = Timer(RESIZE_DELAY_MS) {
+        val browser = myBrowser ?: return@Timer
+        val handler = myRenderHandler ?: return@Timer
+        browser.wasResized(0, 0)
+        handler.startResizePusher(browser, true)
+    }.also { it.isRepeats = false }
+
+    /** Exposed so [KBCefInputMethodAdapter] can read pixelDensity for DPI coordinate conversion. */
     val renderHandler: KBCefOsrHandler? get() = myRenderHandler
 
     fun setBrowser(browser: CefBrowser) {
         myBrowser = browser
-        // 将浏览器实例传递给 IME 适配器，用于调用 ImeSetComposition/ImeCommitText
         myInputMethodAdapter.setBrowser(browser)
     }
 
     fun setRenderHandler(renderHandler: KBCefOsrHandler) {
         myRenderHandler = renderHandler
 
-        // 将 Handler 的 IME 回调桥接到 InputMethodAdapter
-        // 参照 IntelliJ: myRenderHandler.addCaretListener(myInputMethodAdapter)
         renderHandler.addCaretListener(myInputMethodAdapter)
 
         addHierarchyListener { e ->
@@ -124,18 +130,12 @@ class KBCefOsrComponent : JPanel() {
 
     override fun addNotify() {
         super.addNotify()
-        // 创建 resize alarm（EDT 线程安全的单次 Timer）
-        // 注意：每次 reshape 都会 cancel 并重新 schedule，实现节流
-        myResizeAlarm = Timer(RESIZE_DELAY_MS) {
-            val browser = myBrowser ?: return@Timer
-            val handler = myRenderHandler ?: return@Timer
-            browser.wasResized(0, 0)
-            handler.startResizePusher(browser, true)
-        }.also { it.isRepeats = false }
+        myResizeAlarm ?: run { myResizeAlarm = createResizeAlarm() }
 
-        // 在 createImmediately() 之前主动读取当前屏幕的 pixelDensity，
-        // 避免 JCEF 以默认 density=1.0 渲染导致首次截图尺寸不完整。
-        // （正常情况下 graphicsConfiguration 事件会在组件显示后触发，但时序上晚于 createImmediately）
+        // Read the current screen pixelDensity before createImmediately(): otherwise
+        // JCEF renders at the default density 1.0 and the first frame is incomplete.
+        // (The graphicsConfiguration event fires only after the component is shown,
+        // later than createImmediately.)
         try {
             val gc = graphicsConfiguration
             if (gc != null && !myScaleInitialized.get()) {
@@ -145,15 +145,17 @@ class KBCefOsrComponent : JPanel() {
             }
         } catch (_: Exception) {}
 
-        // 对齐 IDEA：addNotify 只调用 createImmediately，不主动 wasResized
-        // reshape 会在首次 layout 时自然触发，避免初始尺寸时序错乱
+        // Matches IDEA: addNotify only calls createImmediately, no explicit wasResized —
+        // reshape fires naturally on first layout, avoiding initial-size timing issues.
         myBrowser?.createImmediately()
     }
 
     override fun removeNotify() {
         super.removeNotify()
+        // Stop the throttle timer but do not null it: background-page components may
+        // never be mounted, and one re-mounted after removal must keep the reshape
+        // throttle working.
         myResizeAlarm?.stop()
-        myResizeAlarm = null
         myScheduleResizeMs.set(-1L)
         myScaleInitialized.set(false)
         myCefFocusState = false
@@ -166,31 +168,29 @@ class KBCefOsrComponent : JPanel() {
     }
 
     /**
-     * resize 节流核心逻辑，1:1 对应 IDEA JBCefOsrComponent.reshape()：
-     * - 快速拖拽时每次 reshape 只重置 alarm，不立即调用 wasResized
-     * - 超过 RESIZE_DELAY_MS 没有新的 reshape 时才真正通知 JCEF
-     * - 防止高频调用导致 native 层崩溃
+     * Resize debounce, mirroring IDEA's JBCefOsrComponent.reshape(): during fast
+     * drags each reshape only resets the alarm; JCEF is notified via wasResized
+     * only after RESIZE_DELAY_MS without a new reshape, since high-frequency
+     * calls crash the native layer.
      */
+    @Deprecated("Deprecated in Java")
     @Suppress("DEPRECATION")
     override fun reshape(x: Int, y: Int, w: Int, h: Int) {
         super.reshape(x, y, w, h)
-        val alarm = myResizeAlarm ?: return   // addNotify 之前忽略
+        val alarm = myResizeAlarm ?: return
         val browser = myBrowser ?: return
         val handler = myRenderHandler ?: return
 
         val now = System.currentTimeMillis()
         if (!alarm.isRunning) {
-            // 第一次 reshape，记录开始时间
             myScheduleResizeMs.set(now)
         }
         alarm.stop()
 
         if (now - myScheduleResizeMs.get() >= RESIZE_DELAY_MS) {
-            // 距上次 reshape 超过 100ms（拖拽停止），立即通知
             browser.wasResized(0, 0)
             handler.startResizePusher(browser, true)
         } else {
-            // 还在快速拖拽中，延迟执行
             alarm.start()
         }
     }
@@ -257,17 +257,14 @@ class KBCefOsrComponent : JPanel() {
     }
 
     /**
-     * 主动确保 CEF 焦点状态与 AWT 焦点一致。
-     *
-     * 这是 OSR 模式下中文输入能否工作的关键保障。
-     * 仅依赖 [processFocusEvent] 被动通知 CEF 焦点状态是不够的，因为：
-     * 1. Compose SwingPanel 的焦点代理机制可能导致 AWT FocusEvent 不到达 KBCefOsrComponent
-     * 2. 外层容器（KBCefBrowser.myComponent）的焦点拦截可能阻止事件穿透
-     * 3. 窗口切换、Compose 重组等场景下焦点事件可能丢失
-     *
-     * 如果不调用 [CefBrowser.setFocus]，CEF 内部认为浏览器没有焦点，
-     * 会静默丢弃所有 IME 请求（ImeSetComposition/ImeCommitText），
-     * 而 sendKeyEvent 不检查焦点状态所以英文字母能输入——这就是中文无法输入的根本原因。
+     * Forces the CEF focus state to match the AWT focus — the key to IME input
+     * working in OSR mode. Relying on [processFocusEvent] alone is not enough:
+     * Compose's SwingPanel focus proxy may swallow AWT FocusEvents, the outer
+     * container ([KBCefBrowser.myComponent]) may intercept them, and focus events
+     * can be lost on window switches or recomposition. Until [CefBrowser.setFocus]
+     * is called, CEF considers itself unfocused and silently drops all IME requests
+     * (ImeSetComposition/ImeCommitText), while sendKeyEvent ignores focus state —
+     * which is why ASCII input works but CJK input does not.
      */
     private fun ensureCefFocus() {
         val browser = myBrowser ?: return
@@ -279,8 +276,8 @@ class KBCefOsrComponent : JPanel() {
     }
 
     /**
-     * 当 AWT 焦点变化时，同步通知 CEF。
-     * OSR 模式下 CEF 没有原生窗口来检测焦点，必须由嵌入方显式通知。
+     * Syncs CEF focus on AWT focus changes. In OSR mode CEF has no native window
+     * to detect focus, so the embedder must notify it explicitly.
      */
     override fun processFocusEvent(e: FocusEvent) {
         super.processFocusEvent(e)
@@ -289,8 +286,9 @@ class KBCefOsrComponent : JPanel() {
 
     override fun processKeyEvent(e: KeyEvent) {
         super.processKeyEvent(e)
-        // IME 组合期间，KEY_TYPED 事件由 InputMethodEvent 通道处理，
-        // 不转发给 CEF，避免英文字母与中文输入双路冲突。
+        // During IME composition, KEY_TYPED is handled via the InputMethodEvent
+        // channel; do not forward it to CEF, or ASCII and composed CJK input would
+        // double-feed.
         if (e.id == KeyEvent.KEY_TYPED && myInputMethodAdapter.isComposing) {
             e.consume()
             return
@@ -299,21 +297,19 @@ class KBCefOsrComponent : JPanel() {
     }
 
     /**
-     * 向 OS 输入法提供光标位置信息，使 IME 候选窗口正确定位。
-     * 参照 IntelliJ 的 JBCefOsrComponent.getInputMethodRequests()。
+     * Provides the caret location to the OS input method so the IME candidate
+     * window is positioned correctly. Modeled after IntelliJ's JBCefOsrComponent.
      */
     override fun getInputMethodRequests(): java.awt.im.InputMethodRequests {
         return myInputMethodAdapter
     }
 
     /**
-     * 从外层 [KBCefBrowser.myComponent] 转发 [InputMethodEvent]。
-     * AWT 的 InputMethodEvent 只派发给焦点拥有者，不会自动穿透给子组件，
-     * 因此当焦点落在外层 JPanel 上时，由外层手动调用此方法完成转发。
-     *
-     * 使用 [processInputMethodEvent] 而非直接调用 listener，保证
-     * INPUT_METHOD_TEXT_CHANGED 和 CARET_POSITION_CHANGED 两种事件
-     * 都能被正确路由到对应的 listener 方法。
+     * Forwards [InputMethodEvent]s from the outer [KBCefBrowser.myComponent]. AWT
+     * dispatches input method events only to the focus owner and never propagates
+     * them to child components, so the outer panel calls this manually when it
+     * holds focus. Routed through [processInputMethodEvent] so both
+     * INPUT_METHOD_TEXT_CHANGED and CARET_POSITION_CHANGED reach their listeners.
      */
     fun forwardInputMethodEvent(e: InputMethodEvent) {
         processInputMethodEvent(e)

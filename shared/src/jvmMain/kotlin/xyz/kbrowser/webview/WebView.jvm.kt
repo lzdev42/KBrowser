@@ -50,22 +50,23 @@ import kotlin.coroutines.resume
 private val profileContextMap = java.util.concurrent.ConcurrentHashMap<String, org.cef.browser.CefRequestContext>()
 
 /**
- * OSR 模式状态跟踪。
- * 默认尝试 OSR；若首次创建失败则永久降级到非 OSR，整个生命周期内不再重试。
- * 对调用方透明，不暴露任何配置接口。
+ * Tracks off-screen rendering (OSR) availability.
+ * OSR is attempted by default; if the first browser creation fails, the process
+ * permanently falls back to non-OSR for its lifetime. Transparent to callers,
+ * no configuration exposed.
  */
 object OsrMode {
     @Volatile private var state: State = State.UNKNOWN
 
     private enum class State { UNKNOWN, OSR_OK, FALLBACK }
 
-    /** 当前是否应该尝试 OSR */
+    /** Whether OSR should still be attempted */
     fun shouldUseOsr(): Boolean = KBrowser.useOsrMode && state != State.FALLBACK
 
-    /** 标记 OSR 已成功，后续直接走 OSR */
+    /** Marks OSR as working; subsequent instances go straight to OSR */
     fun markOk() { if (state == State.UNKNOWN) state = State.OSR_OK }
 
-    /** 标记 OSR 失败，后续所有实例降级到非 OSR */
+    /** Marks OSR as failed; all subsequent instances fall back to non-OSR */
     fun markFailed() {
         state = State.FALLBACK
     }
@@ -74,12 +75,10 @@ object OsrMode {
 class JvmWebView(
     initialUrl: String?,
     profile: KBProfile? = null,
-    val isHeadless: Boolean = false,
     private val viewportWidth: Int? = null,
     private val viewportHeight: Int? = null
 ) : KBWebView {
     private val isDestroyed = AtomicBoolean(false)
-    private var headlessFrame: javax.swing.JFrame? = null
 
 
     private val nativeReady = AtomicBoolean(false)
@@ -133,21 +132,6 @@ class JvmWebView(
         val client = KBCefApp.getInstance().createClient()
         val isMac = System.getProperty("os.name").lowercase().contains("mac")
 
-        val applyResponsiveScaling = { b: CefBrowser ->
-            val comp = b.uiComponent
-            if (comp != null) {
-                val currentWidth = comp.width
-                val targetWidth = 1280.0
-                if (currentWidth > 0 && currentWidth < targetWidth) {
-                    val scale = currentWidth / targetWidth
-                    val zoomLevel = kotlin.math.ln(scale) / kotlin.math.ln(1.2)
-                    b.zoomLevel = zoomLevel
-                } else {
-                    b.zoomLevel = 0.0
-                }
-            }
-        }
-
         var requestContext: org.cef.browser.CefRequestContext? = null
         if (profile != null) {
             requestContext = profileContextMap.computeIfAbsent(profile.profileId) {
@@ -155,7 +139,6 @@ class JvmWebView(
             }
         }
 
-        // OSR 为默认渲染模式，失败时自动降级到非 OSR（对调用方透明）
         fun buildBrowser(useOsr: Boolean): KBCefBrowser {
             val builder = KBCefBrowserBuilder()
                 .setUrl(initialUrl ?: "about:blank")
@@ -189,17 +172,16 @@ class JvmWebView(
                     e.x, e.y, e.clickCount, e.isPopupTrigger, e.scrollType, e.scrollAmount,
                     -e.wheelRotation
                 )
-                // 这里利用反射发送，因为有些 JCEF 版本里 sendMouseWheelEvent 可能未通过接口直接暴露
+                // Reflection: sendMouseWheelEvent is not exposed via the public
+                // interface in some JCEF versions
                 try {
                     val method = cefBrowser.javaClass.getMethod("sendMouseWheelEvent", java.awt.event.MouseWheelEvent::class.java)
                     method.invoke(cefBrowser, invertedEvent)
                 } catch (ex: Exception) {
-                    // sendMouseWheelEvent failed silently
                 }
             }
         }
         
-        // Register display handler to capture url and title changes
         browser.myCefClient.addDisplayHandler(object : CefDisplayHandlerAdapter() {
             override fun onAddressChange(b: CefBrowser, f: CefFrame, u: String) {
                 currentUrl.value = u
@@ -210,7 +192,6 @@ class JvmWebView(
             }
         }, cefBrowser)
 
-        // Register load handler using our new multi-listener HandlerSupport to isolate callbacks
         val myLoadHandlerInstance = object : CefLoadHandlerAdapter() {
             override fun onLoadingStateChange(
                 b: CefBrowser,
@@ -242,7 +223,7 @@ class JvmWebView(
                     loadingState.value = LoadingState.Finished
                     webViewClient?.onPageFinished(b.url ?: "")
 
-                    // 重新注入 JS 回调，因为每次页面加载/刷新后 window 上下文会被重置
+                    // Re-inject JS callbacks: the window context is reset on every page load/refresh
                     jsCallbacks.forEach { (name, query) ->
                         val script = """
                             window.$name = function(arg) {
@@ -251,7 +232,7 @@ class JvmWebView(
                         """.trimIndent()
                         b.executeJavaScript(script, b.url ?: "", 0)
                     }
-                    // 重新注入 JS handler（Promise 包装），原因同上
+                    // Same re-injection for the Promise-based JS handlers
                     jsHandlers.forEach { (name, query) ->
                         val funcName = query.myFunc.myFuncName
                         val script = """
@@ -291,7 +272,6 @@ class JvmWebView(
         }
         browser.myCefClient.addLoadHandler(myLoadHandlerInstance, cefBrowser)
 
-        // 拦截新窗口请求（target="_blank"、window.open() 等）
         browser.myCefClient.addLifeSpanHandler(object : org.cef.handler.CefLifeSpanHandlerAdapter() {
             override fun onBeforePopup(
                 b: org.cef.browser.CefBrowser,
@@ -301,19 +281,18 @@ class JvmWebView(
             ): Boolean {
                 val handler = onNewWindowRequest
                 return if (handler != null) {
-                    // 有监听者：通知并阻止默认弹窗
                     handler(targetUrl)
                     true  // true = cancel popup
                 } else {
-                    // 无监听者：静默阻止（不打开任何东西）
+                    // No listener: still block silently (nothing is opened)
                     true
                 }
             }
         }, cefBrowser)
 
-        // 拦截文件对话框（<input type="file"> 等）
-        // OSR 模式下没有原生窗口，无法弹出原生文件对话框，必须始终拦截
-        // 非 OSR 降级实例也统一拦截：自动化库的核心就是程序化控制
+        // File dialogs (<input type="file">) are always intercepted: OSR has no native
+        // window to host a native dialog, and non-OSR fallback instances behave the same
+        // since programmatic control is the point of an automation library
         browser.myCefClient.addDialogHandler(object : org.cef.handler.CefDialogHandler {
             override fun onFileDialog(
                 b: org.cef.browser.CefBrowser,
@@ -327,7 +306,6 @@ class JvmWebView(
             ): Boolean {
                 val handler = onFileDialogRequest
                 if (handler != null) {
-                    // 有监听者：映射为跨平台模型，交给上层处理
                     val kbMode = when (mode) {
                         org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_OPEN -> KBFileDialogMode.OPEN
                         org.cef.handler.CefDialogHandler.FileDialogMode.FILE_DIALOG_OPEN_MULTIPLE -> KBFileDialogMode.OPEN_MULTIPLE
@@ -351,18 +329,18 @@ class JvmWebView(
                         }
                     }
                     handler(request, kbCallback)
-                    return true  // 已拦截，阻止弹原生对话框
+                    return true  // intercepted: suppress the native dialog
                 } else {
-                    // 无监听者：始终拦截，静默取消（与 onNewWindowRequest 模式一致）
+                    // No listener: still intercept and silently cancel (same policy as onNewWindowRequest)
                     callback.Cancel()
                     return true
                 }
             }
         }, cefBrowser)
 
-        // 同时注册 CefJSDialogHandler 与 CDP 拦截：
-        // - CefJSDialogHandler 是正统拦截方式，返回 true 可阻止原生弹窗
-        // - CDP 作为 JBR Remote 模式下的 fallback（CefJSDialogHandler 在某些场景不触发）
+        // Both interception paths are registered: CefJSDialogHandler is the canonical way
+        // to block native dialogs (return true), CDP is the fallback for JBR Remote mode
+        // where the handler does not always fire
         setupNativeJsDialogHandling()
         setupCdpDialogHandling()
 
@@ -393,27 +371,20 @@ class JvmWebView(
             }
         }, cefBrowser)
 
-        if (isHeadless) {
+        // Background automation page (fixed viewport): no UI is attached, so size the
+        // component and create immediately. OSR renders off-screen, so the internal JCEF
+        // JPanel can render and screenshot without a hosting window
+        if (viewportWidth != null && viewportHeight != null) {
             SwingUtilities.invokeLater {
-                val frame = javax.swing.JFrame()
-                frame.isUndecorated = true
-                // 默认 1280×720，与 Playwright 默认 viewport 一致
-                val vpW = viewportWidth ?: 1280
-                val vpH = viewportHeight ?: 720
-                frame.setSize(vpW, vpH)
-                try {
-                    frame.opacity = 0.0f
-                } catch (e: Exception) {
-                }
-                frame.contentPane.add(browser.getComponent())
-                frame.isVisible = true
-                headlessFrame = frame
+                browser.getComponent().setSize(viewportWidth, viewportHeight)
+                cefBrowser.uiComponent?.setSize(viewportWidth, viewportHeight)
+                browser.createImmediately()
             }
         }
 
         Thread({
             try {
-                waitForNativeBrowserCreated(cefBrowser)
+                xyz.kbrowser.jcef.CefNativeReadyLatch.awaitBlocking(cefBrowser, 20)
             } catch (_: Exception) {}
             val toRun: List<() -> Unit>
             synchronized(readyLock) {
@@ -472,7 +443,9 @@ class JvmWebView(
 
         val nav = pendingNav.get() ?: return
 
-        if (!inner.isDisplayable || inner.width <= 0 || inner.height <= 0) {
+        // Background pages are never displayable (no UI), so a non-zero size is enough to
+        // navigate; UI pages wait for Compose layout to provide the size
+        if (inner.width <= 0 || inner.height <= 0) {
             scheduleOneRetry()
             return
         }
@@ -530,25 +503,22 @@ class JvmWebView(
         })
     }
 
-    // ── 交互锁定 + 鼠标轨迹 + 点击动画渲染（AWT 层）────────────────────────
     private var lockPanel: javax.swing.JPanel? = null
     private val trailPoints = java.util.concurrent.CopyOnWriteArrayList<java.awt.Point>()
     private val MAX_TRAIL = 30
 
-    // 点击动画：每次点击产生一个扩散圆圈
     private data class ClickRipple(val x: Int, val y: Int, val startMs: Long)
     private val clickRipples = java.util.concurrent.CopyOnWriteArrayList<ClickRipple>()
     private val RIPPLE_DURATION_MS = 500L
 
     /**
-     * 触发点击动画（圆圈扩散效果）。
-     * 无论是否锁定都会显示，作为自动化操作的视觉反馈。
-     * 坐标为视口坐标（CSS 像素）。
+     * Shows the click ripple animation as visual feedback for automated actions.
+     * Rendered whether or not interaction is locked.
+     * Coordinates are viewport coordinates (CSS pixels).
      */
     fun triggerClickAnimation(viewportX: Int, viewportY: Int) {
         val panel = lockPanel ?: return
         clickRipples.add(ClickRipple(viewportX, viewportY, System.currentTimeMillis()))
-        // 启动动画定时器
         val timer = javax.swing.Timer(16) { _ ->
             val now = System.currentTimeMillis()
             clickRipples.removeAll { now - it.startMs > RIPPLE_DURATION_MS }
@@ -556,7 +526,6 @@ class JvmWebView(
         }
         timer.isRepeats = true
         timer.start()
-        // 动画结束后停止定时器
         javax.swing.Timer(RIPPLE_DURATION_MS.toInt() + 50) { timer.stop() }.apply {
             isRepeats = false
             start()
@@ -571,10 +540,10 @@ class JvmWebView(
     }
 
     /**
-     * 锁定/解锁用户交互。
-     * locked=true：在 JCEF 组件上覆盖 AWT 面板，拦截所有用户输入，并渲染鼠标轨迹。
-     * locked=false：移除面板，恢复用户操作。
-     * 自动化操作（CDP）不受影响。
+     * Locks/unlocks user interaction.
+     * locked=true: overlays the JCEF component with an AWT panel that swallows all
+     * user input and renders the mouse trail. locked=false: removes the panel.
+     * CDP-driven automation is unaffected either way.
      */
     fun setInteractionLocked(locked: Boolean) {
         SwingUtilities.invokeLater {
@@ -589,11 +558,9 @@ class JvmWebView(
                         val g2 = g as java.awt.Graphics2D
                         g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
 
-                        // 半透明遮罩
                         g2.color = java.awt.Color(0, 0, 0, 60)
                         g2.fillRect(0, 0, width, height)
 
-                        // 鼠标轨迹
                         val pts = trailPoints.toList()
                         if (pts.size >= 2) {
                             for (i in 1 until pts.size) {
@@ -604,7 +571,6 @@ class JvmWebView(
                                 g2.drawLine(pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y)
                             }
                         }
-                        // 当前光标圆点
                         pts.lastOrNull()?.let { p ->
                             g2.color = java.awt.Color(180, 60, 20, 230)
                             g2.fillOval(p.x - 14, p.y - 14, 28, 28)
@@ -613,7 +579,6 @@ class JvmWebView(
                             g2.drawOval(p.x - 14, p.y - 14, 28, 28)
                         }
 
-                        // 点击扩散动画（隐性商标 😎）
                         val now = System.currentTimeMillis()
                         for (ripple in clickRipples.toList()) {
                             val elapsed = now - ripple.startMs
@@ -621,11 +586,9 @@ class JvmWebView(
                             val maxRadius = 60
                             val radius = (progress * maxRadius).toInt()
                             val alpha = ((1f - progress) * 255).toInt()
-                            // 外圈扩散
                             g2.color = java.awt.Color(180, 60, 20, (alpha * 0.7f).toInt())
                             g2.stroke = java.awt.BasicStroke(2.5f)
                             g2.drawOval(ripple.x - radius, ripple.y - radius, radius * 2, radius * 2)
-                            // 内圈实心（点击中心）
                             val innerRadius = ((1f - progress) * 20).toInt().coerceAtLeast(0)
                             g2.color = java.awt.Color(200, 70, 20, alpha)
                             g2.fillOval(ripple.x - innerRadius, ripple.y - innerRadius, innerRadius * 2, innerRadius * 2)
@@ -636,7 +599,7 @@ class JvmWebView(
                     background = java.awt.Color(0, 0, 0, 0)
                     bounds = comp.bounds
                     cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR)
-                    // 消费所有用户输入事件
+                    // Empty listeners swallow all user input events
                     addMouseListener(object : java.awt.event.MouseAdapter() {})
                     addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {})
                     addMouseWheelListener { /* consume */ }
@@ -699,8 +662,8 @@ class JvmWebView(
                     xyz.kbrowser.jcef.KBCefJSQuery.Response("OK")
                 }
 
-                // 直接把脚本内联执行，不走 base64+eval，避免触发 CSP eval() 限制。
-                // 用 Function 构造器也会被 CSP 拦截，所以直接把脚本文本嵌入 IIFE。
+                // Inline the script text directly instead of base64+eval: CSP blocks eval(),
+                // and the Function constructor is blocked too, so embed the script in an IIFE
                 val funcName = jsQuery.myFunc.myFuncName
                 val trimmed = script.trim()
                 val processedScript = if (trimmed.startsWith("return")) {
@@ -739,8 +702,8 @@ class JvmWebView(
     }
 
     override fun setWebChromeClient(client: KBWebChromeClient?) {
-        // JS dialog / permission handler 已在 init 中作为永久转发 handler 注册到 CefClient，
-        // 这里只需更新当前回调实例；handler 内部会读取此字段并分发。
+        // JS dialog / permission handlers are registered permanently on the CefClient in
+        // init; here we only swap the callback instance the handlers dispatch to
         this.webChromeClient = client
     }
 
@@ -770,13 +733,13 @@ class JvmWebView(
     }
 
     /**
-     * 注册支持 Promise 的双向请求处理器。
+     * Registers a Promise-capable two-way JS handler.
      *
-     * 由于 JCEF Remote 模式下 CefMessageRouter 的 success 回调无法可靠地把返回值
-     * 传回 JS Promise，这里采用 callback-id 方案：
-     *   1. JS 端生成唯一 id，把 {__kb_cb_id, data} 通过 CefMessageRouter 发到 native
-     *   2. native handler 执行完后，通过 executeJavaScript 调用 window.__kb_handler_cb[id]
-     *   3. JS Promise 得到真正的返回值
+     * In JCEF Remote mode the CefMessageRouter success callback cannot reliably return
+     * values to the JS Promise, so a callback-id scheme is used:
+     *   1. JS generates a unique id and posts {__kb_cb_id, data} via CefMessageRouter
+     *   2. The native handler runs, then calls window.__kb_handler_cb[id] via executeJavaScript
+     *   3. The JS Promise resolves with the actual return value
      */
     override fun registerJsHandler(name: String, handler: (String) -> String) {
         if (isDestroyed.get()) return
@@ -857,10 +820,8 @@ class JvmWebView(
         }
     }
 
-    // getOuterHtml removed
-
     companion object {
-        /** 通过环境变量 KB_CDP_DEBUG=true 启用坐标转换详细日志 */
+        /** Enables verbose coordinate-conversion logging via the KB_CDP_DEBUG=true env var */
         private val CDP_DEBUG = System.getenv("KB_CDP_DEBUG") == "true"
     }
 
@@ -1048,8 +1009,8 @@ class JvmWebView(
     }
 
     /**
-     * 获取设备像素比 (DPR)。
-     * 使用 AWT 组件的 graphics configuration 获取实际显示缩放比例。
+     * Returns the device pixel ratio (DPR), read from the AWT component's graphics
+     * configuration (the actual display scaling).
      */
     private fun getDevicePixelRatio(): Double {
         val comp = cefBrowser.uiComponent ?: return 1.0
@@ -1134,8 +1095,6 @@ class JvmWebView(
         onResolved((x * dpr).toInt(), (y * dpr).toInt(), comp)
     }
 
-    // clickBySelector removed
-
     /**
      * Pure CDP click implementation matching Playwright's coordinate system.
      *
@@ -1153,17 +1112,14 @@ class JvmWebView(
         val devTools = cefBrowser.devToolsClient ?: return null
         if (devTools.isClosed) return null
 
-        // Step 1: get scroll + viewport info
         val scrollInfo = getScrollAndViewportInfo(devTools) ?: return null
         val scrollX = scrollInfo[0]
         val scrollY = scrollInfo[1]
         val viewW = scrollInfo[2]
         val viewH = scrollInfo[3]
 
-        // Step 2: smart scroll into view, returns [newClientX, newClientY] if scrolled
         val newViewportCoords = smartScrollIntoView(devTools, x, y, scrollX, scrollY, viewW, viewH, popupSelector)
 
-        // Step 3: compute viewport coords (CSS pixels, no DPR scaling)
         val clientX: Int
         val clientY: Int
         if (newViewportCoords != null) {
@@ -1175,7 +1131,6 @@ class JvmWebView(
         }
         logCoord("clickByCoordinates: doc=($x,$y) scroll=($scrollX,$scrollY) → client=($clientX,$clientY)")
 
-        // Step 4: dispatch mouse events via CDP
         withContext(Dispatchers.IO) {
             try {
                 devTools.executeDevToolsMethod(
@@ -1195,7 +1150,6 @@ class JvmWebView(
             }
         }
 
-        // 触发点击动画（视口坐标）
         triggerClickAnimation(clientX, clientY)
         updateMouseTrail(clientX, clientY)
 
@@ -1243,11 +1197,8 @@ class JvmWebView(
             }
         }
 
-        // 更新鼠标轨迹（悬停移动）
         updateMouseTrail(clientX, clientY)
     }
-
-    // ===== Native Key Event Methods (JCEF DevTools CDP) =====
 
     /**
      * Maps [KeyboardKey] to Windows Virtual Key Code (used by CDP Input.dispatchKeyEvent).
@@ -1311,12 +1262,10 @@ class JvmWebView(
         val keyCode = keyToWindowsKeyCode(key)
         val devTools = cefBrowser.devToolsClient ?: return
 
-        // keydown
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
             "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode}"
         )
-        // keyup
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
             "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode}"
@@ -1332,12 +1281,10 @@ class JvmWebView(
         val modMask = keyToCdpModifierMask(modifier)
         val devTools = cefBrowser.devToolsClient ?: return
 
-        // keydown with modifiers
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
             "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode,\"modifiers\":$modMask}"
         )
-        // keyup with modifiers
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
             "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode,\"modifiers\":$modMask}"
@@ -1351,7 +1298,6 @@ class JvmWebView(
         if (isDestroyed.get()) return
         val devTools = cefBrowser.devToolsClient ?: return
         
-        // Escape json string properly
         val escaped = char.toString().replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t").replace("\\", "\\\\")
         
         // Use Input.insertText for robust character injection regardless of OS focus state
@@ -1367,17 +1313,21 @@ class JvmWebView(
         SwingUtilities.invokeLater {
             if (isDestroyed.get()) return@invokeLater
 
-            val osrComp = browser.getComponent().components
+            val outer = browser.getComponent()
+            if (outer.width != width || outer.height != height) {
+                outer.setSize(width, height)
+            }
+
+            val osrComp = outer.components
                 .filterIsInstance<KBCefOsrComponent>()
                 .firstOrNull()
-
             if (osrComp != null) {
                 if (osrComp.width != width || osrComp.height != height) {
                     osrComp.setSize(width, height)
                 }
             }
-            // 非 OSR 模式不需要手动 resize —— macOS 窗口模式下 wasResized() 是 no-op，
-            // NSView 由 doUpdate()（paint 时触发）定位，headless 模式下 JFrame 尺寸固定不涉及拖拽。
+            // Non-OSR mode needs no manual resize: in macOS windowed mode wasResized() is a
+            // no-op and the NSView is positioned by doUpdate() (triggered on paint)
         }
     }
 
@@ -1389,11 +1339,6 @@ class JvmWebView(
             jsHandlers.values.forEach { it.dispose() }
             jsHandlers.clear()
             browser.dispose()
-            try {
-                headlessFrame?.dispose()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
         }
     }
 
@@ -1404,7 +1349,6 @@ class JvmWebView(
         if (devTools.isClosed) return null
 
         return try {
-            // Step 1: capture screenshot via CDP
             val screenshotJson = withContext(Dispatchers.IO) {
                 devTools.executeDevToolsMethod(
                     "Page.captureScreenshot",
@@ -1420,8 +1364,7 @@ class JvmWebView(
 
             val pngBytes = java.util.Base64.getDecoder().decode(base64)
 
-            // Step 2: get DPR from Page.getLayoutMetrics
-            // DPR = layoutViewport.clientWidth / cssLayoutViewport.clientWidth
+            // DPR = layoutViewport.clientWidth / cssLayoutViewport.clientWidth (Page.getLayoutMetrics)
             val dpr = withContext(Dispatchers.IO) {
                 try {
                     val metricsJson = devTools.executeDevToolsMethod(
@@ -1445,7 +1388,7 @@ class JvmWebView(
                 }
             }
 
-            // Step 3: decode image and downscale if DPR > 1.0 to align pixels with CSS coords
+            // Downscale when DPR > 1.0 so output pixels align with CSS coordinates
             val srcImage = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(pngBytes)) ?: return null
             val cssWidth: Int
             val cssHeight: Int
@@ -1491,7 +1434,6 @@ class JvmWebView(
         val devTools = cefBrowser.devToolsClient ?: return
         if (devTools.isClosed) return
 
-        // Get scroll position to convert document coords to viewport coords
         val scrollInfo = withContext(Dispatchers.IO) {
             try {
                 val expr = "window.scrollX + ',' + window.scrollY"
@@ -1532,7 +1474,7 @@ class JvmWebView(
     }
 
     suspend fun dragByCoordinates(startX: Int, startY: Int, endX: Int, endY: Int) {
-        // 依次解析起点和终点坐标（串行，避免并发修改共享变量）
+        // Start and end are resolved serially to avoid concurrent writes to the shared result vars
         var startAwtX = -1
         var startAwtY = -1
         var startComp: java.awt.Component? = null
@@ -1541,7 +1483,7 @@ class JvmWebView(
             startAwtX = awtX; startAwtY = awtY; startComp = comp
         }
         if (startComp == null) return
-        val comp = startComp!!
+        val comp = startComp
 
         var endAwtX = -1
         var endAwtY = -1
@@ -1564,13 +1506,11 @@ class JvmWebView(
 
         cefBrowser.sendMouseEvent(java.awt.event.MouseEvent(comp, java.awt.event.MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), modifiers, endAwtX, endAwtY, 1, false, java.awt.event.MouseEvent.BUTTON1))
 
-        // 拖拽轨迹：起点→终点，终点触发点击动画（用 CSS 视口坐标）
+        // Trail and ripple use CSS viewport coords (the AWT mouse events above use physical pixels)
         updateMouseTrail(startX, startY)
         updateMouseTrail(endX, endY)
         triggerClickAnimation(endX, endY)
     }
-
-    // ── 原生 CefJSDialogHandler 拦截 alert/confirm/prompt ──────────────────
 
     private fun setupNativeJsDialogHandling() {
         browser.myCefClient.addJSDialogHandler(object : CefJSDialogHandler {
@@ -1590,8 +1530,8 @@ class JvmWebView(
                         // KBDebug captures via CDP Page.javascriptDialogOpening and responds via CDP.
                         return true
                     }
-                    // 没有上层监听时直接关闭对话框并阻止默认弹窗，否则非 headless 模式下
-                    // 会弹出原生对话框，把当前 URL（可能是超长 base64）显示在标题里。
+                    // No listener: dismiss the dialog and suppress the native popup so
+                    // native dialogs cannot interfere with automation
                     when (dialogType) {
                         CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_ALERT -> callback.Continue(true, "")
                         CefJSDialogHandler.JSDialogType.JSDIALOGTYPE_CONFIRM -> callback.Continue(false, "")
@@ -1628,7 +1568,7 @@ class JvmWebView(
                 isReload: Boolean,
                 callback: CefJSDialogCallback
             ): Boolean {
-                // 没有上层监听时允许离开，避免页面卡死
+                // No listener: allow leaving so the page cannot get stuck on the dialog
                 val client = webChromeClient ?: run {
                     callback.Continue(true, "")
                     return true
@@ -1645,13 +1585,12 @@ class JvmWebView(
         }, cefBrowser)
     }
 
-    // ── CDP 拦截 JS alert/confirm/prompt ───────────────────────────────────
-
     private fun setupCdpDialogHandling() {
-        // RemoteBrowser 的 native peer 是异步创建的，等就绪后再挂 listener
+        // The RemoteBrowser native peer is created asynchronously; wait until it is
+        // ready before attaching the listener
         Thread({
             try {
-                waitForNativeBrowserCreated(cefBrowser)
+                xyz.kbrowser.jcef.CefNativeReadyLatch.awaitBlocking(cefBrowser, 15)
                 val devTools = cefBrowser.devToolsClient ?: return@Thread
                 devTools.addEventListener { method, paramsJson ->
                     if (method == "Page.javascriptDialogOpening") {
@@ -1660,26 +1599,9 @@ class JvmWebView(
                 }
                 devTools.executeDevToolsMethod("Page.enable", "{}").get(3, java.util.concurrent.TimeUnit.SECONDS)
             } catch (e: Exception) {
-                // CDP 对话框拦截为非关键路径，失败时静默降级
+                // CDP dialog interception is non-critical; silently degrade on failure
             }
         }, "KB-CdpDialog-Setup").apply { isDaemon = true }.start()
-    }
-
-    private fun waitForNativeBrowserCreated(browser: CefBrowser) {
-        val method = try {
-            browser.javaClass.getMethod("isNativeBrowserCreated")
-        } catch (e: NoSuchMethodException) {
-            return
-        }
-        val deadline = System.currentTimeMillis() + 15_000
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                if (method.invoke(browser) as? Boolean == true) return
-            } catch (e: Exception) {
-                return
-            }
-            Thread.sleep(50)
-        }
     }
 
     private fun handleCdpDialogOpening(
@@ -1700,7 +1622,7 @@ class JvmWebView(
                     // and respondDialog() will handle it. Don't auto-dismiss.
                     return
                 }
-                // 没有上层监听时直接取消，避免 JS 挂起
+                // No listener: cancel the dialog so the pending JS does not hang
                 devTools.executeDevToolsMethod("Page.handleJavaScriptDialog", """{"accept":false}""")
                 return
             }
@@ -1725,12 +1647,12 @@ class JvmWebView(
                     })
                 }
                 else -> {
-                    // beforeunload 等不认识的类型统一取消
+                    // Unknown types (beforeunload etc.) are canceled as well
                     handleCdpDialogAccept(devTools, false)
                 }
             }
         } catch (e: Exception) {
-            // 异常时尝试取消对话框，防止页面卡死
+            // On failure, cancel the dialog so the page does not get stuck
             try {
                 devTools.executeDevToolsMethod("Page.handleJavaScriptDialog", """{"accept":false}""")
             } catch (ignored: Exception) {}
@@ -1751,34 +1673,10 @@ class JvmWebView(
             }
             devTools.executeDevToolsMethod("Page.handleJavaScriptDialog", params)
         } catch (e: Exception) {
-            // 取消/确认失败时页面可能已关闭，忽略
+            // Page may already be gone if the cancel/confirm fails; ignore
         }
     }
 
-}
-
-object JcefWebViewFactory {
-    fun create(initialUrl: String?, profile: KBProfile?, viewportWidth: Int? = null, viewportHeight: Int? = null, headless: Boolean = true): KBWebView {
-        return JvmWebView(initialUrl, profile, isHeadless = headless, viewportWidth = viewportWidth, viewportHeight = viewportHeight)
-    }
-}
-
-object JcefWebViewRender {
-    @Composable
-    fun render(webView: KBWebView, modifier: Modifier) {
-        val jvmWebView = webView as? JvmWebView ?: return
-
-        androidx.compose.foundation.layout.Box(
-            modifier = modifier.background(androidx.compose.ui.graphics.Color.Black)
-        ) {
-            SwingPanel(
-                factory = {
-                    jvmWebView.browser.getComponent()
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-    }
 }
 
 @Composable
@@ -1803,7 +1701,18 @@ actual fun KBWebView(
         return
     }
 
-    JcefWebViewRender.render(webView, modifier)
+    val jvmWebView = webView as? JvmWebView ?: return
+
+    androidx.compose.foundation.layout.Box(
+        modifier = modifier.background(androidx.compose.ui.graphics.Color.Black)
+    ) {
+        SwingPanel(
+            factory = {
+                jvmWebView.browser.getComponent()
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
 }
 
 @Composable
@@ -1813,7 +1722,7 @@ actual fun rememberKBWebView(
 ): KBWebView {
     val webView = androidx.compose.runtime.remember(initialUrl, profile) {
         if (JcefChecker.isJcefAvailable) {
-            JcefWebViewFactory.create(initialUrl, profile, headless = false)
+            JvmWebView(initialUrl, profile = profile)
         } else {
             FallbackWebView(initialUrl ?: "about:blank")
         }
@@ -1826,16 +1735,14 @@ actual fun rememberKBWebView(
     return webView
 }
 
-
-internal actual fun createHeadlessWebView(
+internal actual fun createPageWebView(
     initialUrl: String?,
     profile: KBProfile?,
     viewportWidth: Int?,
-    viewportHeight: Int?,
-    headless: Boolean
+    viewportHeight: Int?
 ): KBWebView {
     if (JcefChecker.isJcefAvailable) {
-        return JvmWebView(initialUrl, profile = profile, isHeadless = headless, viewportWidth = viewportWidth, viewportHeight = viewportHeight)
+        return JvmWebView(initialUrl, profile = profile, viewportWidth = viewportWidth, viewportHeight = viewportHeight)
     } else {
         return FallbackWebView(initialUrl ?: "about:blank")
     }
@@ -2080,7 +1987,6 @@ internal actual suspend fun performSetFiles(
     if (devTools.isClosed) throw UnsupportedOperationException("DevTools client is closed")
 
     withContext(Dispatchers.IO) {
-        // Step 1: Get document root node ID
         val docResult = devTools.executeDevToolsMethod("DOM.getDocument")
             .get(5, java.util.concurrent.TimeUnit.SECONDS)
             ?: throw RuntimeException("DOM.getDocument returned null")
@@ -2089,7 +1995,6 @@ internal actual suspend fun performSetFiles(
             ?.jsonObject?.get("nodeId")?.jsonPrimitive?.content?.toIntOrNull()
             ?: throw RuntimeException("Failed to get document nodeId. Response: $docResult")
 
-        // Step 2: Query element by CSS selector
         val escapedSelector = kotlinx.serialization.json.Json.encodeToString(
             kotlinx.serialization.json.JsonPrimitive(selector)
         )
@@ -2103,7 +2008,6 @@ internal actual suspend fun performSetFiles(
             ?: throw RuntimeException("Element not found for selector: $selector. Response: $queryResult")
         if (elementNodeId == 0) throw RuntimeException("Element not found for selector: $selector (nodeId=0)")
 
-        // Step 3: Set files on the input element via CDP
         val filesJson = kotlinx.serialization.json.Json.encodeToString(
             kotlinx.serialization.json.JsonArray(filePaths.map { kotlinx.serialization.json.JsonPrimitive(it) })
         )
@@ -2113,13 +2017,12 @@ internal actual suspend fun performSetFiles(
         ).get(5, java.util.concurrent.TimeUnit.SECONDS)
         if (setResult == null) throw RuntimeException("DOM.setFileInputFiles returned null")
 
-        // Check for error in result
         val setRoot = kotlinx.serialization.json.Json.parseToJsonElement(setResult)
         val error = setRoot.jsonObject["error"]
         if (error != null) throw RuntimeException("DOM.setFileInputFiles error: $error")
     }
 
-    // Step 4: Dispatch 'change' event via JS so the page detects the file selection
+    // Dispatch a 'change' event via JS so the page notices the file selection
     val escaped = selector.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
     val js = """
         (function() {

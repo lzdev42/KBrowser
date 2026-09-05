@@ -5,28 +5,30 @@ import kotlinx.coroutines.runBlocking
 import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.debug.DialogType
 import xyz.kbrowser.webview.initializeKBrowser
+import kotlin.system.exitProcess
 
 /**
- * KBDebug API 测试 — 从 AI/MCP toolcall 视角验证。
+ * KBDebug API test — verifies the debug API from an AI/MCP tool-call perspective.
  *
- * 验证点：
- * 1. enable() 后 inspect() 返回初始状态
- * 2. console.error 被捕获到 inspect().errors
- * 3. JS 异常被捕获到 inspect().errors
- * 4. 网络请求被捕获到 inspect().requests（XHR 过滤）
- * 5. 导航后 inspect().navigated == true
- * 6. alert/confirm 弹框被捕获到 inspect().activeDialog
- * 7. respondDialog() 能处理弹框
- * 8. snapshot() 返回正确的性能指标
- * 9. getResponseBody() 能取回响应体
- * 10. executeCdp() 原始 CDP 调用可用
- * 11. inspect() checkpoint：第二次调用只返回新事件
- * 12. disable() 后 inspect() 返回空
+ * Checks:
+ * 1. inspect() returns the initial state after enable()
+ * 2. console.error is captured in inspect().errors
+ * 3. JS exceptions are captured in inspect().errors
+ * 4. Network requests are captured in inspect().requests (XHR filtering)
+ * 5. inspect().navigated == true after navigation
+ * 6. alert/confirm dialogs are captured in inspect().activeDialog
+ * 7. respondDialog() can dismiss/accept dialogs
+ * 8. snapshot() returns correct performance metrics
+ * 9. getResponseBody() retrieves the response body
+ * 10. executeCdp() works for raw CDP calls
+ * 11. inspect() checkpoint: the second call returns only new events
+ * 12. inspect() returns empty after disable()
  */
 fun main() {
     System.setProperty("jcef.chrome.runtime.enabled", "false")
     println("====== KBDebug API Test ======")
 
+    var allPass = false
     runBlocking {
         val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
         KBrowser.initializeConfig(storageDir)
@@ -34,11 +36,10 @@ fun main() {
         println("[Test] CefApp 初始化完成")
         delay(3000)
 
-        val page = KBrowser.newHeadlessTab()
+        val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)
         val webView = page.webView
         val debug = webView.debug
 
-        // 1. enable + initial inspect
         println("\n[Test] === 1. enable() + initial inspect() ===")
         debug.enable()
         delay(2000)
@@ -51,7 +52,6 @@ fun main() {
         val pass1 = !initial.navigated && initial.activeDialog == null
         println("[Test] ${if (pass1) "PASS" else "FAIL"} initial inspect")
 
-        // 2. console errors
         println("\n[Test] === 2. console errors ===")
         page.evaluateJavascript(
             """
@@ -71,7 +71,6 @@ fun main() {
         val pass2 = consoleErrors.any { it.message.contains("test error") }
         println("[Test] ${if (pass2) "PASS" else "FAIL"} console errors captured")
 
-        // 3. JS exception
         println("\n[Test] === 3. JS exception ===")
         page.evaluateJavascript(
             """
@@ -91,7 +90,6 @@ fun main() {
         val pass3 = excErrors.any { it.message.contains("test exception") }
         println("[Test] ${if (pass3) "PASS" else "FAIL"} JS exception captured")
 
-        // 4. network requests (XHR filtering)
         println("\n[Test] === 4. network requests ===")
         page.loadUrl("https://httpbin.org/get")
         delay(3000)
@@ -104,14 +102,13 @@ fun main() {
         val pass4 = insp4.requests.isNotEmpty()
         println("[Test] ${if (pass4) "PASS" else "FAIL"} network requests captured")
 
-        // 5. navigation detected
         println("\n[Test] === 5. navigation detected ===")
         val pass5 = insp4.navigated && insp4.currentUrl.contains("httpbin.org/get")
         println("[Test] navigated: ${insp4.navigated}")
         println("[Test] currentUrl: ${insp4.currentUrl}")
         println("[Test] ${if (pass5) "PASS" else "FAIL"} navigation detected")
 
-        // 6. dialog — alert (use setTimeout so evaluateJavascript doesn't block on alert())
+        // setTimeout so evaluateJavascript doesn't block on the modal alert()
         println("\n[Test] === 6. dialog (alert) ===")
         page.evaluateJavascript("setTimeout(function() { alert('test alert message'); }, 0)")
         delay(1000)
@@ -123,7 +120,6 @@ fun main() {
             insp6.activeDialog!!.message.contains("test alert")
         println("[Test] ${if (pass6) "PASS" else "FAIL"} alert dialog captured")
 
-        // 7. respondDialog — dismiss the alert
         println("\n[Test] === 7. respondDialog (dismiss alert) ===")
         val dismissResult = debug.respondDialog(accept = false)
         delay(500)
@@ -133,7 +129,7 @@ fun main() {
         println("[Test] activeDialog after dismiss: ${insp7.activeDialog}")
         println("[Test] ${if (pass7) "PASS" else "FAIL"} respondDialog dismisses alert")
 
-        // 7b. dialog — confirm (use setTimeout to avoid blocking)
+        // setTimeout so evaluateJavascript doesn't block on the modal confirm()
         println("\n[Test] === 7b. dialog (confirm) + respondDialog(accept=true) ===")
         page.evaluateJavascript("setTimeout(function() { confirm('are you sure?'); }, 0)")
         delay(1000)
@@ -148,7 +144,6 @@ fun main() {
         val pass7b = pass7bDialog && acceptResult && insp7bAfter.activeDialog == null
         println("[Test] ${if (pass7b) "PASS" else "FAIL"} confirm dialog + accept")
 
-        // 8. snapshot
         println("\n[Test] === 8. snapshot() ===")
         val snap = debug.snapshot()
         println("[Test] jsHeapUsedSize: ${snap.jsHeapUsedSize}")
@@ -159,7 +154,6 @@ fun main() {
         val pass8 = snap.jsHeapUsedSize > 0 && snap.domNodeCount > 0
         println("[Test] ${if (pass8) "PASS" else "FAIL"} snapshot")
 
-        // 9. getResponseBody
         println("\n[Test] === 9. getResponseBody() ===")
         val firstReqId = insp4.requests.firstOrNull()?.requestId
         val pass9: Boolean
@@ -174,14 +168,12 @@ fun main() {
         }
         println("[Test] ${if (pass9) "PASS" else "FAIL"} getResponseBody")
 
-        // 10. executeCdp
         println("\n[Test] === 10. executeCdp() ===")
         val cdpResult = debug.executeCdp("Runtime.evaluate", """{"expression":"1+1"}""")
         println("[Test] CDP result: $cdpResult")
         val pass10 = cdpResult != null && cdpResult.contains("2")
         println("[Test] ${if (pass10) "PASS" else "FAIL"} executeCdp")
 
-        // 11. inspect checkpoint — second call should only return new events
         println("\n[Test] === 11. inspect() checkpoint ===")
         val insp11a = debug.inspect()
         delay(500)
@@ -193,7 +185,6 @@ fun main() {
         println("[Test] second inspect errors: ${insp11b.errors.size}")
         println("[Test] ${if (pass11) "PASS" else "FAIL"} inspect checkpoint")
 
-        // 12. disable
         println("\n[Test] === 12. disable() ===")
         debug.disable()
         val insp12 = debug.inspect()
@@ -201,7 +192,6 @@ fun main() {
         println("[Test] inspect after disable — errors: ${insp12.errors.size}, requests: ${insp12.requests.size}")
         println("[Test] ${if (pass12) "PASS" else "FAIL"} disable")
 
-        // Summary
         println("\n====== Test Summary ======")
         val results = listOf(
             "initial inspect" to pass1,
@@ -221,10 +211,11 @@ fun main() {
         results.forEach { (name, pass) ->
             println("  ${if (pass) "PASS" else "FAIL"} $name")
         }
-        val allPass = results.all { it.second }
+        allPass = results.all { it.second }
         println("====== ${if (allPass) "ALL PASS" else "SOME FAILED"} ======")
 
         page.close()
         KBrowser.shutdown()
     }
+    if (!allPass) exitProcess(1)
 }

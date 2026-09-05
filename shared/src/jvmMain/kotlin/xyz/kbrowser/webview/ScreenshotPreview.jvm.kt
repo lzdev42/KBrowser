@@ -19,11 +19,11 @@ actual fun showScreenshotPreview(bytes: ByteArray) {
 }
 
 /**
- * 截图预览窗口。
+ * Screenshot preview window.
  *
- * - 窗口尺寸固定为图片分辨率（1:1 CSS 像素），不可缩放
- * - 鼠标在图片上移动时，在光标右下方实时绘制坐标标签 "(x, y)"
- * - 坐标直接对应 KBPage.clickByCoordinates / screenshot 的坐标系
+ * - Sized 1:1 to the image resolution (CSS pixels), not resizable
+ * - Draws a live "(x, y)" label next to the cursor while hovering
+ * - Coordinates match the KBPage.clickByCoordinates / screenshot coordinate system
  */
 private class ScreenshotPreviewWindow(private val image: BufferedImage) : JFrame() {
 
@@ -35,10 +35,7 @@ private class ScreenshotPreviewWindow(private val image: BufferedImage) : JFrame
         val panel = ImagePanel(image)
         contentPane.add(panel)
 
-        // 固定窗口为图片尺寸（pack() 会根据 preferredSize 自动计算含标题栏的总尺寸）
         pack()
-
-        // 居中显示
         setLocationRelativeTo(null)
     }
 }
@@ -48,11 +45,10 @@ private class ImagePanel(private val image: BufferedImage) : JPanel() {
     @Volatile private var mouseX: Int = -1
     @Volatile private var mouseY: Int = -1
 
-    // 坐标标签的样式常量
     private val labelFont = Font(Font.MONOSPACED, Font.BOLD, 12)
     private val labelPadH = 6
     private val labelPadV = 3
-    private val labelOffsetX = 14  // 标签相对光标的偏移
+    private val labelOffsetX = 14
     private val labelOffsetY = 14
 
     init {
@@ -87,10 +83,9 @@ private class ImagePanel(private val image: BufferedImage) : JPanel() {
         val g2 = g as Graphics2D
         g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
 
-        // 1:1 绘制图片，不做任何缩放
+        // Draw the image 1:1 with no scaling so cursor coords match image pixels
         g2.drawImage(image, 0, 0, null)
 
-        // 绘制坐标标签
         if (mouseX >= 0 && mouseY >= 0) {
             val label = "(${mouseX}, ${mouseY})"
             g2.font = labelFont
@@ -98,7 +93,6 @@ private class ImagePanel(private val image: BufferedImage) : JPanel() {
             val textW = fm.stringWidth(label)
             val textH = fm.ascent
 
-            // 标签框位置：默认在光标右下方，靠近右/下边缘时自动翻转
             val boxW = textW + labelPadH * 2
             val boxH = textH + labelPadV * 2
             var bx = mouseX + labelOffsetX
@@ -106,19 +100,15 @@ private class ImagePanel(private val image: BufferedImage) : JPanel() {
             if (bx + boxW > width)  bx = mouseX - labelOffsetX - boxW
             if (by + boxH > height) by = mouseY - labelOffsetY - boxH
 
-            // 半透明深色背景
             g2.color = Color(0, 0, 0, 180)
             g2.fillRoundRect(bx, by, boxW, boxH, 6, 6)
 
-            // 亮色边框
             g2.color = Color(100, 200, 255, 200)
             g2.drawRoundRect(bx, by, boxW, boxH, 6, 6)
 
-            // 坐标文字
             g2.color = Color(220, 240, 255)
             g2.drawString(label, bx + labelPadH, by + labelPadV + textH - fm.descent)
 
-            // 十字准星（细线，半透明）
             g2.color = Color(100, 200, 255, 120)
             g2.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.5f)
             g2.drawLine(mouseX, 0, mouseX, height)

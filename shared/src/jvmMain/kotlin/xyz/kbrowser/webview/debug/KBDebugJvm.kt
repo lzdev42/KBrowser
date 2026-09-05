@@ -72,7 +72,7 @@ internal class KBDebugJvm(
         lastKnownUrl = cefBrowser.url ?: ""
         Thread({
             try {
-                waitForNativeBrowserCreated(cefBrowser)
+                xyz.kbrowser.jcef.CefNativeReadyLatch.awaitBlocking(cefBrowser, 15)
                 if (!enabledFlag.get()) return@Thread
                 val dt = cefBrowser.devToolsClient ?: return@Thread
                 if (dt.isClosed) return@Thread
@@ -254,8 +254,6 @@ internal class KBDebugJvm(
         }
     }
 
-    // ── CDP event parsing ────────────────────────────────────────────────
-
     private fun handleCdpEvent(method: String, paramsJson: String) {
         when (method) {
             "Runtime.consoleAPICalled" -> handleConsoleApi(paramsJson)
@@ -435,23 +433,6 @@ internal class KBDebugJvm(
         if (resourceType in XHR_LIKE_TYPES) return true
         val ext = url.substringAfterLast('?', "").substringAfterLast('#', "").substringAfterLast('.', "")
         return ext.lowercase() !in STATIC_EXTENSIONS
-    }
-
-    private fun waitForNativeBrowserCreated(browser: CefBrowser) {
-        val method = try {
-            browser.javaClass.getMethod("isNativeBrowserCreated")
-        } catch (e: NoSuchMethodException) {
-            return
-        }
-        val deadline = System.currentTimeMillis() + 15_000
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                if (method.invoke(browser) as? Boolean == true) return
-            } catch (_: Exception) {
-                return
-            }
-            Thread.sleep(50)
-        }
     }
 
     companion object {

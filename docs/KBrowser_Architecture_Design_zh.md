@@ -25,8 +25,7 @@ classDiagram
     class KBrowser {
         <<object Singleton>>
         +initializeConfig(storageDir: String?, useOsr: Boolean)
-        +newPage(profile: KBProfile?) KBPage
-        +newHeadlessTab(profile: KBProfile?, viewportWidth: Int, viewportHeight: Int) KBPage
+        +newPage(profile: KBProfile?, viewportWidth: Int?, viewportHeight: Int?) KBPage
         +pages: StateFlow~List~KBPage~~
         +getPages() List~KBPage~
         +shutdown()
@@ -42,7 +41,6 @@ classDiagram
         +suspend loadUrl(url: String)
         +suspend evaluateJavascript(script: String) String
         +suspend clearCacheAndCookies()
-        +suspend setCookieViaJs(cookieString: String)
         +suspend snapshot(mode: SnapshotMode) SnapshotResult
         +suspend click(refid: String) OperationResult
         +suspend hover(refid: String)
@@ -172,7 +170,7 @@ classDiagram
 
 ### OSR 模式（离屏渲染，`useOsr = true`）— 默认
 
-JCEF 渲染到离屏缓冲区，结果作为轻量级组件绘制。这允许 Compose UI 层叠在 JCEF 视图之上。但鼠标和键盘事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应用户输入。这是已知问题，优先级较低。
+JCEF 渲染到离屏缓冲区，结果作为轻量级组件绘制，因此 Compose UI 可以层叠在 JCEF 视图之上。鼠标和键盘事件由底层 JCEF 原生视图接收；直接放在 WebView 挂载容器内部的 Compose 覆盖层收不到事件，上移一层（作为浏览器容器的同级）即可正常接收——Demo 的悬浮卡片就是示例。
 
 OSR 每帧需要 GPU → CPU → GPU 像素往返，因此 CPU/GPU 开销高于非 OSR。
 

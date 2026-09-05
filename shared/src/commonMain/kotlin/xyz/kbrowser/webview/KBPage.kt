@@ -20,9 +20,9 @@ class KBPage(val webView: KBWebView) {
     /**
      * Cache of node coordinates, refreshed on [getRawAxTree].
      *
-     * @Volatile 保证读操作对所有线程立即可见，无需加锁，
-     * 因此 click 等读操作永远不会因为 getRawAxTree 写入时持锁而死锁。
-     * 写操作通过 nodeCacheWriteLock 串行化，防止并发写入导致数据竞争。
+     * @Volatile keeps reads immediately visible to all threads without locking, so read-only
+     * operations such as click never block while getRawAxTree holds the write lock.
+     * Writes are serialized by nodeCacheWriteLock to prevent data races.
      */
     private val nodeCacheWriteLock = Mutex()
     @Volatile private var nodeCache: Map<String, AxNode> = emptyMap()
@@ -106,13 +106,21 @@ class KBPage(val webView: KBWebView) {
         }
     }
 
+    /**
+     * Takes a screenshot of the page and returns PNG bytes.
+     * Screenshot pixels align 1:1 with CSS coordinates (already DPR-scaled). When dimensions
+     * are needed, use [webView.takeScreenshot] to get a [KBScreenshot].
+     */
+    suspend fun screenshot(): ByteArray? =
+        webView.takeScreenshot()?.imageData
+
     private suspend fun getRawAxTree(): AxTreeData {
-        // JVM 平台优先走 CDP 原生路线（不注入 JS，不受 CSP 限制）
+        // Prefer the native CDP route on JVM: no JS injection, not blocked by CSP.
         val nativeTree = fetchAxTreeNative(webView)
         val treeData = if (nativeTree != null) {
             nativeTree
         } else {
-            // fallback：JS 注入路线（Android / iOS）
+            // Fallback: JS injection route (Android / iOS).
             val json = evaluateJavascript(JsScripts.EXTRACT_SNAPSHOT)
             val jsonParser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
             jsonParser.decodeFromString<AxTreeData>(json)
@@ -266,8 +274,6 @@ class KBPage(val webView: KBWebView) {
         performDragByCoordinates(webView, startX, startY, endX, endY)
     }
 
-    // ===== Native Key Event Methods =====
-
     suspend fun press(key: KeyboardKey) {
         performKeyPress(webView, key)
     }
@@ -286,8 +292,6 @@ class KBPage(val webView: KBWebView) {
             kotlinx.coroutines.delay(Random.nextLong(30, 150))
         }
     }
-
-    // ===== KBLocator Factory Methods =====
 
     /**
      * Creates a [KBLocator] for the given selector.
@@ -330,18 +334,20 @@ class KBPage(val webView: KBWebView) {
     }
 
     /**
-     * 锁定/解锁用户交互。
-     * locked=true：在浏览器上覆盖 AWT 拦截层，阻止用户鼠标/键盘输入，并显示鼠标轨迹。
-     * locked=false：移除拦截层，恢复用户操作。
-     * 自动化操作（CDP）不受影响。JVM 平台有效，Android/iOS 为空实现。
+     * Locks/unlocks user interaction.
+     * locked=true: overlays an AWT interception layer on the browser that blocks user
+     * mouse/keyboard input and shows the mouse trail.
+     * locked=false: removes the interception layer and restores user interaction.
+     * Automation (CDP) is unaffected. JVM only; no-op on Android/iOS.
      */
     fun setInteractionLocked(locked: Boolean) {
         setInteractionLockedNative(webView, locked)
     }
 
     /**
-     * 更新鼠标轨迹位置（在锁定状态下显示自动化操作的光标动画）。
-     * 坐标为视口坐标（CSS 像素）。仅 JVM 平台有效。
+     * Updates the mouse trail position (shows the automation cursor animation while interaction
+     * is locked).
+     * Coordinates are viewport coordinates (CSS pixels). JVM only.
      */
     fun updateMouseTrail(viewportX: Int, viewportY: Int) {
         updateMouseTrailNative(webView, viewportX, viewportY)
@@ -365,13 +371,13 @@ class KBPage(val webView: KBWebView) {
     }
 
     /**
-     * 新标签页/新窗口请求回调。
-     * 当页面通过 target="_blank"、window.open() 等方式请求打开新窗口时触发。
-     * 直接代理到底层 [KBWebView.onNewWindowRequest]。
+     * Callback for new tab/window requests.
+     * Fired when a page requests a new window via target="_blank", window.open(), etc.
+     * Delegates directly to [KBWebView.onNewWindowRequest].
      *
-     * 示例
+     * Example:
      * ```kotlin
-     * page.onNewPage = { url -> println("需要打开新页面: $url") }
+     * page.onNewPage = { url -> println("Opening new page: $url") }
      * ```
      */
     var onNewPage: ((url: String) -> Unit)?
@@ -379,30 +385,33 @@ class KBPage(val webView: KBWebView) {
         set(value) { webView.onNewWindowRequest = value }
 
     /**
-     * 文件对话框请求回调。
-     * 直接代理到底层 [KBWebView.onFileDialogRequest]。
+     * Callback for file dialog requests.
+     * Delegates directly to [KBWebView.onFileDialogRequest].
      *
-     * JVM Desktop: 设置后文件选择交由调用方处理；不设置时静默取消。
-     * Android/iOS: 空实现，文件上传走平台原生流程。
+     * JVM Desktop: when set, file selection is handled by the caller; when unset, the request
+     * is silently cancelled.
+     * Android/iOS: no-op; file uploads go through the platform's native flow.
      */
     var onFileDialog: ((request: KBFileDialogRequest, callback: KBFileDialogCallback) -> Unit)?
         get() = webView.onFileDialogRequest
         set(value) { webView.onFileDialogRequest = value }
 
     /**
-     * 一步完成文件上传。
+     * Uploads files in one step.
      *
-     * 适用于 `<input type="file">` 元素：refid 指向 input 元素本身（即使隐藏也能上传）。
+     * For `<input type="file">` elements: [refid] points at the input element itself
+     * (the upload works even when the element is hidden).
      *
-     * JVM Desktop: 通过 CDP DOM.setFileInputFiles 直接设置文件到 input 元素，
-     * 不需要弹文件对话框，不需要用户手势，不依赖元素可见性。
+     * JVM Desktop: sets files on the input element directly via CDP DOM.setFileInputFiles —
+     * no file dialog, no user gesture, no visibility requirement.
      *
-     * Android/iOS: 不支持此方法（移动端走平台原生文件对话框），会抛 UnsupportedOperationException。
+     * Android/iOS: not supported (mobile uses the platform's native file dialog); throws
+     * UnsupportedOperationException.
      *
-     * @param refid input[type=file] 元素的 refid
-     * @param filePaths 要上传的文件绝对路径列表
-     * @throws ElementNotFoundException refid 不在缓存中
-     * @throws UnsupportedOperationException Android/iOS 平台不支持
+     * @param refid refid of the input[type=file] element
+     * @param filePaths absolute paths of the files to upload
+     * @throws ElementNotFoundException if [refid] is not in the cache
+     * @throws UnsupportedOperationException on Android/iOS
      */
     suspend fun uploadFile(refid: String, filePaths: List<String>) {
         val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
@@ -410,16 +419,16 @@ class KBPage(val webView: KBWebView) {
     }
 
     /**
-     * 一步完成文件上传（CSS selector 版本）。
+     * Uploads files in one step (CSS selector variant).
      *
-     * 直接使用 CSS 选择器定位 input[type=file] 元素，不依赖 AX tree 缓存。
-     * 适用于被隐藏（display:none）而不在 AX tree 中的 input 元素。
+     * Locates the input[type=file] element directly by CSS selector, without relying on the
+     * AX tree cache. Useful for hidden (display:none) inputs that never appear in the AX tree.
      *
-     * JVM Desktop: 通过 CDP DOM.setFileInputFiles 直接设置文件。
-     * Android/iOS: 不支持，会抛 UnsupportedOperationException。
+     * JVM Desktop: sets files directly via CDP DOM.setFileInputFiles.
+     * Android/iOS: not supported; throws UnsupportedOperationException.
      *
-     * @param selector CSS 选择器，例如 "#fileInput" 或 "input[type=file]"
-     * @param filePaths 要上传的文件绝对路径列表
+     * @param selector CSS selector, e.g. "#fileInput" or "input[type=file]"
+     * @param filePaths absolute paths of the files to upload
      */
     suspend fun uploadFileBySelector(selector: String, filePaths: List<String>) {
         performSetFiles(webView, selector, filePaths)
@@ -428,8 +437,6 @@ class KBPage(val webView: KBWebView) {
     fun close() {
         webView.destroy()
     }
-
-    // ===== Operation Verification Helpers =====
 
     private suspend fun verifyClickAtViewport(vx: Int, vy: Int, targetNode: AxNode?): OperationResult {
         val targetId = targetNode?.id ?: ""
@@ -493,12 +500,12 @@ class KBPage(val webView: KBWebView) {
     }
 
     /**
-     * 验证坐标点击是否命中目标元素。
-     * 使用只读 JS API（elementFromPoint），零 anti-bot 检测风险。
+     * Verifies whether a coordinate click hit the target element.
+     * Uses read-only JS APIs (elementFromPoint), so it carries zero anti-bot detection risk.
      *
-     * @param docX 文档 X 坐标
-     * @param docY 文档 Y 坐标
-     * @param targetNode 目标 AxNode（可选，提供更精确的匹配）
+     * @param docX document X coordinate
+     * @param docY document Y coordinate
+     * @param targetNode target AxNode (optional; enables more precise matching)
      */
     private suspend fun verifyClickAt(docX: Int, docY: Int, targetNode: AxNode?): OperationResult {
         val targetId = targetNode?.id ?: ""

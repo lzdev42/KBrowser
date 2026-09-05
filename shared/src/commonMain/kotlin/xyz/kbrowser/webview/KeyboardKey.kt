@@ -13,39 +13,32 @@ enum class KeyboardKey(
     val character: Char? = null,
     val isModifier: Boolean = false
 ) {
-    // ===== Special keys =====
     ENTER(character = '\n'),
     TAB(character = '\t'),
     ESCAPE,
     BACKSPACE(character = '\b'),
     DELETE,
 
-    // ===== Arrow keys =====
     ARROW_UP,
     ARROW_DOWN,
     ARROW_LEFT,
     ARROW_RIGHT,
 
-    // ===== Modifier keys =====
     SHIFT(isModifier = true),
     CONTROL(isModifier = true),
     ALT(isModifier = true),
     META(isModifier = true),  // Mac Command key
 
-    // ===== Space =====
     SPACE(character = ' '),
 
-    // ===== Navigation keys =====
     HOME,
     END,
     PAGE_UP,
     PAGE_DOWN,
     INSERT,
 
-    // ===== Function keys =====
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
 
-    // ===== Common combination keys (Ctrl+A, Ctrl+C, Ctrl+V, etc.) =====
     A(character = 'a'),
     C(character = 'c'),
     V(character = 'v'),

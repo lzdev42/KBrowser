@@ -25,8 +25,7 @@ classDiagram
     class KBrowser {
         <<object Singleton>>
         +initializeConfig(storageDir: String?, useOsr: Boolean)
-        +newPage(profile: KBProfile?) KBPage
-        +newHeadlessTab(profile: KBProfile?, viewportWidth: Int, viewportHeight: Int) KBPage
+        +newPage(profile: KBProfile?, viewportWidth: Int?, viewportHeight: Int?) KBPage
         +pages: StateFlow~List~KBPage~~
         +getPages() List~KBPage~
         +shutdown()
@@ -42,7 +41,6 @@ classDiagram
         +suspend loadUrl(url: String)
         +suspend evaluateJavascript(script: String) String
         +suspend clearCacheAndCookies()
-        +suspend setCookieViaJs(cookieString: String)
         +suspend snapshot(mode: SnapshotMode) SnapshotResult
         +suspend click(refid: String) OperationResult
         +suspend hover(refid: String)
@@ -172,7 +170,7 @@ On JVM, JCEF supports two rendering modes determined at initialization. **OSR (`
 
 ### OSR Mode (Off-Screen Rendering, `useOsr = true`) — default
 
-JCEF renders into an off-screen buffer, and the result is painted as a lightweight component. This allows Compose UI to be layered on top of the JCEF view. However, mouse and keyboard events are dispatched to the underlying JCEF native view, not to overlay Compose components. Interactive Compose components placed over the JCEF area will not respond to user input. This is a known issue with low priority.
+JCEF renders into an off-screen buffer, and the result is painted as a lightweight component, so Compose UI can be layered on top of the JCEF view. Mouse and keyboard events are received by the underlying JCEF native view; a Compose overlay placed directly inside the browser's mount container does not receive events — move it one level up (sibling of the browser container) and it works, as demonstrated by the Demo's floating card.
 
 Per frame, OSR requires a GPU → CPU → GPU pixel round-trip, so it has higher CPU/GPU overhead than non-OSR.
 

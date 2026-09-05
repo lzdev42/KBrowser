@@ -65,7 +65,6 @@ sealed interface BrowserIntent {
     data class DragCoordinates(val startX: Int, val startY: Int, val endX: Int, val endY: Int) : BrowserIntent
     object RunAutoFlow : BrowserIntent
 
-    // 键盘按键与输入测试
     data class ChangeKeyboardInput(val text: String) : BrowserIntent
     object SimulateTypeString : BrowserIntent
     object SimulateCtrlA : BrowserIntent
@@ -75,7 +74,6 @@ sealed interface BrowserIntent {
     object SimulateEscape : BrowserIntent
     object SimulateTab : BrowserIntent
 
-    // KBLocator 测试意图
     data class ChangeLocatorSelector(val selector: String) : BrowserIntent
     data class ChangeLocatorSelectorType(val type: String) : BrowserIntent
     data class ChangeRefId(val refId: String) : BrowserIntent
@@ -103,10 +101,8 @@ sealed interface BrowserIntent {
     object ClearOverlay : BrowserIntent
     object TakeScreenshot : BrowserIntent
 
-    // 会话管理
     object ClearCacheAndCookies : BrowserIntent
 
-    // 交互锁定
     object LockInteraction : BrowserIntent
     object UnlockInteraction : BrowserIntent
 }
@@ -116,7 +112,7 @@ class BrowserViewModel : ViewModel() {
     val state: StateFlow<BrowserViewState> = _state.asStateFlow()
 
     init {
-        // 在主线程启动页面，以便在 Desktop / Android 下顺利渲染
+        // Create the page on the main thread so it renders correctly on Desktop and Android.
         viewModelScope.launch {
             try {
                 println("[DEBUG] BrowserViewModel: 开始初始化默认浏览器标签页")
@@ -124,7 +120,6 @@ class BrowserViewModel : ViewModel() {
                 val newPage = KBrowser.newPage()
                 println("[DEBUG] BrowserViewModel: KBrowser.newPage 返回成功")
                 _state.update { it.copy(page = newPage) }
-                // 监听新窗口请求，print URL
                 newPage.onNewPage = { url ->
                     println("[NEW_WINDOW] 页面请求打开新窗口: $url")
                     log("🔗 新窗口请求: $url")
@@ -232,11 +227,7 @@ class BrowserViewModel : ViewModel() {
                         println("========== SNAPSHOT ==========")
                         println(yaml)
                         println("========== END SNAPSHOT ==========")
-                        
-//                        println("========== RAW JSON SNAPSHOT ==========")
-//                        println(json)
-//                        println("========== END RAW JSON SNAPSHOT ==========")
-                        
+
                         _state.update { it.copy(snapshotText = yaml) }
                         log("Snapshot 抓取完成")
                     } catch (e: Exception) {
@@ -827,7 +818,6 @@ class BrowserViewModel : ViewModel() {
                 log("正在捕获网页截图（同步抓取 AXTree 用于叠加框框）...")
                 viewModelScope.launch {
                     try {
-                        // 并行抓截图和 AXTree
                         val bytes = page.webView.takeScreenshot()?.imageData
                         val axTree = try { page.snapshot().rawTree } catch (e: Exception) { null }
                         if (bytes != null) {
@@ -890,7 +880,6 @@ class BrowserViewModel : ViewModel() {
     }
 
     private fun buildOverlayJs(nodes: List<xyz.kbrowser.webview.AxNode>, cleaned: Boolean): String {
-        // 每个节点生成一个绝对定位的 div 框
         val color = if (cleaned) "rgba(0,200,80,0.5)" else "rgba(0,120,255,0.5)"
         val labelBg = if (cleaned) "rgba(0,160,60,0.85)" else "rgba(0,80,200,0.85)"
         val rects = nodes.filter { it.isVisible && it.width > 0 && it.height > 0 }
@@ -1009,7 +998,6 @@ $rects
 
     override fun onCleared() {
         super.onCleared()
-        // 销毁时清理底层的 WebView 并关闭页面
         _state.value.page?.close()
     }
 }

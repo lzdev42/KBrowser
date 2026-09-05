@@ -33,184 +33,28 @@ compose.desktop {
     }
 }
 
-tasks.register<JavaExec>("runFileUploadTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.FileUploadTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
+// Integration tests: each is a `fun main()` that drives a real JCEF browser and
+// exits non-zero on failure, so they double as JavaExec tasks.
+val testJvmArgs = listOf(
+    "--enable-native-access=jcef",
+    "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
+    "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
+)
+
+fun registerKBrowserTest(name: String, mainClass: String) {
+    tasks.register<JavaExec>(name) {
+        group = "application"
+        this.mainClass.set(mainClass)
+        val compileTestKotlin = tasks.named("compileTestKotlin")
+        classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
+        jvmArgs(testJvmArgs)
+        workingDir = rootProject.projectDir
+    }
 }
 
-tasks.register<JavaExec>("runScreenshotCoordTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.ScreenshotCoordinateTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runActionVerifyTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.webview.ActionVerifyTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runHeadlessViewportTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.HeadlessViewportTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runAutoScrollClickTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.webview.AutoScrollClickTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runPopupScrollTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.webview.PopupScrollTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runBossCitySelectTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.webview.BossCitySelectTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runJsDialogReproTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.JsDialogReproTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runTimingLoadTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.TimingLoadTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runResizeFollowTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.ResizeFollowTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runNonOsrResizeTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.NonOsrResizeTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runNonOsrLoadHtmlTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.NonOsrLoadHtmlTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runKBDebugTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.KBDebugTestKt")
-    val compileTestKotlin = tasks.named("compileTestKotlin")
-    classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
-
-tasks.register<JavaExec>("runOsrSizeRawTest") {
-    group = "application"
-    mainClass.set("xyz.kbrowser.webview.OsrSizeRawTestKt")
-    val compileKotlin = tasks.named("compileKotlin")
-    classpath = files(compileKotlin, sourceSets.main.get().runtimeClasspath)
-    jvmArgs(
-        "--enable-native-access=jcef",
-        "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-        "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-    )
-    workingDir = rootProject.projectDir
-}
+registerKBrowserTest("runFileUploadTest", "xyz.kbrowser.FileUploadTestKt")
+registerKBrowserTest("runTimingLoadTest", "xyz.kbrowser.TimingLoadTestKt")
+registerKBrowserTest("runNonOsrLoadHtmlTest", "xyz.kbrowser.NonOsrLoadHtmlTestKt")
+registerKBrowserTest("runResizeFollowTest", "xyz.kbrowser.ResizeFollowTestKt")
+registerKBrowserTest("runNonOsrResizeTest", "xyz.kbrowser.NonOsrResizeTestKt")
+registerKBrowserTest("runKBDebugTest", "xyz.kbrowser.KBDebugTestKt")

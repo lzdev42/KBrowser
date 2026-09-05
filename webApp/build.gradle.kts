@@ -4,11 +4,6 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
-    id("xyz.kbrowser.font-paths")
-}
-
-kbrowserFontPaths {
-    packageName.set("xyz.kbrowser.web")
 }
 
 kotlin {

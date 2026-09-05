@@ -10,6 +10,10 @@
 
 ## 1. 快速开始
 
+> 依赖配置、JBR 设置（JVM 参数 + Gradle daemon JVM）详见 [README 快速集成](../README_zh.md#快速集成)。
+
+> 显示网页用 `KBWebView`（[§ 2](#2-kbwebview--ui-组件层)）；自动化操作用 `KBPage`（[§ 3](#3-kbpage--自动化控制层)）。同一视图既要显示又要自动化时，把 `page.webView` 挂载到 `KBWebView` Composable。
+
 JVM 平台必须在 `application {}` 之前完成初始化：
 
 ```kotlin
@@ -21,7 +25,7 @@ fun main() {
     // 1. 配置存储路径与渲染模式
     KBrowser.initializeConfig(
         storageDir = "/path/to/cache",
-        useOsr = true   // 默认；仅在需要极限性能且不叠加 Compose UI 时设为 false
+        useOsr = true   // 默认
     )
 
     // 2. 初始化 JCEF 引擎（必须在任何 UI 初始化之前调用）
@@ -38,29 +42,12 @@ fun main() {
 }
 ```
 
-### 必需的 JVM 参数
-
-必须在 `compose.desktop` 配置中添加以下 JVM 参数。不加这些参数，OSR 模式下**无法输入中文及任何 CJK 文字**（英文不受影响）。原因详见 README 渲染模式章节。
-
-```kotlin
-compose.desktop {
-    application {
-        jvmArgs += listOf(
-            "--enable-native-access=jcef",
-            "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-            "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-        )
-    }
-}
-```
-
 ### KBrowser 对象
 
 | 方法 / 属性 | 说明 |
 |------------|------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | 配置存储目录与渲染模式。必须在 `initializeKBrowser()` 和 `newPage()` 之前调用。`useOsr` 决定渲染模式（见 README 渲染模式章节），初始化后不可更改。 |
-| `KBrowser.newPage(profile: KBProfile? = null): KBPage` | 创建 **UI 模式** page，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。导航用 `page.loadUrl(url)`（suspend，返回时加载完成）。 |
-| `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | 创建 **无头模式** page，用于后台自动化（截图、CDP、AX Tree）。渲染尺寸由透明 `JFrame`（opacity = 0）决定。默认 viewport 1280×720，与 Playwright 一致。**禁止将无头 page 挂载到 `KBWebView` Composable。** 导航用 `page.loadUrl(url)`。 |
+| `KBrowser.newPage(profile: KBProfile? = null, viewportWidth: Int? = null, viewportHeight: Int? = null): KBPage` | 创建 Page。不传 viewport：供挂载到 `KBWebView` Composable 显示，渲染尺寸由 Compose 的 `modifier` 决定。传 viewport（如 1280×720）：page 不挂任何 UI，以固定尺寸离屏渲染，用于后台自动化（截图、CDP、AX Tree）。导航用 `page.loadUrl(url)`（suspend，返回时加载完成）。 |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | 当前所有打开页面的响应式流 |
 | `KBrowser.getPages(): List<KBPage>` | 同步获取当前所有打开页面的快照 |
 | `KBrowser.shutdown()` | 关闭所有页面并执行全局资源清理 |
@@ -113,7 +100,9 @@ compose.desktop {
 | `destroy()` | 销毁 WebView，释放资源 |
 | `setWebViewClient(client?)` | 设置页面加载回调 |
 | `setWebChromeClient(client?)` | 设置 JS 对话框 / 权限回调 |
-| `suspend takeScreenshot(): ByteArray?` | CDP 截图，输出 CSS 像素大小的 PNG |
+| `suspend takeScreenshot(): KBScreenshot?` | CDP 截图，返回 [KBScreenshot](#6-数据结构)（CSS 像素尺寸，已按 DPR 缩放） |
+| `var backgroundColor: Color` | 网页背景色，默认黑色。JVM 上同时设置外层 Swing 容器与 CEF 渲染层底色；Android/iOS 空实现 |
+| `val debug: KBDebug` | CDP 调试 API（见 [调试 API](#9-调试-apikbdebug)） |
 | `var onNewWindowRequest: ((url: String) -> Unit)?` | 新标签页/新窗口请求回调；不设置时静默丢弃 |
 | `setInteractionLocked(locked: Boolean)` | 锁定/解锁用户交互。`true` 时覆盖 AWT 拦截层，阻止用户输入；自动化操作不受影响。渲染鼠标轨迹和点击动画。**仅 JVM 有效。** |
 | `updateMouseTrail(viewportX: Int, viewportY: Int)` | 更新鼠标轨迹位置。坐标自动化方法自动调用。**仅 JVM 有效。** |
@@ -158,10 +147,11 @@ fun BrowserScreen() {
 |------|------|------|
 | `uuid` | `String` | 创建时自动生成的唯一 ID |
 | `webView` | `KBWebView` | 底层 WebView 实例 |
+| `debug` | `KBDebug` | CDP 调试 API，代理到底层 WebView（见 [调试 API](#9-调试-apikbdebug)） |
 
 ### 状态流
 
-与 `KBWebView` 相同，直接代理：`currentUrl`、`title`、`loadingState`、`progress`。
+与 `KBWebView` 相同，直接代理：`currentUrl`、`currentTitle`、`loadingState`、`progress`。
 
 ### 导航
 
@@ -170,8 +160,7 @@ fun BrowserScreen() {
 | `suspend loadUrl(url: String)` | 加载 URL，挂起直到 `onPageFinished`；取消时自动 `stopLoading()` |
 | `suspend evaluateJavascript(script: String): String` | 执行 JS，返回结果字符串 |
 | `suspend clearCacheAndCookies()` | 清除缓存与 Cookie |
-| `suspend setCookieViaJs(cookieString: String)` | 通过 `document.cookie` 注入 Cookie |
-| `suspend screenshot(): ByteArray?` | CDP 截图，返回 CSS 像素大小的 PNG |
+| `suspend screenshot(): ByteArray?` | CDP 截图，返回 CSS 像素大小的 PNG 字节 |
 | `close()` | 销毁底层 WebView |
 
 ### 交互锁定与视觉反馈
@@ -185,9 +174,9 @@ fun BrowserScreen() {
 
 | 方法 | 说明 |
 |------|------|
-| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | 返回 `SnapshotResult`，包含 YAML 字符串和原始 `AxTreeData`，两者来自同一次 fetch，refid 保证一致。请使用此方法 —— `getRawAxTree()` 已私有，不应直接调用。 |
+| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | 返回 `SnapshotResult`，包含 YAML 字符串和原始 `AxTreeData`，两者来自同一次 fetch，refid 一致。这是获取 AX 树的公开入口（`getRawAxTree()` 已内部化）。 |
 | `AxTreeData.getCleanedAxTree(): AxTreeData` | 扩展：**过滤出当前视口内的节点**（`centerX ∈ [scrollX, scrollX + innerWidth]` 且 `centerY ∈ [scrollY, scrollY + innerHeight]`），并重新统计 `totalElements/visibleElements/hiddenElements`。与 `toYamlSnapshot(SnapshotMode.VIEWPORT)` 使用相同的视口范围判定。 |
-| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | 转换为 KBrowser YAML Snapshot 格式（标准 YAML 结构）。详见 [Snapshot 格式说明](KBrowser_Snapshot_Format.md)。 |
+| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | 转换为 KBrowser YAML Snapshot 格式（标准 YAML 结构）。 |
 
 扩展函数是纯 Kotlin 计算，在调用方协程上下文执行，不切换线程。
 
@@ -214,7 +203,7 @@ data class SnapshotResult(
 )
 ```
 
-> **重要**：`snapshot()` 返回的 `yaml` 和 `rawTree` 来自同一次 `getRawAxTree()` 调用，refid 保证一致。不应分别调用 `snapshot()` 和 `getRawAxTree()`，因为两次调用之间 refid 可能已变化。
+> `yaml` 和 `rawTree` 来自同一次抓取，refid 一致。两次 `snapshot()` 之间 refid 可能变化，不要混用不同次数抓取的数据。
 
 #### 使用示例
 
@@ -230,7 +219,7 @@ val fullResult = page.snapshot(SnapshotMode.CLEAN)
 
 ### 交互（基于 refid）
 
-调用前需先执行 `getRawAxTree()` 刷新缓存。若 refid 不存在则抛出 `ElementNotFoundException`。
+调用前需先执行 `snapshot()` 填充节点缓存。若 refid 不存在则抛出 `ElementNotFoundException`。
 
 #### 坐标模式（物理事件）
 
@@ -452,7 +441,7 @@ data class AxNode(
     val childCount: Int,        // 子节点数量
     val attributes: Map<String, String>,
     val iframeSrc: String?,
-    val selector: String,       // 动态生成的唯一 CSS 选择器，每次 getRawAxTree() 重新生成
+    val selector: String,       // 动态生成的唯一 CSS 选择器，每次 snapshot() 重新生成
     val occludedBy: String?,    // 遮挡该节点中心点的元素 refid，无遮挡时为 null
     val nodeId: String,         // CDP AX 节点 ID（来自 Accessibility.getFullAXTree 的 nodeId 字段），
                                 // 用于通过 childIds 构建真实 DOM 层级关系；JS 注入路径下等于 refid
@@ -510,6 +499,20 @@ enum class KeyboardKey {
     SPACE, HOME, END, PAGE_UP, PAGE_DOWN, INSERT,
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
     A, C, V, X, S, Z
+}
+```
+
+### KBScreenshot
+
+`webView.takeScreenshot()` 的返回值。
+
+```kotlin
+data class KBScreenshot(
+    val imageData: ByteArray,  // PNG 编码的图片字节
+    val width: Int,            // CSS 像素宽
+    val height: Int            // CSS 像素高
+) {
+    val base64: String         // imageData 的 Base64 编码（lazy）
 }
 ```
 

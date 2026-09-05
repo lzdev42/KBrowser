@@ -1,136 +1,32 @@
 # KBrowser
 
-> **Work in Progress** — APIs are subject to change without notice. iOS and Android platforms have not been tested.
-
-English | [简体中文](README_zh.md)
-
----
-
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF)](https://kotlinlang.org/docs/multiplatform.html)
 
----
+English | [简体中文](README_zh.md)
+
+> **Work in Progress** — APIs are subject to change without notice. iOS and Android platforms have not been tested.
 
 **KBrowser** is a Kotlin Multiplatform library that provides:
 
-1. **`KBWebView`** — A cross-platform WebView UI component for Android, iOS, Desktop (JVM), and WasmJs (Browser). It is a pure WebView abstraction with a unified API similar to `WKWebView` / Android `WebView`.
-2. **`KBPage`** — A Playwright-inspired browser automation wrapper around `KBWebView` for Desktop (JVM). Built on Chrome DevTools Protocol (CDP), it provides AXTree extraction, CSP-safe element location, anti-detection physical clicks, screenshot capture, and coroutine-based thread safety.
+1. **`KBWebView`** — A cross-platform WebView UI component for Android, iOS, Desktop (JVM), and WasmJs (Browser). Pure WebView abstraction with a unified API similar to `WKWebView` / Android `WebView`.
+2. **`KBPage`** — A Playwright-inspired browser automation wrapper around `KBWebView` for Desktop (JVM). Built on Chrome DevTools Protocol (CDP): AXTree extraction, CSP-safe element location, anti-detection physical clicks, screenshot capture, coroutine-based thread safety.
 
 ---
 
-## Platform Status
+## Quick Start
 
-| Platform | KBWebView UI | KBPage Automation | Test Status |
-|----------|-------------|-------------------|-------------|
-| **Desktop (JVM)** | ✅ | ✅ Primary target | ✅ Actively tested |
-| **WasmJs (Browser)** | ✅ | ❌ | ⚠️ Experimental |
-| Android | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
-| iOS | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
+### 0. Pick the right API
 
-> Automation features (AXTree, CDP-based interactions, screenshots) are Desktop-only. On Android and iOS, `KBLocator` falls back to JS injection. On WasmJs, `KBWebView` renders via an HTML `<iframe>` overlay on top of the Compose canvas; automation APIs are not yet implemented.
+**Show a page with `KBWebView`. Operate on a page with `KBPage`.**
 
----
+| Your goal | Use this |
+|-----------|----------|
+| **Show** a web page in your Compose UI (browser view, embedded page) | **`KBWebView`** Composable + `rememberKBWebView()` |
+| **Operate** on a page — automation, scraping, screenshots, AI agents | **`KBPage`** (`KBrowser.newPage()`) |
 
-## Requirements
-
-### Desktop (JVM)
-
-**Must use [JetBrains Runtime (JBR) with JCEF](https://github.com/JetBrains/JetBrainsRuntime).** Standard JDK will not work. The library uses JCEF directly from JBR — JCEF is not bundled.
-
-```
-Distribution: JetBrains Runtime
-Package: JDK + JCEF
-```
-
-### Other Platforms
-
-| Platform | Minimum Version |
-|----------|-----------------|
-| Android | API 34 (Android 14) |
-| iOS | iOS 17.0+ |
-
-### WasmJs (Browser)
-
-On WasmJs, Compose renders to an HTML `<canvas>` via Skia. Skia has its own font system - it does **not** read `document.fonts` or CSS `@font-face`. KBrowser provides `WithFontResourcesLoaded` to solve this, with three modes:
-
-**Mode 1: Chrome-only (`FontMode.CHROME_ONLY`)**
-- Uses the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API) (`queryLocalFonts()`) to enumerate all system fonts
-- Reads each font's binary data and registers it into Skia
-- Supports any language - whatever fonts are installed on the user's system, Skia gets them all
-- Browser will prompt user for font access permission
-- Non-Chrome browsers: no fonts loaded (text may show as tofu boxes)
-
-**Mode 2: Chrome with fallback (`FontMode.CHROME_WITH_FALLBACK`) - default**
-- Chrome: same as Mode 1 (all system fonts, any language)
-- Non-Chrome: automatically loads bundled font files from `composeResources/font/`
-- Requires applying the `font-paths` Gradle plugin (see below)
-
-**Mode 3: Custom only (`FontMode.CUSTOM_ONLY`)**
-- Only uses bundled font files, never calls `queryLocalFonts()`
-- No permission prompt, consistent experience across all browsers
-- Developer must provide font files covering target languages
-
-#### Gradle Plugin: Auto-discover fonts
-
-Apply the `font-paths` plugin in your `build.gradle.kts`:
-
-```kotlin
-plugins {
-    id("xyz.kbrowser.font-paths")
-}
-
-kbrowserFontPaths {
-    packageName.set("com.example.app")  // must match your wasmJsMain package
-}
-```
-
-Place font files under `src/commonMain/composeResources/font/` (e.g. `NotoSansSC.ttf`, `NotoSansArabic.ttf`). The plugin auto-discovers all `.ttf`/`.otf`/`.woff`/`.woff2` files at build time and generates a `FontPaths.generated.kt` file. No manual path listing needed.
-
-#### Usage
-
-```kotlin
-import xyz.kbrowser.WithFontResourcesLoaded
-import xyz.kbrowser.FontMode
-
-// Default: Chrome with fallback to bundled fonts
-ComposeViewport {
-    WithFontResourcesLoaded {
-        App()
-    }
-}
-
-// Chrome only (no bundled fonts)
-ComposeViewport {
-    WithFontResourcesLoaded(mode = FontMode.CHROME_ONLY) {
-        App()
-    }
-}
-
-// Custom only (no Chrome API, uses bundled fonts exclusively)
-ComposeViewport {
-    WithFontResourcesLoaded(mode = FontMode.CUSTOM_ONLY) {
-        App()
-    }
-}
-```
-
-#### How it works
-
-1. **Chrome 103+**: `queryLocalFonts()` enumerates all system fonts → reads binary data via `blob()` → transfers to Kotlin via base64 → registers into Skia via `Font(identity, bytes)` + `FontFamilyResolver.preload()`. Supports any language - Arabic, Chinese, Thai, Hebrew, etc.
-
-2. **Non-Chrome (Safari/Firefox)**: Reads bundled font files from `composeResources/font/` (auto-discovered by the Gradle plugin) → registers into Skia. Developer is responsible for choosing which fonts to bundle.
-
-3. **Cross-platform**: `commonMain` UI code is shared. Desktop (JVM) uses system fonts natively. WasmJs uses `WithFontResourcesLoaded`. No platform-specific font code in UI layer.
-
-#### Notes
-
-- The `font-paths` Gradle plugin is in `buildSrc/`. It's part of the KBrowser repo. Consumer projects apply it via `id("xyz.kbrowser.font-paths")`.
-- If no font files are placed in `composeResources/font/`, the generated list is empty. Mode 2 and Mode 3 will have no fonts to load on non-Chrome browsers.
-- Chrome API failure (user denies permission) in Mode 2 falls back to bundled fonts automatically.
-
----
-
-## Setup
+- `KBWebView` only renders and handles user interaction; it cannot click, fill, snapshot, or screenshot for you — those live on `KBPage`. (Both have a `loadUrl`, but with different semantics — see § 6.)
+- Want display **and** automation on the same view? Create a viewport-less `KBPage` and mount its `webView` in the `KBWebView` Composable — that's what the Demo's browser mode does.
 
 ### 1. Add Dependency
 
@@ -138,7 +34,7 @@ In `gradle/libs.versions.toml`:
 
 ```toml
 [versions]
-kbrowser = "0.1.0-alpha45"
+kbrowser = "0.1.0-alpha46"
 
 [libraries]
 kbrowser = { module = "io.github.lzdev42:kbrowser", version.ref = "kbrowser" }
@@ -150,9 +46,11 @@ In your module's `build.gradle.kts`:
 implementation(libs.kbrowser)
 ```
 
-### 2. Configure JBR with JCEF
+### 2. Desktop (JVM): Configure JBR
 
-Configure your IDE or build tool to use JBR with JCEF as the project runtime. In `compose.desktop` configuration, the following JVM arguments are required:
+**Must use [JetBrains Runtime (JBR) with JCEF](https://github.com/JetBrains/JetBrainsRuntime) — standard JDK will not work.** JCEF classes ship with the JBR runtime itself; they are not part of the KBrowser library nor of any Maven artifact.
+
+Add the required JVM arguments to `compose.desktop` (without them, OSR mode **cannot input Chinese/CJK text** — English is unaffected, which makes this easy to misdiagnose as a "broken IME"):
 
 ```kotlin
 compose.desktop {
@@ -166,258 +64,215 @@ compose.desktop {
 }
 ```
 
-> **⚠️ Important**: Without these JVM arguments, OSR mode **will not support Chinese/CJK text input** (English input is unaffected). In OSR mode, JCEF renders off-screen with no native window handling IME. Chinese input relies on reflective calls to JCEF internal classes, and `--add-opens` grants access to those classes. Without them, IME events are silently dropped, but English works via key events — easy to misdiagnose as "IME broken" rather than "missing configuration". In non-OSR mode, JCEF uses a native window where IME is handled natively by the OS, so no special arguments are needed.
+**⚠️ The Gradle daemon's JVM must also be JBR**, otherwise you get "JCEF not installed" at runtime (`JcefChecker.isJcefAvailable == false`) — `:desktopApp:run` and every `JavaExec` task run on the daemon's JVM by default, and the daemon defaults to a standard JDK (Zulu/Corretto/Temurin etc.) which contains no JCEF classes, even when the JBR is installed on your system.
 
----
+Fix (either of, then `./gradlew --stop` to restart daemons):
 
-## Rendering Modes (JVM Desktop)
+- **IDE setting (recommended)**: IDEA → `Settings` → `Build, Execution, Deployment` → `Build Tools` → `Gradle` → **Gradle JVM** → select your JBR+JCEF.
+- **User-level `~/.gradle/gradle.properties`** (machine-specific path, do not commit it to the repo):
 
-On JVM, JCEF supports two rendering modes. The mode is determined at initialization time via `KBrowser.initializeConfig(useOsr = ...)` and **cannot be changed after the application starts**.
+```properties
+org.gradle.java.home=/Users/yourname/Library/Java/JavaVirtualMachines/jbrsdk_jcef-25.0.3/Contents/Home
+```
 
-| Mode | `useOsr` | Overlay Compose UI | Event Handling | Performance | Chinese Input |
-|------|----------|-------------------|----------------|-------------|---------------|
-| **OSR (Off-Screen Rendering)** — default | `true` | ✅ Can overlay Compose UI on top of JCEF | ⚠️ Events are dispatched to the underlying JCEF view, not to overlay Compose components | Lower (pixel round-trip) | ⚠️ Requires JVM args |
-| **Non-OSR (Native Window)** | `false` | ❌ Cannot overlay Compose UI on top of JCEF | ✅ Normal | ✅ Best (native window) | ✅ Native support |
+> `compose.desktop.application.javaHome` only affects the `:run` task — it does not cover the daemon itself nor other `JavaExec` tasks, so it is not recommended. `nativeDistributions` (DMG/MSI/DEB) bundles the JBR, so distributed apps are self-contained and require none of the above.
+>
+> **Verify**: `ps -o comm= -p $(jps | grep GradleDaemon | awk '{print $1}')` shows the JBR path when configured correctly.
 
-**Known Issue (OSR mode)**: In OSR mode, JCEF renders off-screen, allowing Compose UI to be layered on top. However, mouse and keyboard events are received by the underlying JCEF native view, not by the Compose overlay. This means interactive Compose components placed over the JCEF area will not respond to user input. This issue has not been investigated yet and is currently low priority.
+### 3. Initialize the engine (OSR usage)
 
-**Chinese Input in OSR Mode**: Besides the JVM arguments above, OSR mode also requires focus synchronization for Chinese input — KBrowser handles this internally, no user action needed. For technical details, see the [Architecture Document](docs/KBrowser_Architecture_Design.md).
+Engine initialization must complete **before** creating any `KBWebView` / `KBPage`. `useOsr` is the rendering mode and **cannot be changed after startup**. Both patterns below are used in this repo (Pattern B is the Demo's approach) — pick one.
 
-**Recommendation**: OSR (`useOsr = true`, the default) is recommended for most applications — it is the only mode that supports overlaying Compose UI on top of the browser. Use non-OSR (`useOsr = false`) only when you need maximum rendering performance and can guarantee no Compose UI is ever drawn on top of the browser view. The API is identical for both modes; only the rendering pipeline differs.
-
-**macOS live-resize caveat (non-OSR)**: In non-OSR mode on macOS, browser content does not update while dragging window or splitter edges — it refreshes once the drag is released. This is a CEF + Core Animation architecture limitation (the AWT event queue is blocked and Core Animation does not commit frames during live-resize) that cannot be worked around from Java/AWT. See [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md).
-
----
-
-## Demo Application
-
-This project includes a full demo application showcasing all KBrowser features.
-
-**Desktop**: On launch, you first choose a rendering mode (OSR / Non-OSR) — this is desktop-specific, letting you compare the two modes (OSR is the default and supports Compose overlay; non-OSR offers best performance but cannot overlay Compose UI). After selecting OSR, the main page offers:
-- **Browser Mode**: A full multi-tab browser + automation debug panel (AXTree, CDP interactions, screenshots, etc.)
-- **KBWebView Component Demo**: 6 separate pages demonstrating basic browsing, HTML content rendering, JS bidirectional communication, new window & file handling, lifecycle callbacks, and cache management
-
-Selecting Non-OSR directly shows a WebGL scene (demonstrating the limitation that Compose UI cannot be overlaid in non-OSR mode).
-
-**Mobile**: No rendering mode selection (mobile WebView has no OSR concept), goes directly to the feature list. The 6 WebView component demo pages share code with the desktop. The browser automation page shows a warning that some features may not work on mobile.
-
-**WasmJs (Browser)**: On launch, the app requests Local Font Access permission. Once granted, all system fonts are loaded into Skia and the main UI renders. The `KBWebView` component uses an HTML `<iframe>` overlay positioned on top of the Compose canvas. WebView demo pages (basic browsing, HTML content, JS communication) are available; automation features are not yet supported.
-
----
-
-## Quick Start
-
-### 1. JVM Initialization (Desktop)
-
-`KBrowser.initializeConfig()` and `initializeKBrowser()` must be called **before** `application {}`:
+**Pattern A — synchronous init in `main()`** (simplest, for "browser-on-launch" apps):
 
 ```kotlin
 import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.initializeKBrowser
+import xyz.kbrowser.getDefaultStorageDir
+import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 
 fun main() {
-    // 1. Configure cache directory and rendering mode (must be called once at startup)
     KBrowser.initializeConfig(
-        storageDir = "/path/to/cache",
-        useOsr = true   // default; set to false only for maximum performance with no Compose overlay
+        storageDir = getDefaultStorageDir(),  // platform default cache dir; or a custom path
+        useOsr = true                          // default; see Rendering Modes below
     )
+    kotlinx.coroutines.runBlocking { initializeKBrowser() }  // suspend, waits for JCEF to be ready
 
-    // 2. Initialize JCEF engine (suspend function, must be called before any UI)
-    kotlinx.coroutines.runBlocking {
-        initializeKBrowser()
-    }
-
-    // 3. Start Compose application
     application {
         Window(onCloseRequest = ::exitApplication) { App() }
     }
 }
 ```
 
-### 1b. WasmJs Setup (Browser)
-
-#### Font loading with `WithFontResourcesLoaded`
-
-On WasmJs, Compose renders to a `<canvas>` via Skia, which has a separate font system from the browser's CSS. Without explicit font loading, Chinese/CJK and other non-Latin text will render as tofu boxes. KBrowser provides `WithFontResourcesLoaded` to handle this.
-
-**Step 1**: Apply the font-paths plugin in `build.gradle.kts`:
+**Pattern B — async init inside Compose with loading indicator + mode selection** (the Demo's approach, for apps that let the user choose a mode first):
 
 ```kotlin
-plugins {
-    id("xyz.kbrowser.font-paths")
-}
+var isInitialized by remember { mutableStateOf(false) }
+val scope = rememberCoroutineScope()
 
-kbrowserFontPaths {
-    packageName.set("com.example.app")  // match your wasmJsMain package
-}
-```
-
-**Step 2** (optional): Place font files under `src/commonMain/composeResources/font/`. The plugin auto-discovers them. Skip this if you only need Chrome support.
-
-**Step 3**: Wrap your content:
-
-```kotlin
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.window.ComposeViewport
-import xyz.kbrowser.WithFontResourcesLoaded
-
-@OptIn(ExperimentalComposeUiApi::class)
-fun main() {
-    ComposeViewport {
-        WithFontResourcesLoaded {
-            App()
+if (!isInitialized) {
+    // Show mode selection / loading screen first
+    ModeSelectionScreen(onModeSelected = { useOsr ->
+        scope.launch {
+            KBrowser.initializeConfig(getDefaultStorageDir(), useOsr = useOsr)
+            initializeKBrowser()   // suspend
+            isInitialized = true   // only now switch to the WebView-containing screen
         }
-    }
+    })
+} else {
+    MainScreen()
 }
 ```
 
-On Chrome 103+, all system fonts are loaded automatically (any language). On non-Chrome browsers, bundled fonts from `composeResources/font/` are used as fallback. See the [WasmJs section](#wasmjs-browser) above for mode details.
+Key constraints:
+- Call `initializeConfig()` exactly once, before any other KBrowser API. It is a plain setter with no guard — calling it again after the engine has started will not reconfigure anything.
+- `initializeKBrowser()` must complete before any `KBWebView` / `KBPage` is created (Pattern B gates the UI on `isInitialized` to guarantee this).
 
-#### Cross-platform single codebase
+### 4. Display a web page — `KBWebView`
 
-```kotlin
-// commonMain - shared UI, no platform-specific font code
-@Composable
-expect fun App()
-
-// wasmJsMain
-fun main() = ComposeViewport {
-    WithFontResourcesLoaded { App() }
-}
-
-// jvmMain - standard desktop, no font wrapper needed
-fun main() = application {
-    Window(onCloseRequest = ::exitApplication) { App() }
-}
-```
-
-#### Cross-platform single codebase
-
-In a Compose Multiplatform project targeting both Desktop (JVM) and WasmJs, use `expect`/`actual` to isolate the platform-specific entry point:
-
-```kotlin
-// commonMain
-@Composable
-expect fun App()
-
-// wasmJsMain - wrap with font loading
-@OptIn(ExperimentalComposeUiApi::class)
-fun main() = ComposeViewport {
-    WithFontResourcesLoaded { App() }
-}
-
-// jvmMain - standard desktop entry, no font wrapper needed
-fun main() = application {
-    Window(onCloseRequest = ::exitApplication) { App() }
-}
-```
-
-Desktop (JVM) uses system fonts natively via Skia's font manager. WasmJs needs `WithFontResourcesLoaded` because Skia in the browser sandbox has no system font access. The shared `App()` composable works on both platforms without modification.
-
-### 2. KBWebView — UI Component
-
-`KBWebView` is a pure WebView component. Use it when you need to display web content in your Compose UI:
+Minimal usage: create the instance with `rememberKBWebView`, then mount it with the `KBWebView` Composable. Full API (navigation, JS bridge, callbacks) in [API Reference § 2](docs/KBrowser_API_Reference.md#2-kbwebview--ui-component-layer).
 
 ```kotlin
 @Composable
 fun BrowserScreen() {
     val webView = rememberKBWebView(initialUrl = "https://example.com")
 
-    LaunchedEffect(webView) {
-        webView.onNewWindowRequest = { url ->
-            webView.loadUrl(url)
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        KBWebView(webView = webView, modifier = Modifier.weight(1f))
-        Row {
-            Button(onClick = { webView.goBack() }) { Text("←") }
-            Button(onClick = { webView.goForward() }) { Text("→") }
-            Button(onClick = { webView.reload() }) { Text("↺") }
-        }
-    }
+    KBWebView(webView = webView, modifier = Modifier.fillMaxSize())
 }
 ```
 
-### 3. KBPage — Browser Automation
+### 5. Programmatic control — `KBPage`
 
-`KBPage` is a coroutine-based automation wrapper around `KBWebView`. It provides:
-- Suspend-based page navigation (`loadUrl` suspends until page finishes loading)
-- AXTree extraction and element location
-- Coordinate-based physical interactions (CDP)
-- JS-based DOM interactions
-- Thread-safe node caching with `Mutex` for writes and `@Volatile` for reads
+`KBrowser.newPage()` creates a page (pass `viewportWidth`/`viewportHeight` for background automation). All automation semantics (`loadUrl`/`snapshot`/`click`/`screenshot`) live on `KBPage`. Full API in [§ 3](docs/KBrowser_API_Reference.md#3-kbpage--automation-layer).
+
+> `newPage`, `loadUrl`, `snapshot`, `screenshot`, and locator actions (`click`/`fill`/`type`) are `suspend` — call them from a coroutine (`runBlocking { }` in `main()`, `LaunchedEffect` in Compose). Only locator creation (`getByRole`/`getByLabel`) and `close()` are plain calls.
 
 ```kotlin
-val page = KBrowser.newPage()
+val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)  // suspend
 
-page.onNewPage = { url -> println("New page request: $url") }
+page.loadUrl("https://example.com")               // suspend, returns when loaded
 
-page.loadUrl("https://example.com")
+val result = page.snapshot()                      // AXTree + YAML (for AI)
+val png = page.screenshot()                       // screenshot
 
-// Coordinate mode (physical events, anti-detection)
-page.getByLabel("Username").fill("admin")
-page.getByLabel("Password").type("secret")
-page.getByRole("button", name = "Login").click()
+page.getByLabel("Username").fill("admin")         // locate + fill (with verification)
+page.getByRole("button", name = "Login").click()  // locate + physical click
 
-// JS mode (DOM event simulation, bypasses occlusion)
-page.getByLabel("Username").jsFill("admin")
-page.getByLabel("Password").jsType("secret")
-page.getByRole("button", name = "Login").jsClick()
-
-// AXTree extraction
-val tree = page.snapshot().rawTree.getCleanedAxTree()
-println("Visible nodes: ${tree.visibleElements}")
-
-// Get page snapshot (YAML + raw data from the same fetch)
-val result = page.snapshot(SnapshotMode.VIEWPORT)
-val yaml = result.yaml          // For AI
-val rawTree = result.rawTree    // Raw data, refids consistent with yaml
-
-// Screenshot
-val png = page.screenshot()
-
-page.close()
+page.close()                                      // not suspend
 ```
 
-### Threading Notes
+Interaction methods return `OperationResult` for programmatic verification (occlusion detection, value read-back, scroll comparison) — AI agents detect failures without re-snapshotting. See [Operation Verification](docs/KBrowser_API_Reference.md#5-operation-verification).
 
-- All `suspend` methods of `KBPage` internally switch to `Dispatchers.Main` via `withContext`, so they can be called from any coroutine context.
-- The `KBPage` node cache uses `Mutex` for write serialization and `@Volatile` for read visibility. Read operations (e.g., `click`) will never deadlock with write operations (e.g., `getRawAxTree`).
-- CPU-intensive operations (`AxTreeData.getCleanedAxTree()`, `AxTreeData.toYamlSnapshot()`) are pure Kotlin extension functions that execute in the caller's coroutine context without switching threads. `getCleanedAxTree()` actually filters nodes within the current viewport (same viewport-range logic as `toYamlSnapshot(VIEWPORT)`).
+### 6. Loading content: URL / local file / HTML
+
+`KBWebView` navigation (`webView.loadUrl(...)` / `webView.loadHtml(...)`) is fire-and-forget — it returns immediately without waiting for the content to load. `KBPage.loadUrl(...)` is `suspend` and returns only when the page has finished loading. For HTML strings on `KBPage`, use `page.webView.loadHtml(...)`.
+
+```kotlin
+// ── 1. Remote URL ──
+webView.loadUrl("https://example.com")                 // KBWebView
+page.loadUrl("https://example.com")                    // KBPage (suspend)
+
+// ── 2. Local file (file:// protocol) ──
+val htmlFile = File("path/to/page.html")
+webView.loadUrl(htmlFile.toURI().toString())           // → file:///path/to/page.html
+page.loadUrl(htmlFile.toURI().toString())
+
+// ── 3. HTML string (no file/server needed) ──
+webView.loadHtml("<html><body><h1>Hello</h1></body></html>")
+page.webView.loadHtml("<html><body><h1>Hello</h1></body></html>")
+```
+
+> You can also set the initial page at creation: `rememberKBWebView(initialUrl = "https://example.com")`. On Desktop (JVM), HTML-string rendering (`loadHtml`) is served through the built-in `kbhtml://` scheme handler — no file or local server needed, in both rendering modes.
+
+### 7. WasmJs (Browser)
+
+The entry point is a plain `ComposeViewport` with no font handling needed — Compose Multiplatform 1.12+ downloads missing glyphs on demand via automatic font fallback (CJK variant selected by browser language), so Japanese, Arabic, emoji, etc. work out of the box:
+
+```kotlin
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() = ComposeViewport {
+    App()
+}
+```
+
+### API Reference
+
+Full API documentation: [docs/KBrowser_API_Reference.md](docs/KBrowser_API_Reference.md)
+
+- [`KBrowser` object](docs/KBrowser_API_Reference.md#kbrowser-object) — initialization, `newPage()`, `shutdown()`
+- [`KBWebView` UI component](docs/KBrowser_API_Reference.md#2-kbwebview--ui-component-layer) — state flows, navigation, JS bridge, callbacks
+- [`KBPage` automation](docs/KBrowser_API_Reference.md#3-kbpage--automation-layer) — snapshot, coordinate/JS interactions, file upload, locators
+- [`KBLocator`](docs/KBrowser_API_Reference.md#4-kblocator--declarative-locator) — coordinate/JS modes, queries, chaining
+- [Operation verification](docs/KBrowser_API_Reference.md#5-operation-verification) — `OperationResult` strategies
+- [Data structures](docs/KBrowser_API_Reference.md#6-data-structures) — `AxNode`, `AxTreeData`, `SnapshotResult`, etc.
+- [Debug API](docs/KBrowser_API_Reference.md#9-debug-api-kbdebug) — `KBDebug` query-style CDP diagnostics
 
 ---
 
-## Headless Mode (JVM Desktop)
+## Platform Status
 
-KBrowser provides two distinct page-creation APIs, each with a clear single responsibility:
+| Platform | KBWebView UI | KBPage Automation | Test Status |
+|----------|-------------|-------------------|-------------|
+| **Desktop (JVM)** | ✅ | ✅ Primary target | ✅ Actively tested |
+| **WasmJs (Browser)** | ✅ | ❌ | ⚠️ Experimental |
+| Android | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
+| iOS | ✅ | ⚠️ Partial (JS fallback) | ❌ Not tested |
 
-- `KBrowser.newPage(profile: KBProfile? = null)` — Creates a **UI page** for display in a Compose window via the `KBWebView` Composable. Render size is determined by the Compose `modifier`.
-- `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth = 1280, viewportHeight = 720)` — Creates a **headless page** for background automation (screenshots, CDP operations, AX Tree extraction). Render size is determined by a transparent `JFrame` (opacity = 0) that hosts the JCEF component. **Never mount a headless page onto the `KBWebView` Composable** — it will cause size anomalies.
+> Automation features are Desktop-only. On Android/iOS, `KBLocator` falls back to JS injection. On WasmJs, `KBWebView` renders via an HTML `<iframe>` overlay; automation APIs are not yet implemented.
 
-Both APIs only create the page; navigation is done via `page.loadUrl(url)`, which is a `suspend` function that returns when loading completes:
+| Other Platforms | Minimum Version |
+|----------|-----------------|
+| Android | API 34 (Android 14) |
+| iOS | iOS 17.0+ |
+
+---
+
+## Rendering Modes (JVM Desktop)
+
+The mode is fixed at startup via `KBrowser.initializeConfig(useOsr = ...)` and **cannot be changed afterwards**.
+
+| Mode | `useOsr` | Overlay Compose UI | Event Handling | Performance | Chinese Input |
+|------|----------|-------------------|----------------|-------------|---------------|
+| **OSR (Off-Screen Rendering)** — default | `true` | ✅ | ⚠️ Compose overlays above the browser need correct interop layering to receive events (see note below); in-page interaction, JS↔Native callbacks, and CDP automation all work normally | Lower (pixel round-trip) | ⚠️ Requires JVM args + focus sync (handled internally by KBrowser) |
+| **Non-OSR (Native Window)** | `false` | ❌ | ✅ Normal | ✅ Best | ✅ Native support |
+
+- **Recommendation**: use OSR by default (the only mode supporting Compose overlay); use non-OSR only for maximum performance with a guarantee of never drawing Compose UI over the browser. The API is identical for both modes.
+- ⚠️ Compose overlays above the browser: an overlay placed inside the browser view's mount container has its mouse/keyboard events pass through to the underlying JCEF view. Move it one level up (a sibling of the browser container) and it receives events normally — see the Demo's floating-card example in `BrowserExampleScreen` (`compose.interop.blending=true` is set by `initializeKBrowser()`). In-page interaction, `registerJsCallback`/`registerJsHandler` JS↔Native communication, and all CDP-based automation APIs are unaffected and work in both modes.
+- **macOS live-resize caveat (non-OSR)**: browser content refreshes only after dragging window/splitter edges is released — a CEF + Core Animation architecture limitation that cannot be worked around from Java/AWT. See [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md).
+
+---
+
+## Background Automation Pages (JVM Desktop)
+
+JCEF runs in OSR mode by default (zero-copy via shared memory) and does not depend on any window, so KBrowser has a single page-creation API with no "headed/headless" distinction:
+
+- **Without viewport args**: the page mounts in the `KBWebView` Composable; size is determined by the Compose `modifier`.
+- **With viewport args** (e.g. 1280×720): the page is not attached to any UI and renders off-screen at a fixed size, for background automation.
 
 ```kotlin
-val page = KBrowser.newHeadlessTab()       // create
+val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)  // background page
 page.loadUrl("https://example.com")        // navigate (suspend)
 val png = page.screenshot()                // ready
 ```
 
-**Limitations**:
-- This is not a true headless browser. A UI framework window is still created (with zero opacity).
-- Requires OSR mode (`useOsr = true`).
-- On Linux servers, a virtual display (e.g., `Xvfb`) is required.
+**Limitations**: relies on OSR rendering (the default); on headless Linux servers, a virtual display (e.g. `Xvfb`) is required.
+
+---
+
+## Demo Application
+
+- **Desktop**: on launch, choose a rendering mode (OSR / Non-OSR), then enter a full multi-tab browser + automation debug panel (AXTree, CDP interactions, screenshots), plus 7 `KBWebView` component demo pages (basic browsing, HTML rendering, JS bidirectional communication, new window & file handling, lifecycle callbacks, cache management, screenshot).
+- **Mobile**: no rendering mode selection, goes straight to the feature list; some automation features are marked unavailable.
+- **WasmJs**: `KBWebView` is implemented as an `<iframe>` overlay; only WebView demo pages are available.
 
 ---
 
 ## Documentation
 
 - [Architecture Design](docs/KBrowser_Architecture_Design.md) — Coordinate system, platform internals, threading model
-- [API Reference](docs/KBrowser_API_Reference.md) — All APIs with descriptions and usage examples
+- [API Reference](docs/KBrowser_API_Reference.md) — All APIs with descriptions and usage examples ([section navigation](#api-reference) above)
 - [Selector Guide](docs/KBrowser_Selector_Guide.md) — CSS selector generation strategy and usage
-- [Snapshot Format](docs/KBrowser_Snapshot_Format.md) — KBrowser YAML Snapshot format for programmatic consumption
 
 ---
 

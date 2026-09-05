@@ -4,11 +4,12 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
- * 网页截图。截图像素与 CSS 坐标 1:1 对齐（已处理 DPR downscale）。
+ * A screenshot of the page. Screenshot pixels align 1:1 with CSS coordinates (DPR downscaling
+ * already applied).
  *
- * @property imageData PNG 编码的图片字节数组
- * @property width CSS 像素宽
- * @property height CSS 像素高
+ * @property imageData PNG-encoded image bytes
+ * @property width width in CSS pixels
+ * @property height height in CSS pixels
  */
 @OptIn(ExperimentalEncodingApi::class)
 data class KBScreenshot(
@@ -33,15 +34,17 @@ data class KBScreenshot(
 }
 
 /**
- * 锁定/解锁用户交互（自动化操作期间）。
- * locked=true 时在浏览器组件上覆盖 AWT 拦截层，阻止用户鼠标/键盘输入，自动化（CDP）不受影响。
- * 仅 JVM 平台有效，Android/iOS 为空操作。
+ * Locks/unlocks user interaction (during automation).
+ * When locked=true, an AWT interception layer covers the browser component and blocks user
+ * mouse/keyboard input; automation (CDP) is unaffected.
+ * JVM only; no-op on Android/iOS.
  */
 internal expect fun setInteractionLockedNative(webView: KBWebView, locked: Boolean)
 
 /**
- * 更新鼠标轨迹位置（在锁定状态下显示自动化操作的光标动画）。
- * 坐标为视口坐标（CSS 像素）。仅 JVM 平台有效。
- * JVM 端坐标自动化方法内部会自动调用此函数。
+ * Updates the mouse trail position (shows the automation cursor animation while interaction is
+ * locked).
+ * Coordinates are viewport coordinates (CSS pixels). JVM only.
+ * JVM coordinate-based automation methods call this automatically.
  */
 internal expect fun updateMouseTrailNative(webView: KBWebView, viewportX: Int, viewportY: Int)

@@ -40,7 +40,7 @@ class KBCefNativeOsrHandler(
         var setHeightMethod: java.lang.reflect.Method? = null
         var setDirtyRectsCountMethod: java.lang.reflect.Method? = null
 
-        // JBR 反射方法缓存（避免每帧 Class.forName + getMethod）
+        // Cached JBR reflection Methods (avoids per-frame Class.forName + getMethod lookups)
         @Volatile private var jbrInitialized = false
         private var getNativeRasterLoaderMethod: java.lang.reflect.Method? = null
         private var loadNativeRasterMethod: java.lang.reflect.Method? = null
@@ -49,7 +49,7 @@ class KBCefNativeOsrHandler(
         @Volatile private var cachedNativeRasterSupported: Boolean? = null
 
         fun initReflection(frameClass: Class<*>) {
-            // Double-checked locking：volatile 读无锁快速返回，避免每帧获取锁
+            // Double-checked locking: the volatile read gives a lock-free fast path on every frame
             if (isReflectInitialized) return
             synchronized(Companion::class.java) {
                 if (isReflectInitialized) return
@@ -76,7 +76,7 @@ class KBCefNativeOsrHandler(
         }
 
         private fun initJbrReflection() {
-            // Double-checked locking：volatile 读无锁快速返回，避免每帧获取锁
+            // Double-checked locking: the volatile read gives a lock-free fast path on every frame
             if (jbrInitialized) return
             synchronized(Companion::class.java) {
                 if (jbrInitialized) return
@@ -85,7 +85,6 @@ class KBCefNativeOsrHandler(
                     isNativeRasterLoaderSupportedMethod = jbrClass.getMethod("isNativeRasterLoaderSupported").apply { isAccessible = true }
                     getNativeRasterLoaderMethod = jbrClass.getMethod("getNativeRasterLoader").apply { isAccessible = true }
 
-                    // 预加载 rasterLoader 实例和 loadNativeRaster 方法
                     if (isNativeRasterLoaderSupportedMethod?.invoke(null) as Boolean) {
                         cachedRasterLoader = getNativeRasterLoaderMethod?.invoke(null)
                         val loaderClass = cachedRasterLoader!!.javaClass
@@ -102,8 +101,8 @@ class KBCefNativeOsrHandler(
         }
     }
 
-    // 对齐 IDEA：默认强制软件渲染，除非显式设置 jcef.remote.enable_hardware_rendering=true
-    // IDEA 注释：temporary enabled until fixed IJPL-161293, IJPL-182455
+    // Aligned with IDEA: force software rendering by default unless jcef.remote.enable_hardware_rendering=true is set.
+    // Upstream note: temporary until IJPL-161293 and IJPL-182455 are fixed.
     private val forceUseSoftwareRendering: Boolean = !System.getProperty("jcef.remote.enable_hardware_rendering", "false").toBoolean()
     private var myCurrentFrame: Any? = null // Holds SharedMemory.WithRaster instance
     @Volatile private var myFrameWidth: Int = 0
@@ -142,10 +141,10 @@ class KBCefNativeOsrHandler(
             val getMethod = sharedMemCacheGetMethod ?: return
             val mem = getMethod.invoke(cache, sharedMemName, sharedMemHandle) ?: return
 
-            // 确保反射方法已初始化（onPaintWithSharedMem 先于 drawVolatileImage 被调用）
+            // Ensure reflection is initialized: onPaintWithSharedMem is invoked before drawVolatileImage
             initReflection(mem.javaClass)
 
-            // 用缓存的 Method 调用，避免每帧 getMethod 反射查找
+            // Invoke through the cached Methods to avoid per-frame getMethod reflection lookups
             setWidthMethod?.invoke(mem, width)
             setHeightMethod?.invoke(mem, height)
             setDirtyRectsCountMethod?.invoke(mem, dirtyRectsCount)
@@ -160,7 +159,7 @@ class KBCefNativeOsrHandler(
                     myPopupImage = image
                 }
             } else {
-                // 对齐 IDEA：只存 mem 指针，不解析/累积 dirtyRects
+                // Aligned with IDEA: keep the shared-memory reference only; dirty rects are not parsed here
                 myCurrentFrame = mem
                 myFrameWidth = width
                 myFrameHeight = height
@@ -194,9 +193,9 @@ class KBCefNativeOsrHandler(
     }
 
     /**
-     * 对齐 IDEA JBCefNativeOsrHandler.drawVolatileImage：
-     * - nativeRasterLoader 路径：直接传 frame 内部的 rects 指针（零拷贝）
-     * - CPU 回退路径：loadBuffered 到 BufferedImage，再 super.drawVolatileImage
+     * Mirrors IDEA's JBCefNativeOsrHandler.drawVolatileImage:
+     * - NativeRasterLoader path: pass the frame's internal raster/rects pointers directly (zero-copy).
+     * - CPU fallback path: copy the shared memory into a BufferedImage via [loadBuffered], then delegate to super.
      */
     override fun drawVolatileImage(vi: VolatileImage) {
         val frame = myCurrentFrame ?: return
@@ -213,7 +212,7 @@ class KBCefNativeOsrHandler(
 
             try {
                 if (useNativeRasterLoader()) {
-                    // 零拷贝路径：直接传 frame 内部的 raster 指针和 rects 指针
+                    // Zero-copy path: hand the frame's internal raster and rects pointers to the loader
                     val ptr = getPtrMethod?.invoke(frame) as Long
                     val width = getWidthMethod?.invoke(frame) as Int
                     val height = getHeightMethod?.invoke(frame) as Int
@@ -222,7 +221,7 @@ class KBCefNativeOsrHandler(
 
                     loadNativeRasterMethod?.invoke(cachedRasterLoader, vi, ptr, width, height, ptr + rectsOffset, dirtyCount)
                 } else {
-                    // CPU 回退路径：从共享内存拷贝到 BufferedImage
+                    // CPU fallback: copy from shared memory into a BufferedImage
                     val width = getWidthMethod?.invoke(frame) as Int
                     val height = getHeightMethod?.invoke(frame) as Int
 

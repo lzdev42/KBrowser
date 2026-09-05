@@ -15,8 +15,6 @@ data class KBLocator(
 ) {
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
-    // ===== Core Search Logic =====
-
     /**
      * Finds a single element. Resolves lazily on each operation.
      */
@@ -37,9 +35,6 @@ data class KBLocator(
         }
     }
 
-    /**
-     * Finds all matching elements.
-     */
     private fun unwrapJsonString(raw: String): String {
         if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length >= 2) {
             return try {
@@ -52,11 +47,11 @@ data class KBLocator(
     }
 
     private suspend fun findAllElements(): List<LocateResult> {
-        // JVM 平台优先走 CDP 原生路线（不注入 JS，不受 CSP 限制）
+        // Prefer the native CDP route on JVM: no JS injection, not blocked by CSP.
         val nativeResults = findElementsNative(page.webView, selector, selectorType, name, exact)
         if (nativeResults != null) return nativeResults
 
-        // fallback: JS 注入路线 (Android / iOS)
+        // Fallback: JS injection route (Android / iOS).
         val jsScript = buildFindAllJs()
         val resultJson = page.evaluateJavascript(jsScript)
         
@@ -94,8 +89,6 @@ data class KBLocator(
         return s.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"").replace("\n", "\\n")
     }
 
-    // ===== Interaction Operations =====
-
     suspend fun click(): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         return page.clickByCoordinates(node.centerX, node.centerY)
@@ -113,11 +106,8 @@ data class KBLocator(
 
     suspend fun fill(value: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        // 1. Click to focus
         page.clickByCoordinates(node.centerX, node.centerY)
-        // 2. Wait briefly
         delay(100)
-        // 3. Set value using native event emulation
         val escapedValue = escapeJs(value)
         val escapedSelector = escapeJs(selector)
         val fillJs = JsScripts.SET_VALUE_NATIVE
@@ -126,7 +116,6 @@ data class KBLocator(
             .replace("__SELECTOR_TYPE__", selectorType.name)
         page.evaluateJavascript(fillJs)
         delay(100)
-        // 4. Verify: read back el.value
         return verifyInputValue(node.selector, value, "fill")
     }
 
@@ -142,20 +131,16 @@ data class KBLocator(
      */
     suspend fun type(text: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        // 1. Click to focus
         page.clickByCoordinates(node.centerX, node.centerY)
         delay(100)
-        // 2. Clear existing value: Ctrl+A → Delete
         page.pressKeyCombination(KeyboardKey.CONTROL, KeyboardKey.A)
         delay(50)
         page.press(KeyboardKey.DELETE)
         delay(50)
-        // 3. Type each character with random delay
         for (char in text) {
             page.typeChar(char)
             delay(Random.nextLong(30, 150))
         }
-        // 4. Verify: read back el.value
         return verifyInputValue(node.selector, text, "type")
     }
 
@@ -170,11 +155,9 @@ data class KBLocator(
     }
 
     suspend fun selectOption(value: String) {
-        // 1. Click to open dropdown
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         page.clickByCoordinates(node.centerX, node.centerY)
         delay(200)
-        // 2. Locate and click option by coordinates
         val escapedValue = escapeJs(value)
         val escapedSelector = escapeJs(selector)
         val optionJs = JsScripts.FIND_OPTION_AND_CLICK
@@ -189,7 +172,6 @@ data class KBLocator(
                 val optionResult = jsonParser.decodeFromString<LocateResult>(cleanJson)
                 page.clickByCoordinates(optionResult.centerX, optionResult.centerY)
             } catch (e: Exception) {
-                // ignore or log
             }
         }
     }
@@ -217,8 +199,6 @@ data class KBLocator(
         page.pressKeyCombination(modifier, key)
     }
 
-    // ===== JS-based Interaction Operations =====
-
     suspend fun jsClick() {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
         performClickByJs(page.webView, node.selector)
@@ -236,11 +216,8 @@ data class KBLocator(
 
     suspend fun jsFill(value: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        // 1. Focus via JS
         performFocusByJs(page.webView, node.selector)
-        // 2. Wait briefly
         delay(100)
-        // 3. Set value using JS
         val escapedValue = escapeJs(value)
         val escapedSelector = escapeJs(node.selector)
         val fillJs = JsScripts.SET_VALUE_NATIVE
@@ -249,26 +226,21 @@ data class KBLocator(
             .replace("__SELECTOR_TYPE__", "CSS")
         page.evaluateJavascript(fillJs)
         delay(100)
-        // 4. Verify
         return verifyInputValue(node.selector, value, "fill")
     }
 
     suspend fun jsType(text: String): OperationResult {
         val node = findElement() ?: throw ElementNotFoundException("Locator: $selectorType=$selector")
-        // 1. Focus via JS
         performFocusByJs(page.webView, node.selector)
         delay(100)
-        // 2. Clear existing value: Ctrl+A -> Delete
         page.pressKeyCombination(KeyboardKey.CONTROL, KeyboardKey.A)
         delay(50)
         page.press(KeyboardKey.DELETE)
         delay(50)
-        // 3. Type each character with random delay
         for (char in text) {
             page.typeChar(char)
             delay(Random.nextLong(30, 150))
         }
-        // 4. Verify
         return verifyInputValue(node.selector, text, "type")
     }
 
@@ -310,7 +282,6 @@ data class KBLocator(
                 val optionResult = jsonParser.decodeFromString<LocateResult>(cleanJson)
                 performClickByJs(page.webView, optionResult.selector)
             } catch (e: Exception) {
-                // fallback to setting value directly
                 val fallbackJs = """
                     (function() {
                         var select = document.querySelector("$escapedSelector");
@@ -339,8 +310,6 @@ data class KBLocator(
         page.pressKeyCombination(modifier, key)
     }
 
-    // ===== Query Methods =====
-
     suspend fun isVisible(): Boolean {
         val node = findElement()
         return node?.isVisible == true
@@ -361,7 +330,6 @@ data class KBLocator(
                 val clean = unwrapJsonString(evaluated)
                 if (clean.isNotEmpty()) return clean
             } catch (e: Exception) {
-                // fallback
             }
         }
         return node.text
@@ -389,7 +357,6 @@ data class KBLocator(
                     return arr[1]
                 }
             } catch (e: Exception) {
-                // fallback
             }
         }
         return localVal
@@ -408,8 +375,6 @@ data class KBLocator(
             height = node.height
         )
     }
-
-    // ===== Chain / Composite Operations =====
 
     fun filter(predicate: (LocateResult) -> Boolean): KBLocator {
         return KBLocator(
@@ -438,11 +403,9 @@ data class KBLocator(
     fun first(): KBLocator = nth(0)
     fun last(): KBLocator = nth(-1)
 
-    // ===== Verification Helpers =====
-
     /**
-     * 验证输入框的值是否与期望值匹配。
-     * 使用只读 JS API（el.value / el.innerText），零 anti-bot 检测风险。
+     * Verifies that the input's value matches the expected value.
+     * Uses read-only JS APIs (el.value / el.innerText), so it carries zero anti-bot detection risk.
      */
     private suspend fun verifyInputValue(cssSelector: String, expected: String, action: String): OperationResult {
         val escapedSel = escapeJs(cssSelector)

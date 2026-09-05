@@ -135,7 +135,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
         }
     }
 
-    // --- Context Menu ---
     fun addContextMenuHandler(handler: CefContextMenuHandler, browser: CefBrowser) {
         myContextMenuHandler.add(handler, browser) {
             cefClient.addContextMenuHandler(object : CefContextMenuHandlerAdapter() {
@@ -149,7 +148,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
         }
     }
 
-    // --- Display ---
     fun addDisplayHandler(handler: CefDisplayHandler, browser: CefBrowser) {
         myDisplayHandler.add(handler, browser) {
             cefClient.addDisplayHandler(object : CefDisplayHandlerAdapter() {
@@ -163,7 +161,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
         }
     }
 
-    // --- LifeSpan ---
     fun addLifeSpanHandler(handler: CefLifeSpanHandler, browser: CefBrowser) {
         myLifeSpanHandler.add(handler, browser) {
             cefClient.addLifeSpanHandler(object : CefLifeSpanHandlerAdapter() {
@@ -190,7 +187,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     }
     fun removeLifeSpanHandler(handler: CefLifeSpanHandler, browser: CefBrowser) = myLifeSpanHandler.remove(handler, browser) { cefClient.removeLifeSpanHandler() }
 
-    // --- Load ---
     fun addLoadHandler(handler: CefLoadHandler, browser: CefBrowser) {
         myLoadHandler.add(handler, browser) {
             cefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
@@ -211,7 +207,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     }
     fun removeLoadHandler(handler: CefLoadHandler, browser: CefBrowser) = myLoadHandler.remove(handler, browser) { cefClient.removeLoadHandler() }
 
-    // --- Keyboard ---
     fun addKeyboardHandler(handler: CefKeyboardHandler, browser: CefBrowser) {
         myKeyboardHandler.add(handler, browser) {
             cefClient.addKeyboardHandler(object : CefKeyboardHandlerAdapter() {
@@ -223,7 +218,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     }
     fun removeKeyboardHandler(handler: CefKeyboardHandler, browser: CefBrowser) = myKeyboardHandler.remove(handler, browser) { cefClient.removeKeyboardHandler() }
 
-    // --- Request ---
     fun addRequestHandler(handler: CefRequestHandler, browser: CefBrowser) {
         myRequestHandler.add(handler, browser) {
             cefClient.addRequestHandler(object : CefRequestHandlerAdapter() {
@@ -243,7 +237,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     }
     fun removeRequestHandler(handler: CefRequestHandler, browser: CefBrowser) = myRequestHandler.remove(handler, browser) { cefClient.removeRequestHandler() }
 
-    // --- Dialog ---
     fun addDialogHandler(handler: CefDialogHandler, browser: CefBrowser) {
         myDialogHandler.add(handler, browser) {
             cefClient.addDialogHandler(object : CefDialogHandler {
@@ -266,7 +259,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     }
     fun removeDialogHandler(handler: CefDialogHandler, browser: CefBrowser) = myDialogHandler.remove(handler, browser) { cefClient.removeDialogHandler() }
 
-    // --- JS Dialog (alert / confirm / prompt) ---
     fun addJSDialogHandler(handler: CefJSDialogHandler, browser: CefBrowser) {
         myJSDialogHandler.add(handler, browser) {
             cefClient.addJSDialogHandler(object : CefJSDialogHandlerAdapter() {
@@ -288,7 +280,6 @@ class KBCefClient(val cefClient: CefClient) : KBCefDisposable {
     }
     fun removeJSDialogHandler(handler: CefJSDialogHandler, browser: CefBrowser) = myJSDialogHandler.remove(handler, browser) { cefClient.removeJSDialogHandler() }
 
-    // --- Permission (Media Access: camera / microphone) ---
     fun addPermissionHandler(handler: CefPermissionHandler, browser: CefBrowser) {
         myPermissionHandler.add(handler, browser) {
             cefClient.addPermissionHandler(object : CefPermissionHandler {

@@ -3,15 +3,16 @@ package xyz.kbrowser.webview
 object JsScripts {
 
     /**
-     * 为 DOM 节点生成唯一 CSS 选择器的 JS 函数，供 EXTRACT_SNAPSHOT 内联使用。
-     * 函数签名：buildSelector(el) → String
+     * JS function that generates a unique CSS selector for a DOM node; inlined by EXTRACT_SNAPSHOT.
+     * Signature: buildSelector(el) → String
      *
-     * 策略（优先级从高到低）：
-     * 1. #id —— 存在且在文档中唯一时使用
-     * 2. 稳定属性 —— data-testid / data-id / data-key / name / aria-label，唯一时使用
-     * 3. 结构路径兜底 —— tag:nth-of-type(n) > ... 绝对唯一，不依赖 class 名
+     * Strategy (highest priority first):
+     * 1. #id — used when present and unique in the document
+     * 2. Stable attributes — data-testid / data-id / data-key / name / aria-label, when unique
+     * 3. Structural path fallback — tag:nth-of-type(n) > ... absolutely unique, independent of class names
      *
-     * ⚠️ 修改选择器算法时，同步修改 BUILD_SELECTOR_CALL_FN（CDP 路径使用）。
+     * When changing the selector algorithm, update BUILD_SELECTOR_CALL_FN (used by the CDP path)
+     * in sync.
      */
     const val BUILD_SELECTOR_FN: String = """
         function buildSelector(el) {
@@ -46,10 +47,11 @@ object JsScripts {
     """
 
     /**
-     * CDP 路径专用：Runtime.callFunctionOn 的 functionDeclaration。
-     * 在目标节点的 this 上下文执行，返回该节点的 CSS 选择器字符串。
+     * CDP path only: the functionDeclaration for Runtime.callFunctionOn.
+     * Executes in the target node's `this` context and returns that node's CSS selector string.
      *
-     * ⚠️ 与 BUILD_SELECTOR_FN 逻辑完全一致，修改选择器算法时两处同步修改。
+     * Must stay logically identical to BUILD_SELECTOR_FN; update both when changing the selector
+     * algorithm.
      */
     const val BUILD_SELECTOR_CALL_FN: String = """function() {
         var el = this;
@@ -494,8 +496,9 @@ object JsScripts {
                 return '';
             }
             
-            // 第一遍：为所有节点分配 refid，确保遮挡检测时遮挡物已有 refid
-            // 跳过 __kb_overlay__ 及其子节点（调试画框，不应进入快照）
+            // Pass 1: assign a refid to every node so occluding elements already
+            // have one when detection runs; skip __kb_overlay__ and its children
+            // (debug overlay, must not enter the snapshot)
             var overlayEl = document.getElementById('__kb_overlay__');
             allNodes.forEach(function(el) {
                 if (overlayEl && (el === overlayEl || overlayEl.contains(el))) return;
@@ -506,7 +509,7 @@ object JsScripts {
                 }
             });
 
-            // 第二遍：收集节点信息 + 遮挡检测
+            // Pass 2: collect node info + occlusion detection
             allNodes.forEach(function(el) {
                 if (overlayEl && (el === overlayEl || overlayEl.contains(el))) return;
                 var refid = el.__kb_refid;
@@ -516,11 +519,11 @@ object JsScripts {
                 var textContent = '';
                 try { textContent = getDirectText(el); } catch(e) {}
                 if (textContent.length > 200) textContent = textContent.substring(0, 200);
-                // 没有直接文本时，尝试 title / aria-label / alt 作为补充描述
+                // Fall back to title / aria-label / alt when there is no direct text
                 if (!textContent && el.title) textContent = el.title;
                 if (!textContent && el.getAttribute('aria-label')) textContent = el.getAttribute('aria-label');
                 if (!textContent && el.tagName === 'IMG' && el.alt) textContent = el.alt;
-                // 仍然没有文本时，尝试 innerText（包含子节点文本，限制长度避免噪音）
+                // Last resort: innerText (includes children; length-capped to avoid noise)
                 if (!textContent) {
                     try {
                         var inner = (el.innerText || '').trim();
@@ -538,8 +541,9 @@ object JsScripts {
                 
                 var role = inferRole(el, attrs);
                 
-                // 遮挡检测：只对可交互节点和有语义的叶子节点检测，容器节点跳过
-                // 容器节点中心点被子元素覆盖是正常的 DOM 层级，不是真正的遮挡
+                // Occlusion check only for interactive nodes and semantic leaves;
+                // containers are skipped — a container's center covered by its own
+                // children is normal DOM nesting, not real occlusion
                 var clientX = rect.left + rect.width / 2;
                 var clientY = rect.top + rect.height / 2;
                 var occludedBy = null;
@@ -559,7 +563,7 @@ object JsScripts {
                     } catch(e) {}
                 }
                 
-                // 收集直接子元素的 refid 列表，用于构建真实 DOM 层级
+                // Collect direct children's refids to build the real DOM hierarchy
                 var childRefids = [];
                 for (var ci = 0; ci < el.children.length; ci++) {
                     var childRefid = el.children[ci].__kb_refid;

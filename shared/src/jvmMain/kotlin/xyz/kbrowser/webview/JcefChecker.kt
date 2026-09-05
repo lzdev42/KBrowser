@@ -9,7 +9,7 @@ import xyz.kbrowser.webview.debug.KBDebugNoop
 object JcefChecker {
     val isJcefAvailable: Boolean by lazy {
         try {
-            // 尝试加载 JBR 特有的 JCefAppConfig 以及 JCEF 的 CefApp
+            // Probe for the JBR-specific JCefAppConfig and JCEF's CefApp
             Class.forName("com.jetbrains.cef.JCefAppConfig")
             Class.forName("org.cef.CefApp")
             true

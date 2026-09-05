@@ -6,10 +6,10 @@
 
 ## 概述
 
-KBrowser 的 AXTree 快照为每个 DOM 节点动态生成唯一的 CSS 选择器（`AxNode.selector` 字段）。该选择器与当前快照的 DOM 状态绑定，每次调用 `getRawAxTree()` 重新生成，不会过期。
+KBrowser 的 AXTree 快照为每个 DOM 节点动态生成唯一的 CSS 选择器（`AxNode.selector` 字段）。该选择器与当前快照的 DOM 状态绑定，每次快照（`snapshot()`）重新生成，不会过期。
 
 核心价值：
-- **抗 anti-bot 混淆**：不依赖 class 名，antbot 改 class 无效
+- **抗 anti-bot 混淆**：不依赖 class 名，站点改 class 名无效
 - **保证唯一**：每个节点的 selector 只匹配自己，不会选错
 - **即用即抛**：快照时生成，操作时使用，不需要硬编码
 
@@ -165,7 +165,7 @@ body > div:nth-of-type(1) > div:nth-of-type(4) > div > div:nth-of-type(4) > ul >
 
 特点：
 - **绝对唯一**：路径精确描述了从根到目标的完整结构
-- **不依赖 class**：antbot 混淆 class 名不影响
+- **不依赖 class**：anti-bot 混淆 class 名不影响
 - **DOM 结构敏感**：如果页面 DOM 结构发生变化（插入/删除节点），路径可能失效
 - **适合即时使用**：快照后立即操作，不存储不复用
 
@@ -177,7 +177,7 @@ body > div:nth-of-type(1) > div:nth-of-type(4) > div > div:nth-of-type(4) > ul >
 A: 不会。`querySelector` 对结构路径的查找是 O(depth)，现代浏览器处理几十层嵌套也是微秒级。
 
 **Q: 页面动态加载后选择器还有效吗？**
-A: 如果 DOM 结构没变就有效。如果有新元素插入导致 nth-of-type 偏移，需要重新调用 `getRawAxTree()` 获取新的选择器。
+A: 如果 DOM 结构没变就有效。如果有新元素插入导致 nth-of-type 偏移，需要重新调用 `snapshot()` 获取新的选择器。
 
 **Q: fill 有效但 type 无效？**
 A: `fill` 通过 JS 直接设值，不需要坐标聚焦。`type` 需要先坐标点击聚焦再逐字符输入，如果元素被遮挡或坐标偏移会失败。遇到这种情况用 `fill` 即可。

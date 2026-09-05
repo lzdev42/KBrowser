@@ -8,16 +8,16 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
 /**
- * CDP 原生元素定位器实现。
+ * Element locator implemented natively over CDP.
  *
- * 通过 CDP 协议直接查询 DOM / Accessibility 树来定位元素，
- * 完全不注入 JS，不受页面 CSP 限制。
+ * Queries the DOM / accessibility tree directly via CDP; no JS is injected, so
+ * page CSP does not apply.
  *
- * 支持的选择器类型：
+ * Supported selector types:
  * - CSS: DOM.getDocument → DOM.querySelectorAll → DOM.getBoxModel
  * - XPath: DOM.performSearch → DOM.getSearchResults → DOM.getBoxModel
- * - 语义选择器 (Role/Text/Label/Placeholder/AltText/Title/TestId):
- *   Accessibility.getFullAXTree → 属性过滤 → DOM.getBoxModel
+ * - Semantic (Role/Text/Label/Placeholder/AltText/Title/TestId):
+ *   Accessibility.getFullAXTree → property filtering → DOM.getBoxModel
  */
 object KBCefLocatorImpl {
 
@@ -50,10 +50,7 @@ object KBCefLocatorImpl {
         }
     }
 
-    // ── CSS 选择器 ─────────────────────────────────────────────────────────
-
     private fun findByCss(devTools: org.cef.browser.CefDevToolsClient, selector: String): List<LocateResult> {
-        // 1. DOM.getDocument 获取根 nodeId
         val docJson = executeCdpWithTimeout(devTools, "DOM.getDocument", """{"depth":0}""", selector)
         val docRoot = Json.parseToJsonElement(docJson).jsonObject
         val rootNode = docRoot["root"]?.jsonObject
@@ -63,7 +60,6 @@ object KBCefLocatorImpl {
         val rootNodeId = rootNode["nodeId"]?.jsonPrimitive?.int
             ?: throw RuntimeException("DOM.getDocument returned no nodeId for selector: $selector")
 
-        // 2. DOM.querySelectorAll
         val escapedSelector = selector.replace("\"", "\\\"")
         val queryJson = executeCdpWithTimeout(
             devTools, "DOM.querySelectorAll",
@@ -78,7 +74,7 @@ object KBCefLocatorImpl {
 
         if (nodeIds.isEmpty()) return emptyList()
 
-        // 3. 对每个 nodeId 调用 DOM.getBoxModel（使用 nodeId，不是 backendNodeId）
+        // DOM.getBoxModel here takes nodeId, not backendNodeId
         return nodeIds.mapNotNull { nodeIdElement ->
             val nodeId = nodeIdElement.jsonPrimitive.int
             getBoxModelByNodeId(devTools, nodeId)?.copy(
@@ -87,10 +83,7 @@ object KBCefLocatorImpl {
         }
     }
 
-    // ── XPath 选择器 ───────────────────────────────────────────────────────
-
     private fun findByXPath(devTools: org.cef.browser.CefDevToolsClient, query: String): List<LocateResult> {
-        // 1. DOM.performSearch
         val escapedQuery = query.replace("\"", "\\\"")
         val searchJson = executeCdpWithTimeout(
             devTools, "DOM.performSearch",
@@ -106,7 +99,6 @@ object KBCefLocatorImpl {
         if (resultCount <= 0) return emptyList()
 
         try {
-            // 2. DOM.getSearchResults
             val resultsJson = executeCdpWithTimeout(
                 devTools, "DOM.getSearchResults",
                 """{"searchId":"$searchId","fromIndex":0,"toIndex":$resultCount}""",
@@ -118,7 +110,6 @@ object KBCefLocatorImpl {
                 ?: resultsRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("nodeIds")?.jsonArray
                 ?: return emptyList()
 
-            // 3. 对每个 nodeId 调用 DOM.getBoxModel
             return nodeIds.mapNotNull { nodeIdElement ->
                 val nodeId = nodeIdElement.jsonPrimitive.int
                 getBoxModelByNodeId(devTools, nodeId)?.copy(
@@ -126,19 +117,16 @@ object KBCefLocatorImpl {
                 )
             }
         } finally {
-            // 4. 清理搜索结果
             try {
                 devTools.executeDevToolsMethod(
                     "DOM.discardSearchResults",
                     """{"searchId":"$searchId"}"""
                 ).get(CDP_CALL_TIMEOUT_SEC, TimeUnit.SECONDS)
             } catch (_: Exception) {
-                // 清理失败不影响结果
+                // cleanup failure does not affect the results
             }
         }
     }
-
-    // ── 语义选择器：Role ───────────────────────────────────────────────────
 
     private fun findByRole(
         devTools: org.cef.browser.CefDevToolsClient,
@@ -151,7 +139,6 @@ object KBCefLocatorImpl {
             val nodeRole = node.role
             val roleMatch = nodeRole.equals(role, ignoreCase = true)
             if (!roleMatch) return@filter false
-            // 如果提供了 name 参数，还需要匹配 name
             if (name != null && name.isNotEmpty()) {
                 matchText(node.name, name, exact)
             } else {
@@ -160,8 +147,6 @@ object KBCefLocatorImpl {
         }
         return resolveAxNodesToLocateResults(devTools, matched)
     }
-
-    // ── 语义选择器：Text ──────────────────────────────────────────────────
 
     private fun findByText(
         devTools: org.cef.browser.CefDevToolsClient,
@@ -175,8 +160,6 @@ object KBCefLocatorImpl {
         return resolveAxNodesToLocateResults(devTools, matched)
     }
 
-    // ── 语义选择器：Label ─────────────────────────────────────────────────
-
     private fun findByLabel(
         devTools: org.cef.browser.CefDevToolsClient,
         label: String,
@@ -184,7 +167,7 @@ object KBCefLocatorImpl {
     ): List<LocateResult> {
         val axNodes = fetchAxNodes(devTools, "LABEL=$label")
         val matched = axNodes.filter { node ->
-            // 匹配 name.value 或 properties 中的 aria-label
+            // match name.value or the aria-label property
             matchText(node.name, label, exact) ||
                 node.properties.any { prop ->
                     prop.name == "label" && matchText(prop.value, label, exact)
@@ -192,8 +175,6 @@ object KBCefLocatorImpl {
         }
         return resolveAxNodesToLocateResults(devTools, matched)
     }
-
-    // ── 语义选择器：Placeholder ───────────────────────────────────────────
 
     private fun findByPlaceholder(
         devTools: org.cef.browser.CefDevToolsClient,
@@ -208,8 +189,6 @@ object KBCefLocatorImpl {
         }
         return resolveAxNodesToLocateResults(devTools, matched)
     }
-
-    // ── 语义选择器：AltText ───────────────────────────────────────────────
 
     private fun findByAltText(
         devTools: org.cef.browser.CefDevToolsClient,
@@ -226,8 +205,6 @@ object KBCefLocatorImpl {
         return resolveAxNodesToLocateResults(devTools, matched)
     }
 
-    // ── 语义选择器：Title ─────────────────────────────────────────────────
-
     private fun findByTitle(
         devTools: org.cef.browser.CefDevToolsClient,
         title: String,
@@ -242,14 +219,12 @@ object KBCefLocatorImpl {
         return resolveAxNodesToLocateResults(devTools, matched)
     }
 
-    // ── 语义选择器：TestId ────────────────────────────────────────────────
-
     private fun findByTestId(
         devTools: org.cef.browser.CefDevToolsClient,
         testId: String
     ): List<LocateResult> {
         val axNodes = fetchAxNodes(devTools, "TEST_ID=$testId")
-        // TestId 需要通过 DOM.describeNode 检查 data-testid 属性
+        // data-testid is not carried in the AX tree; look it up via DOM.describeNode
         val matched = mutableListOf<AxSemanticNode>()
         for (node in axNodes) {
             if (node.backendNodeId <= 0) continue
@@ -261,10 +236,8 @@ object KBCefLocatorImpl {
         return resolveAxNodesToLocateResults(devTools, matched)
     }
 
-    // ── 辅助方法 ───────────────────────────────────────────────────────────
-
     /**
-     * 文本匹配：exact 模式精确匹配，非 exact 模式包含匹配（忽略大小写）
+     * Text matching: exact equality in exact mode, otherwise case-insensitive contains.
      */
     private fun matchText(actual: String, expected: String, exact: Boolean): Boolean {
         if (actual.isEmpty() && expected.isEmpty()) return true
@@ -276,9 +249,7 @@ object KBCefLocatorImpl {
         }
     }
 
-    /**
-     * 内部 AX 语义节点数据类
-     */
+    /** Internal AX semantic node. */
     private data class AxSemanticNode(
         val backendNodeId: Int,
         val role: String,
@@ -291,9 +262,7 @@ object KBCefLocatorImpl {
         val value: String
     )
 
-    /**
-     * 获取完整 AX 树并解析为语义节点列表
-     */
+    /** Fetches the full AX tree and parses it into semantic nodes. */
     private fun fetchAxNodes(devTools: org.cef.browser.CefDevToolsClient, selectorInfo: String): List<AxSemanticNode> {
         val axJson = executeCdpWithTimeout(devTools, "Accessibility.getFullAXTree", "{}", selectorInfo)
         val axRoot = Json.parseToJsonElement(axJson).jsonObject
@@ -310,7 +279,6 @@ object KBCefLocatorImpl {
             val role = obj["role"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull ?: ""
             val name = obj["name"]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull ?: ""
 
-            // 解析 properties 数组
             val properties = mutableListOf<AxProperty>()
             obj["properties"]?.jsonArray?.forEach { propElement ->
                 val propObj = propElement.jsonObject
@@ -325,8 +293,8 @@ object KBCefLocatorImpl {
     }
 
     /**
-     * 将匹配的 AX 语义节点转换为 LocateResult 列表。
-     * 使用 backendNodeId 调用 DOM.getBoxModel 获取坐标。
+     * Converts matched AX semantic nodes to [LocateResult]s, resolving coordinates
+     * via DOM.getBoxModel using backendNodeId.
      */
     private fun resolveAxNodesToLocateResults(
         devTools: org.cef.browser.CefDevToolsClient,
@@ -335,7 +303,6 @@ object KBCefLocatorImpl {
         if (nodes.isEmpty()) return emptyList()
 
         val results = mutableListOf<LocateResult>()
-        // 并发发送 DOM.getBoxModel 请求
         val futures = nodes.map { node ->
             node to devTools.executeDevToolsMethod(
                 "DOM.getBoxModel",
@@ -362,8 +329,8 @@ object KBCefLocatorImpl {
     }
 
     /**
-     * 通过 nodeId 获取 DOM.getBoxModel 并构建 LocateResult。
-     * 注意：CSS/XPath 查询返回的是 nodeId，不是 backendNodeId。
+     * Fetches DOM.getBoxModel by nodeId and builds a [LocateResult].
+     * Note: CSS/XPath queries return nodeId, not backendNodeId.
      */
     private fun getBoxModelByNodeId(
         devTools: org.cef.browser.CefDevToolsClient,
@@ -380,8 +347,8 @@ object KBCefLocatorImpl {
     }
 
     /**
-     * 解析 DOM.getBoxModel 响应，提取 content quad 坐标并构建 LocateResult。
-     * 返回 null 如果解析失败。
+     * Parses a DOM.getBoxModel response into a [LocateResult] from the content quad.
+     * Returns null if parsing fails.
      */
     private fun parseBoxModelToLocateResult(
         boxJson: String,
@@ -391,7 +358,6 @@ object KBCefLocatorImpl {
     ): LocateResult? {
         return try {
             val boxRoot = Json.parseToJsonElement(boxJson).jsonObject
-            // 三层 fallback 解析
             val model = boxRoot["model"]?.jsonObject
                 ?: boxRoot["result"]?.jsonObject?.get("model")?.jsonObject
                 ?: boxRoot["result"]?.jsonObject?.get("result")?.jsonObject?.get("model")?.jsonObject
@@ -464,9 +430,7 @@ object KBCefLocatorImpl {
         }
     }
 
-    /**
-     * 通过 DOM.describeNode 获取节点属性（用于 TestId 匹配）。
-     */
+    /** Fetches node attributes via DOM.describeNode (used for TestId matching). */
     private fun describeNodeAttributes(
         devTools: org.cef.browser.CefDevToolsClient,
         backendNodeId: Int
@@ -501,8 +465,8 @@ object KBCefLocatorImpl {
     }
 
     /**
-     * 执行 CDP 方法并等待响应，带 30 秒总超时。
-     * 超时或错误时抛出异常，包含 CDP 方法名和选择器值。
+     * Executes a CDP method and awaits the response with a 30s total timeout.
+     * Throws on timeout/error, including the CDP method name and selector value.
      */
     private fun executeCdpWithTimeout(
         devTools: org.cef.browser.CefDevToolsClient,
@@ -524,23 +488,20 @@ object KBCefLocatorImpl {
     }
 
     /**
-     * 从 DOM.performSearch 响应中解析 searchId 和 resultCount。
-     * 支持三层 fallback 解析。
+     * Parses searchId and resultCount from a DOM.performSearch response, trying the
+     * top level, result, and result.result nesting.
      */
     private fun JsonObject.resolveFields(searchIdField: String, countField: String): Pair<String, Int>? {
-        // 尝试顶层
         val topSearchId = this[searchIdField]?.jsonPrimitive?.contentOrNull
         val topCount = this[countField]?.jsonPrimitive?.intOrNull
         if (topSearchId != null && topCount != null) return topSearchId to topCount
 
-        // 尝试一层 result
         val r1 = this["result"]?.jsonObject
         if (r1 != null) {
             val s1 = r1[searchIdField]?.jsonPrimitive?.contentOrNull
             val c1 = r1[countField]?.jsonPrimitive?.intOrNull
             if (s1 != null && c1 != null) return s1 to c1
 
-            // 尝试两层 result
             val r2 = r1["result"]?.jsonObject
             if (r2 != null) {
                 val s2 = r2[searchIdField]?.jsonPrimitive?.contentOrNull

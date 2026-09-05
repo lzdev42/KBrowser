@@ -13,20 +13,18 @@ import java.text.AttributedString
 import java.text.CharacterIterator
 
 /**
- * IME 适配器，参照 IntelliJ IDEA 的 JBCefInputMethodAdapter 实现。
+ * IME adapter modeled after IntelliJ IDEA's JBCefInputMethodAdapter.
  *
- * 职责：
- * 1. [InputMethodRequests] — 向 OS 输入法提供光标/字符边界信息，使候选窗口正确定位
- * 2. [InputMethodListener] — 接收 OS 输入法的组合/提交事件，转发给 CEF 的 IME API
- *
- * 修复的问题：
- * - 中文 IME 候选窗口出现在屏幕底部而非光标附近
- * - 中文 IME 组合文本无法正确输入到 CEF 浏览器
+ * Responsibilities:
+ * 1. [InputMethodRequests] — reports caret/character bounds to the OS input method
+ *    so the candidate window is positioned correctly.
+ * 2. [InputMethodListener] — receives OS IME composition/commit events and forwards
+ *    them to the CEF IME API.
  */
 class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputMethodRequests, InputMethodListener {
 
     companion object {
-        /** CEF 中表示无效范围的标记（from == to == -1） */
+        /** Marker for an invalid range in CEF (from == to == -1). */
         private val DEFAULT_RANGE = CefRange(-1, -1)
     }
 
@@ -34,27 +32,28 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     private var browser: CefBrowser? = null
 
     /**
-     * IME 是否正在组合中。
-     * 由 [inputMethodTextChanged] 维护，供 [KBCefOsrComponent.processKeyEvent] 查询，
-     * 以便在组合期间吞掉 KEY_TYPED 事件，避免英文字母与中文输入双路冲突。
+     * Whether an IME composition is in progress. Maintained by
+     * [inputMethodTextChanged] and queried by [KBCefOsrComponent.processKeyEvent]
+     * so KEY_TYPED events are swallowed during composition (prevents ASCII/CJK
+     * double input).
      */
     @Volatile
     var isComposing: Boolean = false
         private set
 
-    /** CEF 回调 OnImeCompositionRangeChanged 提供的字符边界 */
+    /** Character bounds reported by the CEF OnImeCompositionRangeChanged callback. */
     @Volatile
     private var compositionCharacterBounds: Array<Rectangle>? = null
 
-    /** CEF 回调 OnImeCompositionRangeChanged 提供的选择范围 */
+    /** Selection range reported by the CEF OnImeCompositionRangeChanged callback. */
     @Volatile
     private var compositionSelectionRange: CefRange? = null
 
-    /** CEF 回调 OnTextSelectionChanged 提供的选中文本 */
+    /** Selected text reported by the CEF OnTextSelectionChanged callback. */
     @Volatile
     private var selectedText: String = ""
 
-    /** CEF 回调 OnTextSelectionChanged 提供的选择范围 */
+    /** Selection range reported by the CEF OnTextSelectionChanged callback. */
     @Volatile
     private var selectionRange: CefRange = DEFAULT_RANGE
 
@@ -62,13 +61,9 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
         this.browser = browser
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // CefRenderHandler 回调 → 存储字符边界数据
-    // ═══════════════════════════════════════════════════════════════
-
     /**
-     * 由 [KBCefOsrHandler.OnImeCompositionRangeChanged] 调用。
-     * CEF 通知当前输入组合的字符边界矩形（相对于浏览器视图）。
+     * Called by [KBCefOsrHandler.OnImeCompositionRangeChanged] with the character
+     * bounds of the current composition, relative to the browser view.
      */
     fun onImeCompositionRangeChanged(selectionRange: CefRange?, characterBounds: Array<Rectangle>?) {
         this.compositionSelectionRange = selectionRange
@@ -76,26 +71,21 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     }
 
     /**
-     * 由 [KBCefOsrHandler.OnTextSelectionChanged] 调用。
-     * CEF 通知当前文本选择的变化。
+     * Called by [KBCefOsrHandler.OnTextSelectionChanged] with the current text selection.
      */
     fun onTextSelectionChanged(text: String?, range: CefRange?) {
         this.selectedText = text ?: ""
         this.selectionRange = range ?: DEFAULT_RANGE
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // InputMethodRequests — OS 输入法查询光标位置
-    // ═══════════════════════════════════════════════════════════════
-
     /**
-     * OS 输入法调用此方法获取光标位置，用于定位候选窗口。
-     * 这是修复候选窗口位置错误的关键方法。
+     * Called by the OS input method to obtain the caret location for positioning
+     * the candidate window.
      */
     override fun getTextLocation(offset: TextHitInfo?): Rectangle {
         val bounds = compositionCharacterBounds
         val rect = if (bounds != null && bounds.isNotEmpty()) {
-            // 将浏览器视图坐标（CSS 像素）乘以 pixelDensity 转换为物理像素
+            // Browser view coordinates are CSS pixels; scale by pixelDensity to physical pixels.
             val b = bounds[0]
             val density = component.renderHandler?.pixelDensity ?: 1.0
             Rectangle(
@@ -105,11 +95,9 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
                 (b.height * density).toInt()
             )
         } else {
-            // 没有组合字符边界时，返回组件底部左侧作为默认位置
             defaultImePosition
         }
 
-        // 将浏览器视图坐标转换为屏幕坐标
         val componentLocation: Point = try {
             component.locationOnScreen
         } catch (_: Exception) {
@@ -162,10 +150,6 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     private val defaultImePosition: Rectangle
         get() = Rectangle(0, component.height, 0, 0)
 
-    // ═══════════════════════════════════════════════════════════════
-    // InputMethodListener — OS 输入法组合/提交事件 → CEF
-    // ═══════════════════════════════════════════════════════════════
-
     override fun inputMethodTextChanged(event: InputMethodEvent) {
         val br = browser ?: return
         val committedCharacterCount = event.committedCharacterCount
@@ -173,7 +157,7 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
 
         var c = text.first()
 
-        // 处理已提交的字符（IME 确认输入的文本）
+        // Committed characters (confirmed by the IME)
         if (committedCharacterCount > 0) {
             val textBuffer = StringBuilder()
             var remaining = committedCharacterCount
@@ -184,14 +168,13 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             val committedText = textBuffer.toString()
             imeCommitText(br, committedText, DEFAULT_RANGE, 0)
 
-            // CEF 提交后不会通知选择范围变化，当前数据已过时
+            // CEF sends no selection update after a commit, so the cached selection is stale
             selectedText = ""
             selectionRange = DEFAULT_RANGE
-            // 提交后组合状态结束
             isComposing = false
         }
 
-        // 处理组合中的字符（IME 正在编辑但尚未确认的文本）
+        // Composed characters (still being edited by the IME)
         val composedBuffer = StringBuilder()
         while (c != CharacterIterator.DONE) {
             composedBuffer.append(c)
@@ -202,14 +185,14 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             isComposing = true
             var replacementRange = selectionRange
             if (replacementRange.from == replacementRange.to) {
-                // 零长度范围指向光标位置，传给 CEF 会破坏韩语输入顺序
+                // A zero-length range points at the caret; passing it to CEF breaks Korean input ordering.
                 replacementRange = DEFAULT_RANGE
             }
-            // 选择范围：将光标移到组合文本末尾
+            // Selection range: place the caret at the end of the composed text
             val selRange = CefRange(composedText.length, composedText.length)
             imeSetComposition(br, composedText, replacementRange, selRange)
         } else if (isComposing) {
-            // 组合被取消（Escape / 点击其他位置），通知 CEF 清理组合状态
+            // Composition cancelled (Escape / clicking elsewhere): tell CEF to clean up
             isComposing = false
             imeCancelComposition(br)
         }
@@ -217,15 +200,11 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     }
 
     override fun caretPositionChanged(event: InputMethodEvent) {
-        // 不需要处理
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // 反射调用 CEF IME API
-    // ═══════════════════════════════════════════════════════════════
-    // CefBrowser 接口没有声明 ImeSetComposition/ImeCommitText，
-    // 但运行时的 RemoteBrowser（OOP 模式）和 CefBrowser_N（本地模式）实现了这些方法。
-    // 使用反射调用以兼容两种模式。
+    // The CefBrowser interface does not declare ImeSetComposition/ImeCommitText, but the
+    // runtime implementations do (RemoteBrowser in OOP mode, CefBrowser_N in local mode),
+    // so reflection is used to support both.
 
     private fun imeSetComposition(
         browser: CefBrowser,
@@ -241,11 +220,11 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
                 CefRange::class.java,
                 CefRange::class.java
             )
-            // 创建下划线（透明色，仅用于标记组合范围）
+            // Transparent color: the underline only marks the composition range
             val underline = createCompositionUnderline(text.length)
             method.invoke(browser, text, listOf(underline), replacementRange, selectionRange)
         } catch (e: Exception) {
-            // 反射调用失败时回退：取消组合并让 CEF 通过 key event 处理
+            // On failure, do nothing: CEF then handles the raw key events instead
         }
     }
 
@@ -268,9 +247,8 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     }
 
     /**
-     * 取消当前的 IME 组合状态。
-     * 当用户按 Escape 或点击其他位置导致组合被取消时调用，
-     * 确保 CEF 内部状态被正确清理，避免残留幽灵文本。
+     * Cancels the current IME composition (e.g. Escape or clicking elsewhere),
+     * making sure CEF cleans up its internal state so no ghost text remains.
      */
     private fun imeCancelComposition(browser: CefBrowser) {
         try {
@@ -282,8 +260,8 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
     }
 
     /**
-     * 创建 CefCompositionUnderline 对象。
-     * 使用反射因为 CefCompositionUnderline 的构造函数可能因 JCEF 版本而异。
+     * Creates a CefCompositionUnderline via reflection: its constructor signature
+     * varies across JCEF versions.
      */
     private fun createCompositionUnderline(textLength: Int): Any {
         return try {
@@ -293,8 +271,6 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
             val intClass = Int::class.javaPrimitiveType
             val styleClass = Class.forName("org.cef.input.CefCompositionUnderline\$Style")
 
-            // 构造函数: CefCompositionUnderline(CefRange, Color, Color, int, Style)
-            // 对应 IntelliJ: new CefCompositionUnderline(range, backgroundColor, textColor, thickness, style)
             val constructor = clazz.getDeclaredConstructor(
                 rangeClass, colorClass, colorClass, intClass, styleClass
             )
@@ -305,7 +281,6 @@ class KBCefInputMethodAdapter(private val component: KBCefOsrComponent) : InputM
 
             constructor.newInstance(range, transparentColor, transparentColor, 0, solidStyle)
         } catch (e: Exception) {
-            // 如果 CefCompositionUnderline 不可用，尝试简化版本
             throw RuntimeException("Cannot create CefCompositionUnderline", e)
         }
     }

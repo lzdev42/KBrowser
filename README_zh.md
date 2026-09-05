@@ -1,136 +1,32 @@
 # KBrowser
 
-> **开发中** — API 可能随时变更，不保证向后兼容。iOS 和 Android 平台尚未测试。
-
-[English](README.md) | 简体中文
-
----
-
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF)](https://kotlinlang.org/docs/multiplatform.html)
 
----
+[English](README.md) | 简体中文
+
+> **开发中** — API 可能随时变更，不保证向后兼容。iOS 和 Android 平台尚未测试。
 
 **KBrowser** 是一个 Kotlin Multiplatform 库，提供：
 
-1. **`KBWebView`** — 跨平台 WebView UI 组件，支持 Android、iOS、Desktop (JVM) 和 WasmJs (浏览器)。它是纯净的 WebView 抽象，API 风格对齐 `WKWebView` 与 Android `WebView`。
-2. **`KBPage`** — 面向 Desktop (JVM) 的 Playwright 风格浏览器自动化封装，基于 Chrome DevTools Protocol (CDP)。提供 AXTree 语义树提取、CSP 安全元素定位、防检测物理点击、截图捕获以及基于协程的线程安全保障。
+1. **`KBWebView`** — 跨平台 WebView UI 组件，支持 Android、iOS、Desktop (JVM) 和 WasmJs (浏览器)。API 风格对齐 `WKWebView` 与 Android `WebView`。
+2. **`KBPage`** — 面向 Desktop (JVM) 的 Playwright 风格浏览器自动化封装，基于 Chrome DevTools Protocol (CDP)：AXTree 语义树提取、CSP 安全元素定位、防检测物理点击、截图捕获、协程级线程安全。
 
 ---
 
-## 平台状态
+## 快速集成
 
-| 平台 | KBWebView UI | KBPage 自动化 | 测试状态 |
-|------|-------------|--------------|---------|
-| **Desktop (JVM)** | ✅ | ✅ 主要目标 | ✅ 持续测试中 |
-| **WasmJs (浏览器)** | ✅ | ❌ | ⚠️ 实验性 |
-| Android | ✅ | ⚠️ 部分（JS 降级） | ❌ 未测试 |
-| iOS | ✅ | ⚠️ 部分（JS 降级） | ❌ 未测试 |
+### 0. 先选对 API
 
-> 自动化功能（AXTree、基于 CDP 的交互、截图）目前仅限 Desktop 平台。在 Android 和 iOS 上，`KBLocator` 降级为 JS 注入方式。WasmJs 平台的 `KBWebView` 通过在 Compose Canvas 上叠加 HTML `<iframe>` 实现，自动化 API 尚未实现。
+**显示网页用 `KBWebView`，自动化操作用 `KBPage`。**
 
----
+| 你的需求 | 用什么 |
+|----------|--------|
+| 在 Compose UI 里**显示**网页（浏览器界面、内嵌页面） | **`KBWebView`** Composable + `rememberKBWebView()` |
+| **操控**网页——自动化、数据抓取、截图、AI Agent | **`KBPage`**（`KBrowser.newPage()`） |
 
-## 环境要求
-
-### Desktop (JVM)
-
-**必须使用包含 JCEF 的 [JetBrains Runtime (JBR)](https://github.com/JetBrains/JetBrainsRuntime)。** 标准 JDK 无法运行。本库直接使用 JBR 中的 JCEF，不内置 JCEF。
-
-```
-Distribution: JetBrains Runtime
-Package: JDK + JCEF
-```
-
-### 其他平台
-
-| 平台 | 最低版本 |
-|------|---------|
-| Android | API 34 (Android 14) |
-| iOS | iOS 17.0+ |
-
-### WasmJs（浏览器）
-
-在 WasmJs 平台，Compose 通过 Skia 渲染到 HTML `<canvas>`。Skia 有独立的字体系统--它**不读取** `document.fonts` 或 CSS `@font-face`。KBrowser 提供 `WithFontResourcesLoaded` 解决此问题，支持三种模式：
-
-**模式 1：仅 Chrome（`FontMode.CHROME_ONLY`）**
-- 使用 [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API)（`queryLocalFonts()`）枚举系统所有字体
-- 读取每个字体的二进制数据，直接注册到 Skia
-- 支持任意语言--系统装了什么字体，Skia 就能用什么字体
-- 浏览器会弹出字体访问权限请求
-- 非 Chrome 浏览器：不加载任何字体（文字可能显示为豆腐块）
-
-**模式 2：Chrome 优先 + 降级（`FontMode.CHROME_WITH_FALLBACK`）--默认**
-- Chrome：与模式 1 相同（系统所有字体，任意语言）
-- 非 Chrome：自动加载 `composeResources/font/` 目录下打包的字体文件
-- 需要 apply `font-paths` Gradle 插件（见下文）
-
-**模式 3：仅自定义字体（`FontMode.CUSTOM_ONLY`）**
-- 只使用打包的字体文件，不调用 `queryLocalFonts()`
-- 不弹权限请求，所有浏览器体验一致
-- 开发者需提供覆盖目标语言的字体文件
-
-#### Gradle 插件：自动发现字体
-
-在 `build.gradle.kts` 中 apply `font-paths` 插件：
-
-```kotlin
-plugins {
-    id("xyz.kbrowser.font-paths")
-}
-
-kbrowserFontPaths {
-    packageName.set("com.example.app")  // 必须与你的 wasmJsMain 包名一致
-}
-```
-
-将字体文件放到 `src/commonMain/composeResources/font/` 目录下（如 `NotoSansSC.ttf`、`NotoSansArabic.ttf`）。插件在构建时自动扫描所有 `.ttf`/`.otf`/`.woff`/`.woff2` 文件，生成 `FontPaths.generated.kt`。无需手动列出字体路径。
-
-#### 用法
-
-```kotlin
-import xyz.kbrowser.WithFontResourcesLoaded
-import xyz.kbrowser.FontMode
-
-// 默认：Chrome 优先，非 Chrome 降级到打包字体
-ComposeViewport {
-    WithFontResourcesLoaded {
-        App()
-    }
-}
-
-// 仅 Chrome（不打包字体）
-ComposeViewport {
-    WithFontResourcesLoaded(mode = FontMode.CHROME_ONLY) {
-        App()
-    }
-}
-
-// 仅自定义字体（不走 Chrome API，只用打包字体）
-ComposeViewport {
-    WithFontResourcesLoaded(mode = FontMode.CUSTOM_ONLY) {
-        App()
-    }
-}
-```
-
-#### 工作原理
-
-1. **Chrome 103+**：`queryLocalFonts()` 枚举系统所有字体 -> 通过 `blob()` 读取二进制数据 -> base64 传输到 Kotlin -> 通过 `Font(identity, bytes)` + `FontFamilyResolver.preload()` 注册到 Skia。支持任意语言--阿拉伯文、中文、泰文、希伯来文等。
-
-2. **非 Chrome（Safari/Firefox）**：读取 `composeResources/font/` 目录下的打包字体文件（由 Gradle 插件自动发现）-> 注册到 Skia。开发者自行决定打包哪些字体。
-
-3. **跨平台**：`commonMain` 的 UI 代码共享。Desktop (JVM) 原生使用系统字体。WasmJs 使用 `WithFontResourcesLoaded`。UI 层不需要平台特定的字体代码。
-
-#### 注意事项
-
-- `font-paths` Gradle 插件位于 `buildSrc/`，是 KBrowser 仓库的一部分。消费者项目通过 `id("xyz.kbrowser.font-paths")` apply。
-- 如果 `composeResources/font/` 目录下没有字体文件，生成的列表为空。模式 2 和模式 3 在非 Chrome 浏览器上没有字体可加载。
-- 模式 2 中 Chrome API 失败（用户拒绝授权）时，自动降级到打包字体。
-
----
-
-## 配置
+- `KBWebView` 只负责渲染和用户交互，不能替你点击、填值、快照、截图——这些全在 `KBPage` 上。（两者都有 `loadUrl`，但语义不同，见第 6 节。）
+- 同一块视图既要显示又要自动化？创建一个不传 viewport 的 `KBPage`，把它的 `webView` 挂载到 `KBWebView` Composable 即可——Demo 的浏览器模式就是这么做的。
 
 ### 1. 添加依赖
 
@@ -138,7 +34,7 @@ ComposeViewport {
 
 ```toml
 [versions]
-kbrowser = "0.1.0-alpha45"
+kbrowser = "0.1.0-alpha46"
 
 [libraries]
 kbrowser = { module = "io.github.lzdev42:kbrowser", version.ref = "kbrowser" }
@@ -150,9 +46,11 @@ kbrowser = { module = "io.github.lzdev42:kbrowser", version.ref = "kbrowser" }
 implementation(libs.kbrowser)
 ```
 
-### 2. 配置包含 JCEF 的 JBR
+### 2. Desktop (JVM)：配置 JBR
 
-配置 IDE 或构建工具，将包含 JCEF 的 JBR 设置为项目运行时 JDK。在 `compose.desktop` 配置中，必须添加以下 JVM 参数：
+**必须使用包含 JCEF 的 [JetBrains Runtime (JBR)](https://github.com/JetBrains/JetBrainsRuntime)，标准 JDK 无法运行。** JCEF 类随 JBR 运行时自带，不在 KBrowser 库或任何 Maven 依赖中。
+
+`compose.desktop` 配置中添加必需的 JVM 参数（不加则 OSR 模式下**无法输入中文及任何 CJK 文字**，英文不受影响，极易误判为"输入法坏了"）：
 
 ```kotlin
 compose.desktop {
@@ -166,235 +64,215 @@ compose.desktop {
 }
 ```
 
-> **⚠️ 重要**：不加这些 JVM 参数，OSR 模式下**无法输入中文及任何 CJK 文字**（英文不受影响）。OSR 模式下 JCEF 离屏渲染，没有原生窗口处理 IME，中文输入依赖通过反射调用 JCEF 内部类实现，`--add-opens` 参数正是打开这些内部类的访问权限。不加参数时 IME 事件被静默丢弃，但英文通过按键事件正常输入，容易误判为"输入法坏了"而非"配置缺失"。Non-OSR 模式下 JCEF 使用原生窗口，IME 由操作系统原生处理，不需要这些参数。
+**⚠️ Gradle daemon 的 JVM 也必须是 JBR**，否则运行时提示"未安装 JCEF"（`JcefChecker.isJcefAvailable == false`）——`:desktopApp:run` 和所有 `JavaExec` 任务默认运行在 daemon 的 JVM 上，而 daemon 默认用标准 JDK（Zulu/Corretto/Temurin 等），进程里没有 JCEF 类，即使系统装了 JBR 也一样报错。
 
----
+修复（二选一，改完 `./gradlew --stop` 重启 daemon）：
 
-## 渲染模式（JVM Desktop）
+- **IDE 设置（推荐）**：IDEA → `Settings` → `Build, Execution, Deployment` → `Build Tools` → `Gradle` → **Gradle JVM** 选择 JBR+JCEF。
+- **用户级 `~/.gradle/gradle.properties`**（路径机器特定，不要提交进仓库）：
 
-在 JVM 上，JCEF 支持两种渲染模式。模式在初始化时通过 `KBrowser.initializeConfig(useOsr = ...)` 决定，**应用启动后不可更改**。
+```properties
+org.gradle.java.home=/Users/yourname/Library/Java/JavaVirtualMachines/jbrsdk_jcef-25.0.3/Contents/Home
+```
 
-| 模式 | `useOsr` | 叠加 Compose UI | 事件响应 | 性能 | 中文输入 |
-|------|----------|-----------------|---------|------|---------|
-| **OSR（离屏渲染）** — 默认 | `true` | ✅ 可在 JCEF 上叠加 Compose UI | ⚠️ 事件由底层 JCEF 原生视图接收，叠加的 Compose 组件不响应 | 较低（像素往返开销） | ⚠️ 需配置 JVM 参数 |
-| **非 OSR（原生窗口）** | `false` | ❌ 无法在 JCEF 上叠加 Compose UI | ✅ 正常 | ✅ 最佳（原生窗口） | ✅ 原生支持 |
+> `compose.desktop.application.javaHome` 只影响 `:run` 单个任务，覆盖不到 daemon 和其他 `JavaExec` 任务，不推荐。`nativeDistributions`（DMG/MSI/DEB）打包时自带 JBR，分发应用自包含，无需上述配置。
+>
+> **验证**：`ps -o comm= -p $(jps | grep GradleDaemon | awk '{print $1}')` 显示 JBR 路径即生效。
 
-**已知问题（OSR 模式）**：在 OSR 模式下，JCEF 离屏渲染，允许 Compose UI 层叠在其上。但鼠标和键盘事件会被底层 JCEF 原生视图接收，而非上层 Compose 组件。这意味着放置在 JCEF 区域上方的交互式 Compose 组件不会响应用户输入。此问题尚未开始研究，目前优先级较低。
+### 3. 初始化引擎（OSR 用法）
 
-**OSR 模式下的中文输入**：除上述 JVM 参数外，OSR 模式还需要焦点同步才能输入中文——KBrowser 内部已自动处理，无需用户操作。技术细节见[架构文档](docs/KBrowser_Architecture_Design_zh.md)。
+引擎初始化必须在创建任何 `KBWebView` / `KBPage` **之前**完成。`useOsr` 是渲染模式，**启动后不可更改**。下面两种写法在本仓库都有使用（方式 B 是 Demo 的做法），任选一种。
 
-**建议**：默认使用 OSR 模式（`useOsr = true`）——这是唯一支持在浏览器上方叠加 Compose UI 的模式。仅在需要极限渲染性能、且能保证绝不在浏览器视图上方绘制任何 Compose UI 时，才使用非 OSR 模式（`useOsr = false`）。两种模式的 API 完全一致，仅渲染管线不同。
-
-**macOS 实时缩放限制（非 OSR）**：在 macOS 的非 OSR 模式下，拖拽窗口或分隔条边框时浏览器内容不会实时更新——松开后才会刷新。这是 CEF + Core Animation 的架构限制（live-resize 期间 AWT 事件队列被阻塞，Core Animation 不提交帧），无法从 Java/AWT 侧绕过。详见 [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md)。
-
----
-
-## Demo 应用
-
-本项目附带一个完整的 Demo 应用，展示 KBrowser 的全部功能。
-
-**桌面端**：启动后首先选择渲染模式（OSR / Non-OSR），这是桌面端特有的步骤，用于对比两种模式（OSR 为默认模式，支持 Compose 叠加；非 OSR 性能最佳但无法叠加 Compose UI）。选择 OSR 后进入主页面，包含：
-- **浏览器模式**：完整的多标签页浏览器 + 自动化调试面板（AXTree、CDP 交互、截图等）
-- **KBWebView 组件演示**：6 个独立页面分别演示基础浏览、HTML 内容渲染、JS 双向通信、新窗口与文件处理、生命周期回调、缓存管理
-
-选择 Non-OSR 后直接展示 WebGL 场景（直观演示 Non-OSR 模式下无法叠加 Compose UI 的限制）。
-
-**移动端**：无渲染模式选择（移动端 WebView 不存在 OSR 概念），直接进入功能列表。6 个 WebView 组件演示页面与桌面端共享代码。浏览器自动化页面标注了警告：移动端部分功能可能不可用。
-
-**WasmJs（浏览器）**：启动时申请 Local Font Access 字体访问权限，授权后所有系统字体加载到 Skia 引擎并渲染主界面。`KBWebView` 组件使用叠加在 Compose Canvas 上的 HTML `<iframe>` 实现。可使用 WebView 演示页面（基础浏览、HTML 内容、JS 通信），自动化功能暂不支持。
-
----
-
-## 快速开始
-
-### 1. JVM 初始化（Desktop）
-
-`KBrowser.initializeConfig()` 和 `initializeKBrowser()` 必须在 `application {}` **之前**调用：
+**方式 A — `main()` 里同步初始化**（最简单，适合"开机即浏览器"应用）：
 
 ```kotlin
 import xyz.kbrowser.webview.KBrowser
 import xyz.kbrowser.webview.initializeKBrowser
+import xyz.kbrowser.getDefaultStorageDir
+import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 
 fun main() {
-    // 1. 配置缓存目录与渲染模式（必须在启动时确定，不可更改）
     KBrowser.initializeConfig(
-        storageDir = "/path/to/cache",
-        useOsr = true   // 默认；仅在需要极限性能且不叠加 Compose UI 时设为 false
+        storageDir = getDefaultStorageDir(),  // 平台默认缓存目录；也可传自定义路径
+        useOsr = true                          // 默认；详见渲染模式章节
     )
+    kotlinx.coroutines.runBlocking { initializeKBrowser() }  // 挂起，等待 JCEF 就绪
 
-    // 2. 初始化 JCEF 引擎（挂起函数，必须在任何 UI 初始化之前调用）
-    kotlinx.coroutines.runBlocking {
-        initializeKBrowser()
-    }
-
-    // 3. 启动 Compose 应用
     application {
         Window(onCloseRequest = ::exitApplication) { App() }
     }
 }
 ```
 
-### 1b. WasmJs 配置（浏览器）
-
-#### 用 `WithFontResourcesLoaded` 加载字体
-
-在 WasmJs 平台，Compose 通过 Skia 渲染到 `<canvas>`，Skia 有独立于浏览器 CSS 的字体系统。不显式加载字体的话，中文/CJK 等非拉丁文字会显示为豆腐块。KBrowser 提供 `WithFontResourcesLoaded` 自动处理。
-
-**第 1 步**：在 `build.gradle.kts` 中 apply 字体插件：
+**方式 B — Compose 内异步初始化 + 加载指示 + 模式选择**（Demo 实际做法，适合需要先让用户选模式的场景）：
 
 ```kotlin
-plugins {
-    id("xyz.kbrowser.font-paths")
-}
+var isInitialized by remember { mutableStateOf(false) }
+val scope = rememberCoroutineScope()
 
-kbrowserFontPaths {
-    packageName.set("com.example.app")  // 与你的 wasmJsMain 包名一致
-}
-```
-
-**第 2 步**（可选）：将字体文件放到 `src/commonMain/composeResources/font/` 目录下。插件会自动发现。如果只需要 Chrome 支持，跳过此步。
-
-**第 3 步**：包裹你的内容：
-
-```kotlin
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.window.ComposeViewport
-import xyz.kbrowser.WithFontResourcesLoaded
-
-@OptIn(ExperimentalComposeUiApi::class)
-fun main() {
-    ComposeViewport {
-        WithFontResourcesLoaded {
-            App()
+if (!isInitialized) {
+    // 先显示模式选择 / 加载界面
+    ModeSelectionScreen(onModeSelected = { useOsr ->
+        scope.launch {
+            KBrowser.initializeConfig(getDefaultStorageDir(), useOsr = useOsr)
+            initializeKBrowser()   // 挂起
+            isInitialized = true   // 完成后才切到含 WebView 的界面
         }
-    }
+    })
+} else {
+    MainScreen()
 }
 ```
 
-Chrome 103+ 上自动加载系统所有字体（任意语言）。非 Chrome 浏览器上使用 `composeResources/font/` 下的打包字体作为降级。模式详情见上方 [WasmJs 章节](#wasmjs浏览器)。
+关键约束：
+- `initializeConfig()` 只应调用一次，且早于任何其他 KBrowser API。它只是一个普通 setter，没有防重入保护——引擎启动后再调用不会重新配置任何东西。
+- `initializeKBrowser()` 必须在创建任何 `KBWebView` / `KBPage` 之前完成（方式 B 用 `isInitialized` 状态门控 UI，保证初始化完成才创建 WebView）。
 
-#### 跨平台单代码库
+### 4. 显示网页 — `KBWebView`
 
-```kotlin
-// commonMain - 共享 UI，无平台特定字体代码
-@Composable
-expect fun App()
-
-// wasmJsMain
-fun main() = ComposeViewport {
-    WithFontResourcesLoaded { App() }
-}
-
-// jvmMain - 标准桌面入口，不需要字体包装
-fun main() = application {
-    Window(onCloseRequest = ::exitApplication) { App() }
-}
-```
-
-### 2. KBWebView — UI 组件
-
-`KBWebView` 是纯净的 WebView 组件，用于在 Compose UI 中展示网页内容：
+最简用法：`rememberKBWebView` 创建实例，`KBWebView` Composable 挂载即可显示。导航/JS/回调等完整 API 见 [API 参考第 2 节](docs/KBrowser_API_Reference_zh.md#2-kbwebview--ui-组件层)。
 
 ```kotlin
 @Composable
 fun BrowserScreen() {
     val webView = rememberKBWebView(initialUrl = "https://example.com")
 
-    LaunchedEffect(webView) {
-        webView.onNewWindowRequest = { url ->
-            webView.loadUrl(url)
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        KBWebView(webView = webView, modifier = Modifier.weight(1f))
-        Row {
-            Button(onClick = { webView.goBack() }) { Text("←") }
-            Button(onClick = { webView.goForward() }) { Text("→") }
-            Button(onClick = { webView.reload() }) { Text("↺") }
-        }
-    }
+    KBWebView(webView = webView, modifier = Modifier.fillMaxSize())
 }
 ```
 
-### 3. KBPage — 浏览器自动化
+### 5. 程序化操控 — `KBPage`
 
-`KBPage` 是基于协程的 `KBWebView` 自动化封装，提供：
-- 基于挂起函数的页面导航（`loadUrl` 挂起直到页面加载完成）
-- AXTree 语义树提取与元素定位
-- 基于坐标的物理交互（CDP）
-- 基于 JS 的 DOM 交互
-- 线程安全的节点缓存（写入使用 `Mutex` 串行化，读取使用 `@Volatile` 保证可见性）
+`KBrowser.newPage()` 创建 page（后台自动化可传 `viewportWidth`/`viewportHeight`）。自动化语义（`loadUrl`/`snapshot`/`click`/`screenshot` 等）全部封装在 `KBPage` 上。完整 API 见 [第 3 节](docs/KBrowser_API_Reference_zh.md#3-kbpage--自动化控制层)。
+
+> `newPage`、`loadUrl`、`snapshot`、`screenshot` 以及 Locator 操作（`click`/`fill`/`type`）都是 `suspend`——必须在协程中调用（`main()` 里用 `runBlocking { }`，Compose 里用 `LaunchedEffect`）。只有 Locator 创建（`getByRole`/`getByLabel`）和 `close()` 是普通调用。
 
 ```kotlin
-val page = KBrowser.newPage()
+val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)  // suspend
 
-page.onNewPage = { url -> println("新窗口请求: $url") }
+page.loadUrl("https://example.com")               // 挂起，返回时加载完成
 
-page.loadUrl("https://example.com")
+val result = page.snapshot()                      // AXTree + YAML（给 AI）
+val png = page.screenshot()                       // 截图
 
-// 坐标模式（物理事件，防检测）
-page.getByLabel("用户名").fill("admin")
-page.getByLabel("密码").type("secret")
-page.getByRole("button", name = "登录").click()
+page.getByLabel("用户名").fill("admin")           // 定位 + 填值（带验证）
+page.getByRole("button", name = "登录").click()   // 定位 + 物理点击
 
-// JS 模式（DOM 事件模拟，无视遮挡）
-page.getByLabel("用户名").jsFill("admin")
-page.getByLabel("密码").jsType("secret")
-page.getByRole("button", name = "登录").jsClick()
-
-// AXTree 语义树提取
-val tree = page.snapshot().rawTree.getCleanedAxTree()
-println("可见节点数: ${tree.visibleElements}")
-
-// 获取页面 Snapshot（一次调用同时拿到 YAML 和原始数据）
-val result = page.snapshot(SnapshotMode.VIEWPORT)
-val yaml = result.yaml          // 给 AI
-val rawTree = result.rawTree    // 原始数据，refid 与 yaml 一致
-
-// 截图
-val png = page.screenshot()
-
-page.close()
+page.close()                                      // 非 suspend
 ```
 
-### 线程注意事项
+交互方法返回 `OperationResult`：程序化验证操作是否成功（遮挡检测、值回读、滚动位置对比），AI Agent 无需重新快照即可感知失败。详见 [操作验证](docs/KBrowser_API_Reference_zh.md#5-操作验证)。
 
-- `KBPage` 的所有 `suspend` 方法内部通过 `withContext(Dispatchers.Main)` 切换到主线程执行，可在任意协程上下文中安全调用。
-- `KBPage` 的节点缓存写入使用 `Mutex` 串行化，读取使用 `@Volatile` 保证可见性。读操作（如 `click`）不会因写操作（如 `getRawAxTree`）持锁而死锁。
-- CPU 密集型操作（`AxTreeData.getCleanedAxTree()`、`AxTreeData.toYamlSnapshot()`）是纯 Kotlin 扩展函数，在调用方协程上下文执行，不切换线程。`getCleanedAxTree()` 实际行为是过滤出当前视口内的节点（与 `toYamlSnapshot(VIEWPORT)` 使用相同的视口范围判定）。
+### 6. 加载内容：网址 / 本地文件 / HTML
+
+`KBWebView` 的导航（`webView.loadUrl(...)` / `webView.loadHtml(...)`）是即发即忘的——立即返回，不等待内容加载完成。`KBPage.loadUrl(...)` 是 `suspend` 的，页面加载完成后才返回。`KBPage` 加载 HTML 字符串走 `page.webView.loadHtml(...)`。
+
+```kotlin
+// ── 1. 网络 URL ──
+webView.loadUrl("https://example.com")                 // KBWebView
+page.loadUrl("https://example.com")                    // KBPage（suspend）
+
+// ── 2. 本地文件（file:// 协议）──
+val htmlFile = File("path/to/page.html")
+webView.loadUrl(htmlFile.toURI().toString())           // → file:///path/to/page.html
+page.loadUrl(htmlFile.toURI().toString())
+
+// ── 3. HTML 字符串（无需文件/服务器）──
+webView.loadHtml("<html><body><h1>Hello</h1></body></html>")
+page.webView.loadHtml("<html><body><h1>Hello</h1></body></html>")
+```
+
+> 也可以在创建时就指定起始页：`rememberKBWebView(initialUrl = "https://example.com")`。在 Desktop (JVM) 上，HTML 字符串渲染（`loadHtml`）通过内置的 `kbhtml://` scheme handler 加载——无需文件或本地服务器，两种渲染模式下都可用。
+
+### 7. WasmJs（浏览器）
+
+入口就是标准的 `ComposeViewport`，无需任何字体处理——Compose Multiplatform 1.12+ 的自动字体回落会按需下载缺失字形（CJK 变体按浏览器语言自动选择），日文、阿拉伯文、emoji 等开箱即用：
+
+```kotlin
+@OptIn(ExperimentalComposeUiApi::class)
+fun main() = ComposeViewport {
+    App()
+}
+```
+
+### API 参考
+
+完整 API 说明见 [docs/KBrowser_API_Reference_zh.md](docs/KBrowser_API_Reference_zh.md)：
+
+- [`KBrowser` 对象](docs/KBrowser_API_Reference_zh.md#kbrowser-对象) — 初始化、`newPage()`、`shutdown()`
+- [`KBWebView` UI 组件](docs/KBrowser_API_Reference_zh.md#2-kbwebview--ui-组件层) — 状态流、导航、JS 双向交互、回调
+- [`KBPage` 自动化](docs/KBrowser_API_Reference_zh.md#3-kbpage--自动化控制层) — snapshot、坐标/JS 交互、文件上传、Locator
+- [`KBLocator` 定位器](docs/KBrowser_API_Reference_zh.md#4-kblocator--声明式定位器) — 坐标/JS 双模式、查询、链式过滤
+- [操作验证](docs/KBrowser_API_Reference_zh.md#5-操作验证) — `OperationResult` 验证策略
+- [数据结构](docs/KBrowser_API_Reference_zh.md#6-数据结构) — `AxNode`、`AxTreeData`、`SnapshotResult` 等
+- [调试 API](docs/KBrowser_API_Reference_zh.md#9-调试-apikbdebug) — `KBDebug` 查询式 CDP 诊断
 
 ---
 
-## 无头模式（JVM Desktop）
+## 平台状态
 
-KBrowser 提供两个职责清晰的 page 创建 API：
+| 平台 | KBWebView UI | KBPage 自动化 | 测试状态 |
+|------|-------------|--------------|---------|
+| **Desktop (JVM)** | ✅ | ✅ 主要目标 | ✅ 持续测试中 |
+| **WasmJs (浏览器)** | ✅ | ❌ | ⚠️ 实验性 |
+| Android | ✅ | ⚠️ 部分（JS 降级） | ❌ 未测试 |
+| iOS | ✅ | ⚠️ 部分（JS 降级） | ❌ 未测试 |
 
-- `KBrowser.newPage(profile: KBProfile? = null)` — 创建 **UI 模式 page**，用于通过 `KBWebView` Composable 在 Compose 窗口中显示。渲染尺寸由 Compose 的 `modifier` 决定。
-- `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth = 1280, viewportHeight = 720)` — 创建 **无头模式 page**，用于后台自动化（截图、CDP 操作、AX Tree 提取）。渲染尺寸由承载 JCEF 组件的透明 `JFrame`（opacity = 0）决定。**禁止将无头 page 挂载到 `KBWebView` Composable** —— 会导致尺寸异常。
+> 自动化功能仅限 Desktop。Android/iOS 上 `KBLocator` 降级为 JS 注入。WasmJs 的 `KBWebView` 通过叠加 HTML `<iframe>` 实现，自动化 API 尚未实现。
 
-两个 API 都只创建 page；导航通过 `page.loadUrl(url)` 完成，它是 `suspend` 函数，返回时即加载完成：
+| 其他平台 | 最低版本 |
+|----------|---------|
+| Android | API 34 (Android 14) |
+| iOS | iOS 17.0+ |
+
+---
+
+## 渲染模式（JVM Desktop）
+
+模式在 `KBrowser.initializeConfig(useOsr = ...)` 初始化时确定，**启动后不可更改**。
+
+| 模式 | `useOsr` | 叠加 Compose UI | 事件响应 | 性能 | 中文输入 |
+|------|----------|-----------------|---------|------|---------|
+| **OSR（离屏渲染）** — 默认 | `true` | ✅ | ⚠️ 浏览器上方的 Compose 覆盖层需要正确的混排层级才能接收事件（见下方说明）；网页内部交互、JS↔Native 回调、CDP 自动化均正常 | 较低（像素往返） | ⚠️ 需 JVM 参数 + 焦点同步（KBrowser 内部已处理） |
+| **非 OSR（原生窗口）** | `false` | ❌ | ✅ 正常 | ✅ 最佳 | ✅ 原生支持 |
+
+- **建议**：默认 OSR（唯一支持 Compose 叠加的模式）；仅在需要极限性能且绝不叠加 Compose UI 时用非 OSR。两种模式 API 完全一致。
+- ⚠️ 浏览器上方的 Compose 覆盖层：直接放在 WebView 挂载容器内部的覆盖层，鼠标/键盘事件会穿透到下层 JCEF 视图；把它上移一层（作为浏览器容器的同级）即可正常接收事件——参见 Demo 浏览器界面的悬浮卡片示例（`compose.interop.blending=true` 由 `initializeKBrowser()` 自动设置）。网页内的用户交互、`registerJsCallback`/`registerJsHandler` JS↔Native 双向通信、以及基于 CDP 的全部自动化 API（`KBPage` 的所有方法在两种模式下均正常工作）不受影响。
+- **macOS live-resize 限制（非 OSR）**：拖拽窗口/分隔条时浏览器内容松手后才刷新，是 CEF + Core Animation 的架构限制，无法从 Java/AWT 侧绕过。详见 [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md)。
+
+---
+
+## 后台自动化 Page（JVM Desktop）
+
+JCEF 默认以 OSR 离屏渲染（共享内存零拷贝），不依赖任何窗口，因此 KBrowser 只有一个 page 创建 API，不区分"有头/无头"：
+
+- **不传 viewport**：page 挂载到 `KBWebView` Composable 显示，尺寸由 Compose `modifier` 决定。
+- **传 viewport**（如 1280×720）：page 不挂任何 UI，固定尺寸离屏渲染，用于后台自动化。
 
 ```kotlin
-val page = KBrowser.newHeadlessTab()       // 创建
+val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)  // 后台 page
 page.loadUrl("https://example.com")        // 导航（suspend）
 val png = page.screenshot()                // 已就绪
 ```
 
-**限制**：
-- 这不是真正的无头浏览器，UI 框架窗口仍然存在（只是完全透明）。
-- 必须使用 OSR 模式（`useOsr = true`）。
-- Linux 服务器需要虚拟显示器（如 `Xvfb`）。
+**限制**：依赖 OSR 渲染（默认即 OSR）；Linux 无显示环境的服务器需要虚拟显示器（如 `Xvfb`）。
+
+---
+
+## Demo 应用
+
+- **桌面端**：启动时选择渲染模式（OSR / Non-OSR），随后进入多标签页浏览器 + 自动化调试面板（AXTree、CDP 交互、截图），以及 7 个 `KBWebView` 组件演示页（基础浏览、HTML 渲染、JS 双向通信、新窗口与文件、生命周期、缓存管理、网页截图）。
+- **移动端**：无渲染模式选择，直接进入功能列表；部分自动化功能标注不可用。
+- **WasmJs**：`KBWebView` 以 `<iframe>` 叠加实现，仅支持 WebView 演示页。
 
 ---
 
 ## 开发文档
 
 - [架构设计](docs/KBrowser_Architecture_Design_zh.md) — 坐标系统、平台内部实现、线程模型
-- [API 参考](docs/KBrowser_API_Reference_zh.md) — 所有 API 的详细说明与使用示例
+- [API 参考](docs/KBrowser_API_Reference_zh.md) — 所有 API 的详细说明与使用示例（[章节导航](#api-参考)见上方）
 - [选择器使用指南](docs/KBrowser_Selector_Guide.md) — CSS 选择器生成策略与使用方式
-- [Snapshot 格式说明](docs/KBrowser_Snapshot_Format.md) — KBrowser YAML Snapshot 格式
 
 ---
 

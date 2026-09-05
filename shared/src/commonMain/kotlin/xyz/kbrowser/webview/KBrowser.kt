@@ -24,33 +24,23 @@ object KBrowser {
     val pages: StateFlow<List<KBPage>> = _pages.asStateFlow()
 
     /**
-     * 创建 UI 模式的 Page：可挂载到 KBWebView Composable 显示。
-     * 渲染尺寸由 Compose 的 modifier 决定。导航用 [KBPage.loadUrl]。
+     * Creates a page.
+     *
+     * - Without a viewport: the page is meant to be mounted in a [KBWebView] Composable for
+     *   display; its render size is determined by the Compose modifier.
+     * - With a viewport (e.g. 1280×720): the page attaches no UI and renders at exactly the
+     *   viewport size, for background automation (screenshots, CDP, AX tree). JCEF OSR is
+     *   off-screen rendering by nature, so no window is needed to host the page.
      */
-    suspend fun newPage(profile: KBProfile? = null): KBPage =
-        baseNewPage(profile, viewportWidth = null, viewportHeight = null, headless = false)
-
-    /**
-     * 创建无头模式的后台自动化 Page：不挂任何 UI，渲染尺寸由透明 JFrame 决定。
-     * **禁止**将返回的 page 挂载到 KBWebView Composable —— 会导致尺寸异常。
-     * 默认 viewport 1280×720，与 Playwright 默认值一致。导航用 [KBPage.loadUrl]。
-     */
-    suspend fun newHeadlessTab(
+    suspend fun newPage(
         profile: KBProfile? = null,
-        viewportWidth: Int = 1280,
-        viewportHeight: Int = 720
-    ): KBPage = baseNewPage(profile, viewportWidth, viewportHeight, headless = true)
-
-    private suspend fun baseNewPage(
-        profile: KBProfile?,
-        viewportWidth: Int?,
-        viewportHeight: Int?,
-        headless: Boolean
+        viewportWidth: Int? = null,
+        viewportHeight: Int? = null
     ): KBPage {
         storageDir
             ?: throw IllegalStateException("KBrowser.initializeConfig() must be called before newPage()")
         val webView = withContext(Dispatchers.Main) {
-            createHeadlessWebView(null, profile, viewportWidth, viewportHeight, headless)
+            createPageWebView(null, profile, viewportWidth, viewportHeight)
         }
         val page = KBPage(webView)
         _pages.update { it + page }

@@ -10,6 +10,10 @@ English | [简体中文](KBrowser_API_Reference_zh.md)
 
 ## 1. Quick Start
 
+> Dependency setup and JBR configuration (JVM args + Gradle daemon JVM): see [Quick Start in README](../README.md#quick-start).
+
+> Show a page with `KBWebView` ([§ 2](#2-kbwebview--ui-component-layer)); operate on it with `KBPage` ([§ 3](#3-kbpage--automation-layer)). For display + automation on the same view, mount `page.webView` in the `KBWebView` Composable.
+
 JVM platform must be initialized before calling `application {}`:
 
 ```kotlin
@@ -21,7 +25,7 @@ fun main() {
     // 1. Configure storage path and rendering mode
     KBrowser.initializeConfig(
         storageDir = "/path/to/cache",
-        useOsr = true   // default; set to false only for maximum performance with no Compose overlay
+        useOsr = true   // default
     )
 
     // 2. Initialize JCEF engine (must be called before any UI initialization)
@@ -38,29 +42,12 @@ fun main() {
 }
 ```
 
-### Required JVM Arguments
-
-The following JVM arguments must be added to the `compose.desktop` configuration. Without them, OSR mode **will not support Chinese/CJK text input** (English input is unaffected). See the Rendering Modes section in README for details.
-
-```kotlin
-compose.desktop {
-    application {
-        jvmArgs += listOf(
-            "--enable-native-access=jcef",
-            "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
-            "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
-        )
-    }
-}
-```
-
 ### KBrowser Object
 
 | Method / Property | Description |
 |-------------------|-------------|
 | `KBrowser.initializeConfig(storageDir: String?, useOsr: Boolean = true)` | Configures storage directory and rendering mode. Must be called before `initializeKBrowser()` and `newPage()`. `useOsr` determines the rendering mode (see Rendering Modes section in README) and cannot be changed after initialization. |
-| `KBrowser.newPage(profile: KBProfile? = null): KBPage` | Creates a **UI-mode** page for display in a Compose window via the `KBWebView` Composable. Render size is controlled by the Compose `modifier`. Navigation is done via `page.loadUrl(url)` (suspend, returns when loaded). |
-| `KBrowser.newHeadlessTab(profile: KBProfile? = null, viewportWidth: Int = 1280, viewportHeight: Int = 720): KBPage` | Creates a **headless-mode** page for background automation (screenshots, CDP, AX Tree). Render size is determined by a transparent `JFrame` (opacity = 0). Default viewport 1280×720, matching Playwright. **Never mount a headless page onto the `KBWebView` Composable.** Navigation is done via `page.loadUrl(url)`. |
+| `KBrowser.newPage(profile: KBProfile? = null, viewportWidth: Int? = null, viewportHeight: Int? = null): KBPage` | Creates a page. Without viewport args: meant to be mounted in the `KBWebView` Composable; render size is controlled by the Compose `modifier`. With viewport args (e.g. 1280×720): the page is not attached to any UI and renders off-screen at a fixed size, for background automation (screenshots, CDP, AX Tree). Navigation is done via `page.loadUrl(url)` (suspend, returns when loaded). |
 | `KBrowser.pages: StateFlow<List<KBPage>>` | Reactive stream of all currently open pages. |
 | `KBrowser.getPages(): List<KBPage>` | Synchronously returns a snapshot of all currently open pages. |
 | `KBrowser.shutdown()` | Closes all pages and performs global resource cleanup. |
@@ -115,7 +102,9 @@ KBrowser provides two Web-to-Native communication mechanisms:
 | `destroy()` | Destroys the WebView and releases resources |
 | `setWebViewClient(client?)` | Sets callback for page loading events |
 | `setWebChromeClient(client?)` | Sets callback for JS dialogs / permissions |
-| `suspend takeScreenshot(): ByteArray?` | Takes screenshot via CDP, returning PNG in CSS pixel size |
+| `suspend takeScreenshot(): KBScreenshot?` | Takes screenshot via CDP, returning a [KBScreenshot](#6-data-structures) (CSS-pixel sized, DPR-scaled) |
+| `var backgroundColor: Color` | Web page background color, default black. On JVM, sets both the outer Swing container and the CEF rendering layer; no-op on Android/iOS |
+| `val debug: KBDebug` | CDP debug API (see [Debug API](#9-debug-api-kbdebug)) |
 | `var onNewWindowRequest: ((url: String) -> Unit)?` | Callback for new tab/window requests; silently discarded if null |
 | `setInteractionLocked(locked: Boolean)` | Locks/unlocks user interaction. When `true`, overlays an AWT intercept layer that blocks all user mouse/keyboard input; automation (CDP) is unaffected. The overlay renders mouse trail and click ripple animations. **JVM only; no-op on Android/iOS.** |
 | `updateMouseTrail(viewportX: Int, viewportY: Int)` | Updates mouse trail position on the overlay (viewport CSS pixels). Called automatically by coordinate-based automation methods. **JVM only.** |
@@ -160,10 +149,11 @@ fun BrowserScreen() {
 |----------|------|-------------|
 | `uuid` | `String` | Unique string ID generated at creation |
 | `webView` | `KBWebView` | The underlying WebView instance |
+| `debug` | `KBDebug` | CDP debug API, delegated to the underlying WebView (see [Debug API](#9-debug-api-kbdebug)) |
 
 ### StateFlows
 
-Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progress`.
+Delegates directly to `KBWebView`: `currentUrl`, `currentTitle`, `loadingState`, `progress`.
 
 ### Navigation
 
@@ -172,7 +162,6 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 | `suspend loadUrl(url: String)` | Loads the URL and suspends until `onPageFinished`. Cancelling calls `stopLoading()`. |
 | `suspend evaluateJavascript(script: String): String` | Evaluates Javascript, returns result as string |
 | `suspend clearCacheAndCookies()` | Clears cache and cookies |
-| `suspend setCookieViaJs(cookieString: String)` | Injects cookie via `document.cookie` |
 | `suspend screenshot(): ByteArray?` | CDP screenshot, PNG bytes in CSS pixel size |
 | `close()` | Destroys the underlying WebView |
 
@@ -187,9 +176,9 @@ Delegates directly to `KBWebView`: `currentUrl`, `title`, `loadingState`, `progr
 
 | Method | Description |
 |--------|-------------|
-| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | Returns a `SnapshotResult` containing both the YAML string and the raw `AxTreeData` from the same fetch, guaranteeing refid consistency. Use this — `getRawAxTree()` is private and should not be called directly. |
+| `suspend snapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): SnapshotResult` | Returns a `SnapshotResult` containing both the YAML string and the raw `AxTreeData` from the same fetch, so their refids are consistent. This is the public way to fetch the AX tree (`getRawAxTree()` is internal). |
 | `AxTreeData.getCleanedAxTree(): AxTreeData` | Extension: **filters nodes within the current viewport** (`centerX ∈ [scrollX, scrollX + innerWidth]` and `centerY ∈ [scrollY, scrollY + innerHeight]`), and re-computes `totalElements/visibleElements/hiddenElements`. Uses the same viewport-range logic as `toYamlSnapshot(SnapshotMode.VIEWPORT)`. |
-| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | Converts to KBrowser YAML Snapshot format (standard YAML structure). See [Snapshot Format](KBrowser_Snapshot_Format.md). |
+| `AxTreeData.toYamlSnapshot(mode: SnapshotMode = SnapshotMode.VIEWPORT): String` | Converts to KBrowser YAML Snapshot format (standard YAML structure). |
 
 Extension functions are pure Kotlin computations that execute in the caller's coroutine context.
 
@@ -216,7 +205,7 @@ data class SnapshotResult(
 )
 ```
 
-> **Important**: The `yaml` and `rawTree` in `SnapshotResult` come from the same `getRawAxTree()` call, guaranteeing refid consistency. Do not call `snapshot()` and `getRawAxTree()` separately, as refids may change between calls.
+> `yaml` and `rawTree` come from the same fetch, so their refids are consistent. Refids may change between two `snapshot()` calls — never mix data from different calls.
 
 #### Usage Example
 
@@ -232,7 +221,7 @@ val fullResult = page.snapshot(SnapshotMode.CLEAN)
 
 ### Interaction (refid-based)
 
-Must execute `getRawAxTree()` beforehand to refresh the cache. Throws `ElementNotFoundException` if the refid does not exist.
+Run `snapshot()` first to populate the node cache. Throws `ElementNotFoundException` if the refid does not exist.
 
 #### Coordinate Mode (Physical System Events)
 
@@ -454,7 +443,7 @@ data class AxNode(
     val childCount: Int,        // Number of children
     val attributes: Map<String, String>,
     val iframeSrc: String?,
-    val selector: String,       // Dynamic unique CSS selector, regenerated per getRawAxTree()
+    val selector: String,       // Dynamic unique CSS selector, regenerated on every snapshot()
     val occludedBy: String?,    // refid of the element occluding this node's center, or null
     val nodeId: String,         // CDP AX node ID (from Accessibility.getFullAXTree's nodeId field),
                                 // used with childIds to build the real DOM hierarchy;
@@ -514,6 +503,20 @@ enum class KeyboardKey {
     SPACE, HOME, END, PAGE_UP, PAGE_DOWN, INSERT,
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
     A, C, V, X, S, Z
+}
+```
+
+### KBScreenshot
+
+The return value of `webView.takeScreenshot()`.
+
+```kotlin
+data class KBScreenshot(
+    val imageData: ByteArray,  // PNG-encoded image bytes
+    val width: Int,            // width in CSS pixels
+    val height: Int            // height in CSS pixels
+) {
+    val base64: String         // Base64 of imageData (lazy)
 }
 ```
 

@@ -19,15 +19,16 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
     constructor(url: String) : this(KBCefBrowserBuilder().setUrl(url))
 
     /**
-     * 外层 Swing 容器，对齐 IDEA 的 JBCefBrowser.MyPanel。
+     * Outer Swing container, mirroring IDEA's JBCefBrowser.MyPanel.
      *
-     * 关键点：重写 setBackground，让任何外部 setBackground 调用都同步到内层
-     * CEF heavyweight 组件 (uiComp)。否则非 OSR 模式下，uiComp 会保留 CEF
-     * 默认底色（白色/灰色），与外层 JPanel 形成视觉冲突。
+     * Key point: setBackground is overridden so any external background change is
+     * propagated to the inner CEF heavyweight component (uiComp). Otherwise, in
+     * non-OSR mode, uiComp keeps CEF's default background (white/gray) and clashes
+     * visually with the outer JPanel.
      */
     private val myComponent: KBMyPanel = KBMyPanel()
 
-    /** 查找内层 OSR 组件（仅 OSR 模式下存在） */
+    /** Finds the inner OSR component (only present in OSR mode). */
     private fun findOsrComponent(): KBCefOsrComponent? {
         for (comp in myComponent.components) {
             if (comp is KBCefOsrComponent) return comp
@@ -40,17 +41,16 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
         myComponent.innerUiComp = uiComp
         myComponent.add(uiComp, BorderLayout.CENTER)
 
-        // 通过 myComponent.setBackground 间接同步到 uiComp，
-        // 触发 KBMyPanel 中重写的 setBackground 透传逻辑（对齐 IDEA）。
+        // Set via myComponent so KBMyPanel's setBackground override propagates it to uiComp
         myComponent.background = Color.BLACK
 
-        // IDEA Logic: Set property for shortcut provider to find the browser
+        // Client property lets the shortcut provider find the browser (mirrors IDEA)
         myComponent.putClientProperty(KBCEFBROWSER_INSTANCE_PROP, this)
 
         // Register shortcuts (crucial for Mac)
         KCefShortcutProvider.registerShortcuts(myComponent, this)
 
-        // Windows focus fix from IDEA
+        // Windows focus workaround from IDEA: ensure CEF gets focus on mouse press
         if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) {
             uiComp.addMouseListener(object : MouseAdapter() {
                 override fun mousePressed(e: MouseEvent) {
@@ -61,7 +61,7 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
             })
         }
 
-        // Focus passing — 确保焦点穿透到内层 OSR 组件
+        // Focus passing: make sure focus reaches the inner OSR component
         myComponent.addFocusListener(object : FocusAdapter() {
             override fun focusGained(e: FocusEvent) {
                 uiComp.requestFocusInWindow()
@@ -76,11 +76,11 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
     }
 
     /**
-     * 设置浏览器背景色，作用于两个层级：
-     * - 外层 Swing 容器 myComponent（KBMyPanel 重写的 setBackground 会自动透传到 uiComp）
-     * - 内层 KBCefOsrComponent（OSR 模式下的渲染底色）
+     * Sets the browser background color at both levels:
+     * - the outer Swing container myComponent (KBMyPanel.setBackground forwards it to uiComp)
+     * - the inner KBCefOsrComponent (the OSR render background)
      *
-     * 必须在 EDT 上调用，因为涉及 Swing 组件属性修改。
+     * Must be called on the EDT since it mutates Swing component state.
      */
     fun setBrowserBackgroundColor(color: Color) {
         if (!javax.swing.SwingUtilities.isEventDispatchThread()) {
@@ -92,25 +92,25 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
     }
 
     /**
-     * 外层 JPanel 容器，对齐 IDEA JBCefBrowser.MyPanel。
-     * - 重写 setBackground 让背景色透传到内层 CEF heavyweight 组件
-     * - 不获取焦点，让焦点穿透到内层 KBCefOsrComponent
-     * - 委托 InputMethodEvent/InputMethodRequests 给内层 OSR 组件
+     * Outer JPanel mirroring IDEA's JBCefBrowser.MyPanel.
+     * - Overrides setBackground to propagate the color to the inner CEF heavyweight component
+     * - Not focusable, so focus passes through to the inner KBCefOsrComponent
+     * - Delegates InputMethodEvent/InputMethodRequests to the inner OSR component
      */
     private inner class KBMyPanel : JPanel(BorderLayout()) {
-        // 持有内层 CEF heavyweight 组件引用，用于 setBackground 透传
+        /** Inner CEF heavyweight component, used by the setBackground passthrough. */
         var innerUiComp: Component? = null
 
         init {
-            // 外层 JPanel 不应获取焦点，让焦点穿透到内层 KBCefOsrComponent
-            // 这样 InputMethodEvent 会直接派发给 KBCefOsrComponent
+            // The outer JPanel must not take focus: focus (and with it InputMethodEvents)
+            // then goes directly to the inner KBCefOsrComponent
             isFocusable = false
-            // 启用 IME 作为安全网（当焦点意外落在此 JPanel 时仍能处理 IME 事件）
+            // IME safety net: still handle IME events if focus accidentally lands on this panel
             enableInputMethods(true)
         }
 
-        // 对齐 IDEA：重写 setBackground 让背景色透传到内层 CEF heavyweight 组件。
-        // 否则每次外部修改 myComponent 背景色时，uiComp 仍保持旧色。
+        // Mirrors IDEA: without this override, uiComp keeps the old color whenever
+        // the myComponent background changes.
         override fun setBackground(bg: Color) {
             innerUiComp?.background = bg
             super.setBackground(bg)
@@ -122,8 +122,8 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
         }
 
         /**
-         * 将 IME 请求委托给内部的 [KBCefOsrComponent]。
-         * 当 AWT 焦点落在此 JPanel 上时，OS 输入法仍能获取正确的光标位置信息。
+         * Delegates IME requests to the inner [KBCefOsrComponent] so the OS input
+         * method still gets correct caret bounds when AWT focus lands on this JPanel.
          */
         override fun getInputMethodRequests(): InputMethodRequests? {
             val osrComp = findOsrComponent()
@@ -131,9 +131,10 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
         }
 
         /**
-         * 将收到的 InputMethodEvent 转发给内层 KBCefOsrComponent。
-         * AWT 的 InputMethodEvent 只派发给焦点拥有者，不会自动穿透给子组件，
-         * 因此当焦点意外落在此 JPanel 上时，必须手动转发。
+         * Forwards InputMethodEvents to the inner KBCefOsrComponent. AWT dispatches
+         * input method events only to the focus owner and never propagates them to
+         * child components, so manual forwarding is required when focus accidentally
+         * lands on this panel.
          */
         override fun processInputMethodEvent(e: InputMethodEvent) {
             val osrComp = findOsrComponent()

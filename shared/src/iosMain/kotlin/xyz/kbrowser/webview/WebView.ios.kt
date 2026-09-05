@@ -17,6 +17,8 @@ import platform.WebKit.WKUIDelegateProtocol
 import platform.WebKit.WKSecurityOrigin
 import platform.WebKit.WKMediaCaptureType
 import platform.WebKit.WKPermissionDecision
+import platform.WebKit.WKNavigationAction
+import platform.WebKit.WKWindowFeatures
 import platform.Foundation.*
 import platform.darwin.NSObject
 import kotlinx.cinterop.readValue
@@ -25,11 +27,12 @@ import kotlinx.cinterop.*
 import kotlin.coroutines.resume
 
 /**
- * 命名 class 实现 WKUIDelegateProtocol。
+ * Named class implementing WKNavigationDelegateProtocol.
  *
- * 使用命名 class 而非匿名 object，因为 Kotlin/Native 在 iOS 平台上对匿名 object 的
- * Obj-C 协议方法注册可能存在差异（多个同名 webView: 重载时，部分 override 可能未被
- * Obj-C runtime 正确识别）。命名 class 的方法注册更可靠。
+ * A named class is used instead of an anonymous object because Kotlin/Native on iOS may
+ * register Obj-C protocol methods of anonymous objects unreliably (with several same-named
+ * webView: overloads, some overrides can be missed by the Obj-C runtime). Named-class
+ * method registration is more dependable.
  */
 @OptIn(ExperimentalForeignApi::class)
 private class KbNavigationDelegate(
@@ -53,13 +56,13 @@ private class KbNavigationDelegate(
         didFinishNavigation: platform.WebKit.WKNavigation?
     ) {
         val url = webView.URL?.absoluteString ?: ""
+        if (iosWebView.isDuplicateFinishNotification(url)) return
         iosWebView.currentUrl.value = url
         iosWebView.loadingState.value = LoadingState.Finished
         iosWebView.progress.value = 1.0f
         iosWebView.canGoBack.value = webView.canGoBack
         iosWebView.canGoForward.value = webView.canGoForward
         iosWebView.webViewClient?.onPageFinished(url)
-        iosWebView.reinjectJsCallbacksAndHandlers()
     }
 
     @ObjCSignatureOverride
@@ -90,8 +93,20 @@ private class KbNavigationDelegate(
 }
 
 private class KbUIDelegate(
-    private val getChromeClient: () -> KBWebChromeClient?
+    private val getChromeClient: () -> KBWebChromeClient?,
+    private val getOnNewWindowRequest: () -> ((String) -> Unit)?
 ) : NSObject(), WKUIDelegateProtocol {
+    override fun webView(
+        webView: WKWebView,
+        createWebViewWithConfiguration: WKWebViewConfiguration,
+        forNavigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ): WKWebView? {
+        val targetUrl = forNavigationAction.request.URL?.absoluteString ?: return null
+        getOnNewWindowRequest()?.invoke(targetUrl)
+        return null
+    }
+
     override fun webView(
         webView: WKWebView,
         runJavaScriptAlertPanelWithMessage: String,
@@ -197,11 +212,19 @@ class IosWebView(
     private var retainedUiDelegate: NSObject? = null
     private var retainedNavDelegate: NSObject? = null
 
-    // 保存已注册的 JS callback/handler，用于页面加载完成后重新注入
+    // Registered JS callbacks/handlers, kept for re-injection after page loads
     private val jsCallbackMap = mutableMapOf<String, (String) -> Unit>()
     private val jsCallbackHandlerMap = mutableMapOf<String, NSObject>()
     private val jsHandlerMap = mutableMapOf<String, (String) -> String>()
     private val jsHandlerHandlerMap = mutableMapOf<String, NSObject>()
+
+    /**
+     * WKNavigationDelegate.didFinishNavigation and the DOMContentLoaded pageFinished message
+     * each fire once per load, and didStartProvisionalNavigation resets the state back to
+     * Loading, so "already Finished with an unchanged URL" identifies a duplicate notification.
+     */
+    internal fun isDuplicateFinishNotification(url: String): Boolean =
+        loadingState.value == LoadingState.Finished && currentUrl.value == url
 
     @OptIn(ExperimentalForeignApi::class)
     fun getOrCreateWebView(): WKWebView {
@@ -219,16 +242,17 @@ class IosWebView(
             
             val config = WKWebViewConfiguration().apply {
                 websiteDataStore = store
-                // WKWebView 默认启用 JS；这里显式允许 JS 打开窗口（alert/confirm/prompt 需要）
+                // WKWebView enables JS by default; explicitly allow JS to open windows (needed by alert/confirm/prompt)
                 preferences.javaScriptCanOpenWindowsAutomatically = true
                 allowsInlineMediaPlayback = true
-                // iOS 14+ 默认允许内容 JavaScript；若 API 可用则显式确认
+                // iOS 14+ allows content JS by default; confirm explicitly when the API is available
                 try {
                     defaultWebpagePreferences.setAllowsContentJavaScript(true)
                 } catch (_: Exception) {}
             }
             
-            // 注册 pageFinished 监听，用于更新页面状态，替代冲突的 navigationDelegate
+            // pageFinished message listener updates page state, replacing the conflicting
+            // navigationDelegate-based finish detection
             val handler = object : NSObject(), platform.WebKit.WKScriptMessageHandlerProtocol {
                 override fun userContentController(
                     userContentController: platform.WebKit.WKUserContentController,
@@ -236,32 +260,19 @@ class IosWebView(
                 ) {
                     if (didReceiveScriptMessage.name == "pageFinished") {
                         val url = didReceiveScriptMessage.body.toString()
+                        if (isDuplicateFinishNotification(url)) return
                         currentUrl.value = url
                         loadingState.value = LoadingState.Finished
                         progress.value = 1.0f
                         canGoBack.value = webView?.canGoBack ?: false
                         canGoForward.value = webView?.canGoForward ?: false
                         webViewClient?.onPageFinished(url)
-                        // 页面加载完成后重新注入 JS callback/handler（页面上下文被重置）
-                        reinjectJsCallbacksAndHandlers()
                     }
                 }
             }
             config.userContentController.addScriptMessageHandler(handler, "pageFinished")
-            
-            val scriptSource = """
-                window.addEventListener('DOMContentLoaded', function() {
-                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pageFinished) {
-                        window.webkit.messageHandlers.pageFinished.postMessage(window.location.href);
-                    }
-                });
-            """.trimIndent()
-            val userScript = WKUserScript(
-                source = scriptSource,
-                injectionTime = WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentEnd,
-                forMainFrameOnly = true
-            )
-            config.userContentController.addUserScript(userScript)
+
+            installDocumentStartScripts(config.userContentController)
 
             val screenBounds = platform.UIKit.UIScreen.mainScreen.bounds
             val vpW = viewportWidth?.toDouble() ?: screenBounds.useContents { size.width }
@@ -269,12 +280,10 @@ class IosWebView(
             val frame = platform.CoreGraphics.CGRectMake(0.0, 0.0, vpW, vpH)
             w = WKWebView(frame = frame, configuration = config)
 
-            // WKUIDelegate: 转发 JS alert/confirm/prompt 到 webChromeClient
-            val uiDelegate = KbUIDelegate { webChromeClient }
+            val uiDelegate = KbUIDelegate({ webChromeClient }, { onNewWindowRequest })
             w.UIDelegate = uiDelegate
             retainedUiDelegate = uiDelegate
 
-            // WKNavigationDelegate: 处理页面加载生命周期和错误
             val navDelegate = KbNavigationDelegate(this)
             w.navigationDelegate = navDelegate
             retainedNavDelegate = navDelegate
@@ -303,7 +312,7 @@ class IosWebView(
 
     override fun loadHtml(html: String) {
         val w = getOrCreateWebView()
-        // 使用 about:blank 作为 baseURL，避免 baseURL=nil 时某些 iOS 版本限制 JS 执行/弹窗
+        // about:blank as baseURL: baseURL=nil makes some iOS versions restrict JS execution/alerts
         w.loadHTMLString(html, NSURL.URLWithString("about:blank"))
     }
 
@@ -342,7 +351,7 @@ class IosWebView(
     override fun registerJsCallback(name: String, callback: (String) -> Unit) {
         jsCallbackMap[name] = callback
         val userContentController = getOrCreateWebView().configuration.userContentController
-        // 先移除同名旧 handler，避免 WKUserContentController 重复添加崩溃
+        // Remove an existing handler of the same name first; WKUserContentController crashes on duplicate registration
         userContentController.removeScriptMessageHandlerForName(name)
         val handler = object : NSObject(), platform.WebKit.WKScriptMessageHandlerProtocol {
             override fun userContentController(
@@ -357,18 +366,20 @@ class IosWebView(
         }
         jsCallbackHandlerMap[name] = handler
         userContentController.addScriptMessageHandler(handler, name)
+        installDocumentStartScripts(userContentController)
         injectJsCallbackFunction(name)
     }
 
-    private fun injectJsCallbackFunction(name: String) {
-        val js = """
+    private fun callbackFunctionSource(name: String): String = """
             window.$name = function(msg) {
                 window.webkit.messageHandlers.$name.postMessage(
                     typeof msg === 'string' ? msg : JSON.stringify(msg)
                 );
             };
-        """.trimIndent()
-        evaluateJavascript(js, null)
+    """.trimIndent()
+
+    private fun injectJsCallbackFunction(name: String) {
+        evaluateJavascript(callbackFunctionSource(name), null)
     }
 
     override fun unregisterJsCallback(name: String) {
@@ -376,11 +387,13 @@ class IosWebView(
         jsCallbackHandlerMap.remove(name)
         val userContentController = webView?.configuration?.userContentController
         userContentController?.removeScriptMessageHandlerForName(name)
+        installDocumentStartScripts(userContentController ?: return)
         evaluateJavascript("delete window.$name;", null)
     }
 
     /**
-     * iOS 实现：使用 callback-id 机制把 Promise 返回值通过 evaluateJavaScript 传回 JS。
+     * iOS implementation: a callback-id mechanism delivers the Promise result back to JS
+     * via evaluateJavaScript.
      */
     override fun registerJsHandler(name: String, handler: (String) -> String) {
         jsHandlerMap[name] = handler
@@ -413,11 +426,11 @@ class IosWebView(
         }
         jsHandlerHandlerMap[name] = messageHandler
         userContentController.addScriptMessageHandler(messageHandler, name)
+        installDocumentStartScripts(userContentController)
         injectJsHandlerFunction(name)
     }
 
-    private fun injectJsHandlerFunction(name: String) {
-        val js = """
+    private fun handlerFunctionSource(name: String): String = """
             window.__kb_handler_cb = window.__kb_handler_cb || {};
             window.__kb_handler_cb_id = window.__kb_handler_cb_id || 0;
             window.$name = function(arg) {
@@ -430,8 +443,10 @@ class IosWebView(
                     }));
                 });
             };
-        """.trimIndent()
-        evaluateJavascript(js, null)
+    """.trimIndent()
+
+    private fun injectJsHandlerFunction(name: String) {
+        evaluateJavascript(handlerFunctionSource(name), null)
     }
 
     override fun unregisterJsHandler(name: String) {
@@ -439,12 +454,46 @@ class IosWebView(
         jsHandlerHandlerMap.remove(name)
         val userContentController = webView?.configuration?.userContentController
         userContentController?.removeScriptMessageHandlerForName(name)
+        installDocumentStartScripts(userContentController ?: return)
         evaluateJavascript("delete window.$name;", null)
     }
 
-    internal fun reinjectJsCallbacksAndHandlers() {
-        jsCallbackMap.keys.forEach { injectJsCallbackFunction(it) }
-        jsHandlerMap.keys.forEach { injectJsHandlerFunction(it) }
+    private val pageFinishedScriptSource = """
+        window.addEventListener('DOMContentLoaded', function() {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pageFinished) {
+                window.webkit.messageHandlers.pageFinished.postMessage(window.location.href);
+            }
+        });
+    """.trimIndent()
+
+    /**
+     * Rebuilds the document-start user scripts: the pageFinished listener plus all registered
+     * JS callbacks/handlers. WKUserScript is injected automatically at document start of every
+     * navigation (including reload, goBack, loadHTMLString), so early page scripts can call the
+     * bridge functions without waiting for a post-onPageFinished injection.
+     */
+    private fun installDocumentStartScripts(userContentController: platform.WebKit.WKUserContentController) {
+        userContentController.removeAllUserScripts()
+        userContentController.addUserScript(
+            WKUserScript(
+                source = pageFinishedScriptSource,
+                injectionTime = WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentEnd,
+                forMainFrameOnly = true
+            )
+        )
+        val bridgeSource = buildString {
+            jsCallbackMap.keys.forEach { append(callbackFunctionSource(it)).append('\n') }
+            jsHandlerMap.keys.forEach { append(handlerFunctionSource(it)).append('\n') }
+        }.trim()
+        if (bridgeSource.isNotEmpty()) {
+            userContentController.addUserScript(
+                WKUserScript(
+                    source = bridgeSource,
+                    injectionTime = WKUserScriptInjectionTime.WKUserScriptInjectionTimeAtDocumentStart,
+                    forMainFrameOnly = true
+                )
+            )
+        }
     }
 
     override fun clearCacheAndCookies() {
@@ -458,7 +507,6 @@ class IosWebView(
             dataTypes,
             modifiedSince = date
         ) {
-            // 完成回调
         }
     }
 
@@ -558,12 +606,11 @@ actual fun rememberKBWebView(
     return webView
 }
 
-internal actual fun createHeadlessWebView(
+internal actual fun createPageWebView(
     initialUrl: String?,
     profile: KBProfile?,
     viewportWidth: Int?,
-    viewportHeight: Int?,
-    headless: Boolean
+    viewportHeight: Int?
 ): KBWebView {
     return IosWebView(initialUrl, profile, viewportWidth, viewportHeight)
 }

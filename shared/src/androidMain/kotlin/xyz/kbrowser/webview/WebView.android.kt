@@ -1,14 +1,23 @@
 package xyz.kbrowser.webview
 
+import android.app.DownloadManager
 import android.content.Context
+import android.net.Uri
+import android.os.Bundle
+import android.os.Environment
+import android.os.Message
 import android.os.SystemClock
 import android.view.MotionEvent
+import android.webkit.URLUtil
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -51,6 +60,25 @@ class AndroidWebView(
             w = WebView(context)
             w.settings.javaScriptEnabled = true
             w.settings.domStorageEnabled = true
+            w.settings.setSupportMultipleWindows(true)
+            w.settings.javaScriptCanOpenWindowsAutomatically = true
+
+            w.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                try {
+                    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                        ?: return@setDownloadListener
+                    val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+                    val request = DownloadManager.Request(Uri.parse(url)).apply {
+                        setMimeType(mimeType)
+                        addRequestHeader("User-Agent", userAgent)
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                    }
+                    dm.enqueue(request)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
             
             if (profile != null && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
                 try {
@@ -77,6 +105,11 @@ class AndroidWebView(
                     canGoBack.value = view?.canGoBack() ?: false
                     canGoForward.value = view?.canGoForward() ?: false
                     url?.let { webViewClient?.onPageFinished(it) }
+                    if (view != null &&
+                        !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+                    ) {
+                        reinjectHandlerWrappers(view)
+                    }
                 }
 
                 @Suppress("DEPRECATION")
@@ -98,6 +131,32 @@ class AndroidWebView(
 
                 override fun onReceivedTitle(view: WebView?, title: String?) {
                     currentTitle.value = title
+                }
+
+                override fun onCreateWindow(
+                    view: WebView?,
+                    isUserGesture: Boolean,
+                    isDialog: Boolean,
+                    resultMsg: Message?
+                ): Boolean {
+                    val handler = onNewWindowRequest ?: return false
+                    val v = view ?: return false
+                    val msg = resultMsg ?: return false
+
+                    // onCreateWindow provides no target URL, so a temp WebView captures the
+                    // real navigation target from shouldOverrideUrlLoading
+                    val tempWebView = WebView(v.context)
+                    tempWebView.webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(v2: WebView, req: WebResourceRequest): Boolean {
+                            handler(req.url.toString())
+                            v2.stopLoading()
+                            v2.destroy()
+                            return true
+                        }
+                    }
+                    (msg.obj as? WebView.WebViewTransport)?.webView = tempWebView
+                    msg.sendToTarget()
+                    return true
                 }
 
                 override fun onJsAlert(view: WebView?, url: String?, message: String?, result: android.webkit.JsResult?): Boolean {
@@ -218,11 +277,53 @@ class AndroidWebView(
     }
 
     /**
-     * Android 实现：通过 JavascriptInterface + evaluateJavascript 模拟 Promise。
-     * 注入一个 __kb_handler_[name] 的 JavascriptInterface，JS 端包装成 Promise。
-     * handler 在 JavascriptInterface 线程执行，结果通过 evaluateJavascript 传回 resolve。
+     * Android implementation: emulates Promise-based handlers via JavascriptInterface +
+     * evaluateJavascript. Injects a __kb_handler_[name] JavascriptInterface that JS wraps
+     * into a Promise; the handler runs on the JavascriptInterface thread and its result is
+     * passed back through evaluateJavascript to resolve the Promise.
      */
     private val jsHandlerCallbacks = mutableMapOf<String, (String) -> String>()
+
+    private fun handlerWrapperSource(name: String, bridgeName: String): String = """
+            window.$name = function(arg) {
+                return new Promise(function(resolve, reject) {
+                    try {
+                        var result = window.$bridgeName.call('', typeof arg === 'string' ? arg : JSON.stringify(arg));
+                        if (result && result.indexOf('__KB_ERROR__:') === 0) {
+                            reject(new Error(result.substring(13)));
+                        } else {
+                            resolve(result);
+                        }
+                    } catch(e) {
+                        reject(e);
+                    }
+                });
+            };
+    """.trimIndent()
+
+    private fun buildHandlerWrappersScript(): String = jsHandlerCallbacks.keys
+        .joinToString("\n") { handlerWrapperSource(it, "__kb_handler_$it") }
+
+    /**
+     * Injects Promise wrappers for all registered handlers as a document-start script so early
+     * page scripts can call them; re-applies automatically after each navigation. When
+     * DOCUMENT_START_SCRIPT is unsupported, falls back to re-injection in onPageFinished.
+     */
+    private fun applyDocumentStartScript(w: WebView) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        try {
+            WebViewCompat.addDocumentStartJavaScript(w, buildHandlerWrappersScript(), setOf("*"))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun reinjectHandlerWrappers(w: WebView) {
+        val script = buildHandlerWrappersScript()
+        if (script.isNotEmpty()) {
+            w.evaluateJavascript(script, null)
+        }
+    }
 
     override fun registerJsHandler(name: String, handler: (String) -> String) {
         val w = getOrCreateWebView(AndroidContextHolder.context)
@@ -238,30 +339,17 @@ class AndroidWebView(
                 }
             }
         }, bridgeName)
-        // 注入 Promise 包装
-        val script = """
-            window.$name = function(arg) {
-                return new Promise(function(resolve, reject) {
-                    try {
-                        var result = window.$bridgeName.call('', typeof arg === 'string' ? arg : JSON.stringify(arg));
-                        if (result && result.indexOf('__KB_ERROR__:') === 0) {
-                            reject(new Error(result.substring(13)));
-                        } else {
-                            resolve(result);
-                        }
-                    } catch(e) {
-                        reject(e);
-                    }
-                });
-            };
-        """.trimIndent()
-        w.evaluateJavascript(script, null)
+        applyDocumentStartScript(w)
+        w.evaluateJavascript(handlerWrapperSource(name, bridgeName), null)
     }
 
     override fun unregisterJsHandler(name: String) {
         jsHandlerCallbacks.remove(name)
         webView?.removeJavascriptInterface("__kb_handler_$name")
-        webView?.evaluateJavascript("delete window.$name;", null)
+        webView?.let {
+            applyDocumentStartScript(it)
+            it.evaluateJavascript("delete window.$name;", null)
+        }
     }
 
     override fun clearCacheAndCookies() {
@@ -288,6 +376,34 @@ class AndroidWebView(
     override fun destroy() {
         webView?.destroy()
         webView = null
+    }
+
+    /**
+     * Captures the native back/forward stack for restoration after process death
+     * (WebView.saveState has only persisted the navigation stack since API 28, not page
+     * content or scroll position). Returns null when there is nothing to save.
+     */
+    internal fun captureNavState(): Bundle? {
+        val w = webView ?: return null
+        return try {
+            val out = Bundle()
+            @Suppress("DEPRECATION")
+            val saved = w.saveState(out)
+            if (saved != null && !out.isEmpty) out else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Restores the navigation stack without triggering a reload; returns false on failure so callers can fall back to loadUrl. */
+    internal fun restoreNavState(bundle: Bundle): Boolean {
+        val w = webView ?: return false
+        return try {
+            @Suppress("DEPRECATION")
+            w.restoreState(bundle) != null
+        } catch (e: Exception) {
+            false
+        }
     }
 
     override suspend fun takeScreenshot(): KBScreenshot? {
@@ -365,7 +481,36 @@ actual fun rememberKBWebView(
     profile: KBProfile?
 ): KBWebView {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val webView = remember(initialUrl, profile) {
+    val appContext = context.applicationContext
+    val webView = rememberSaveable(
+        inputs = arrayOf(initialUrl, profile),
+        saver = listSaver<AndroidWebView, Any?>(
+            save = { wb ->
+                listOf<Any?>(
+                    wb.currentUrl.value,
+                    wb.profile?.profileId,
+                    wb.captureNavState()
+                )
+            },
+            restore = { saved ->
+                val lastUrl = saved[0] as? String
+                val profileId = saved[1] as? String
+                val navBundle = saved[2] as? Bundle
+                AndroidWebView(
+                    initialUrl = null,
+                    profile = profileId?.let { KBProfile(it, "") }
+                ).apply {
+                    getOrCreateWebView(appContext)
+                    if (navBundle == null || !restoreNavState(navBundle)) {
+                        // Restore failed (e.g. bundle invalidated by the system); reload the last URL instead
+                        if (!lastUrl.isNullOrBlank() && lastUrl != "about:blank") {
+                            loadUrl(lastUrl)
+                        }
+                    }
+                }
+            }
+        )
+    ) {
         AndroidWebView(initialUrl, profile, viewportWidth = null, viewportHeight = null).apply {
             getOrCreateWebView(context)
         }
@@ -378,12 +523,11 @@ actual fun rememberKBWebView(
     return webView
 }
 
-internal actual fun createHeadlessWebView(
+internal actual fun createPageWebView(
     initialUrl: String?,
     profile: KBProfile?,
     viewportWidth: Int?,
-    viewportHeight: Int?,
-    headless: Boolean
+    viewportHeight: Int?
 ): KBWebView {
     return AndroidWebView(initialUrl, profile, viewportWidth, viewportHeight)
 }
@@ -507,22 +651,18 @@ internal actual suspend fun performKeyCombination(
         val keyCode = keyToAndroidKeyCode(key)
         val modMetaState = keyToAndroidMetaState(modifier)
 
-        // Modifier DOWN
         val modDown = android.view.KeyEvent(downTime, downTime,
             android.view.KeyEvent.ACTION_DOWN, modKeyCode, modMetaState)
         w.dispatchKeyEvent(modDown)
 
-        // Key DOWN (with modifier meta state)
         val keyDown = android.view.KeyEvent(downTime, downTime + 10,
             android.view.KeyEvent.ACTION_DOWN, keyCode, modMetaState)
         w.dispatchKeyEvent(keyDown)
 
-        // Key UP (with modifier meta state)
         val keyUp = android.view.KeyEvent(downTime, downTime + 60,
             android.view.KeyEvent.ACTION_UP, keyCode, modMetaState)
         w.dispatchKeyEvent(keyUp)
 
-        // Modifier UP
         val modUp = android.view.KeyEvent(downTime, downTime + 70,
             android.view.KeyEvent.ACTION_UP, modKeyCode, 0)
         w.dispatchKeyEvent(modUp)
@@ -540,12 +680,10 @@ internal actual suspend fun performTypeChar(
 
         val metaState = if (char.isUpperCase()) android.view.KeyEvent.META_SHIFT_ON else 0
 
-        // ACTION_DOWN
         val downEvent = android.view.KeyEvent(downTime, downTime,
             android.view.KeyEvent.ACTION_DOWN, keyCode, 0, metaState)
         w.dispatchKeyEvent(downEvent)
 
-        // ACTION_UP
         val upEvent = android.view.KeyEvent(downTime, downTime + 50,
             android.view.KeyEvent.ACTION_UP, keyCode, 0, metaState)
         w.dispatchKeyEvent(upEvent)

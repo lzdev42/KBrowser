@@ -8,21 +8,23 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.system.exitProcess
 
 /**
- * resize 跟手验证测试。
+ * Resize follow (responsiveness) verification test.
  *
- * 验证点：
- * 1. 连续多次 resizeViewport 不崩溃（OSR 100ms 节流 + ResizePusher 承压）
- * 2. resize 后页面 window.innerWidth/innerHeight 与请求尺寸一致（CEF 视口已同步）
- * 3. resize 后截图像素尺寸与请求尺寸（×devicePixelRatio）一致
+ * Checks:
+ * 1. Many consecutive resizeViewport calls don't crash (OSR 100ms throttle + ResizePusher under load)
+ * 2. After resize, window.innerWidth/innerHeight matches the requested size (CEF viewport synced)
+ * 3. After resize, the screenshot pixel size matches the requested size (x devicePixelRatio)
  *
- * 模拟拖拽场景：快速连续变更尺寸，中间不等 CEF 渲染完成。
+ * Simulates drag-resize: rapid consecutive size changes without waiting for CEF to finish rendering.
  */
 fun main() {
     System.setProperty("jcef.chrome.runtime.enabled", "false")
     println("====== Resize Follow Test ======")
 
+    var allPass = true
     runBlocking {
         val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
         KBrowser.initializeConfig(storageDir)
@@ -30,8 +32,8 @@ fun main() {
         println("[Test] CefApp 初始化完成")
         delay(3000)
 
-        val page = KBrowser.newHeadlessTab()
-        println("[Test] newHeadlessTab() 返回成功")
+        val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)
+        println("[Test] newPage() 返回成功")
 
         val jvmWebView = page.webView as? xyz.kbrowser.webview.JvmWebView
         if (jvmWebView == null) {
@@ -39,7 +41,7 @@ fun main() {
             return@runBlocking
         }
 
-        val htmlFile = File("desktopApp/src/test/resources/headless_viewport_test.html")
+        val htmlFile = File("desktopApp/src/test/resources/viewport_test.html")
         val url = htmlFile.toURI().toString()
         println("[Test] 加载测试页面: $url")
         page.loadUrl(url)
@@ -56,14 +58,14 @@ fun main() {
                 """.trimIndent()
             )
             println("[Test] viewport(js): $jsResult")
-            // headless 下 evaluateJavascript 可能返回 undefined（既有现象，与 resize 无关），
-            // 此时以截图尺寸为准。这里仅做参考读取。
+            // evaluateJavascript on a background page may return undefined (pre-existing
+            // behavior, unrelated to resize); the screenshot size is the source of truth,
+            // so this read is advisory only.
             val wRegex = """"w":(\d+)""".toRegex().find(jsResult)?.groupValues?.get(1)?.toIntOrNull()
             val hRegex = """"h":(\d+)""".toRegex().find(jsResult)?.groupValues?.get(1)?.toIntOrNull()
             return (wRegex ?: -1) to (hRegex ?: -1)
         }
 
-        var allPass = true
         val sizes = listOf(
             800 to 600,
             1024 to 768,
@@ -74,21 +76,20 @@ fun main() {
             1280 to 720
         )
 
-        // 第一阶段：快速连续 resize（模拟拖拽，不等渲染完成）
+        // Phase 1: rapid consecutive resizes (drag simulation, no waiting for render)
         println("[Test] === 阶段1: 快速连续 resize（模拟拖拽）===")
         for ((w, h) in sizes) {
             jvmWebView.resizeViewport(w, h)
-            delay(30) // 30ms 间隔，远小于 100ms 节流窗口
+            delay(30) // 30ms interval, well below the 100ms throttle window
         }
 
-        // 等待节流 + ResizePusher 收敛
         println("[Test] 等待 resize 收敛（2.5s）...")
         delay(2500)
 
         val lastReq = sizes.last()
         val (realW, realH) = readViewport()
         if (realW == -1 || realH == -1) {
-            println("[Test] ⚠️ JS viewport 读取失败（headless 既有现象），以阶段3截图为准")
+            println("[Test] ⚠️ JS viewport 读取失败（后台 page 既有现象），以阶段3截图为准")
         } else if (realW == lastReq.first && realH == lastReq.second) {
             println("[Test] ✅ 快速 resize 后视口已收敛到 ${lastReq.first}×${lastReq.second}")
         } else {
@@ -96,11 +97,11 @@ fun main() {
             allPass = false
         }
 
-        // 第二阶段：逐个 resize 并验证（每个等待渲染完成）
+        // Phase 2: resize one at a time and verify (waiting for render after each)
         println("[Test] === 阶段2: 逐个 resize 验证 ===")
         for ((w, h) in listOf(900 to 500, 1100 to 700)) {
             jvmWebView.resizeViewport(w, h)
-            delay(800) // 等 ResizePusher(20ms) + 渲染
+            delay(800) // wait for ResizePusher (20ms) + render
             val (rw, rh) = readViewport()
             if (rw == -1 || rh == -1) {
                 println("[Test] ⚠️ resize $w×$h 后 JS 读取失败，跳过精确比对")
@@ -112,12 +113,13 @@ fun main() {
             }
         }
 
-        // 第三阶段：多种尺寸截图验证（截图是真实渲染结果，最可靠）
+        // Phase 3: multi-size screenshot verification (screenshots are the real render result,
+        // so they are the most reliable check)
         println("[Test] === 阶段3: 多尺寸截图验证 ===")
         val screenshotSizes = listOf(800 to 600, 1024 to 768, 640 to 480, 1280 to 720)
         for ((w, h) in screenshotSizes) {
             jvmWebView.resizeViewport(w, h)
-            delay(1200) // 等 ResizePusher 收敛 + 渲染
+            delay(1200) // wait for ResizePusher to settle + render
             val pngBytes = page.webView.takeScreenshot()?.imageData
             if (pngBytes == null) {
                 println("[Test] ❌ resize $w×$h 截图失败")
@@ -129,7 +131,7 @@ fun main() {
             output.writeBytes(pngBytes)
             val image = javax.imageio.ImageIO.read(output)
             println("[Test] resize $w×$h → 截图 ${image.width}×${image.height}")
-            // OSR 截图像素 = CSS尺寸 × pixelDensity；至少应 >= CSS 尺寸
+            // OSR screenshot pixels = CSS size x pixelDensity; should be at least the CSS size
             if (image.width >= w && image.height >= h) {
                 println("[Test] ✅ resize $w×$h 截图尺寸合理")
             } else {
@@ -142,4 +144,5 @@ fun main() {
         KBrowser.shutdown()
         println("====== Test finished: ${if (allPass) "ALL PASS ✅" else "SOME FAILED ❌"} ======")
     }
+    if (!allPass) exitProcess(1)
 }

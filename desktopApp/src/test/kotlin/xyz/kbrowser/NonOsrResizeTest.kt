@@ -8,29 +8,30 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.system.exitProcess
 
 /**
- * 非 OSR（窗口）模式 resize 诊断测试。
+ * Non-OSR (windowed) mode resize diagnostic test.
  *
- * 验证点：
- * 1. 非 OSR 模式下连续 resize 不崩溃
- * 2. 重量级组件 uiComp 的 componentResized 是否被触发
- * 3. resize 后截图尺寸是否合理
+ * Checks:
+ * 1. Consecutive resizes in non-OSR mode don't crash
+ * 2. Whether the heavyweight uiComp's componentResized fires
+ * 3. Whether the screenshot size is reasonable after each resize
  */
 fun main() {
     System.setProperty("jcef.chrome.runtime.enabled", "false")
     println("====== Non-OSR Resize Diagnostic Test ======")
 
+    var allPass = true
     runBlocking {
         val storageDir = System.getProperty("user.home") + "/.browserpilot/jcef_cache"
-        // 关键：useOsr = false，走窗口模式
         KBrowser.initializeConfig(storageDir, useOsr = false)
         initializeKBrowser()
         println("[Test] CefApp 初始化完成（非 OSR 模式）")
         delay(3000)
 
-        val page = KBrowser.newHeadlessTab()
-        println("[Test] newHeadlessTab() 返回成功")
+        val page = KBrowser.newPage(viewportWidth = 1280, viewportHeight = 720)
+        println("[Test] newPage() 返回成功")
 
         val jvmWebView = page.webView as? xyz.kbrowser.webview.JvmWebView
         if (jvmWebView == null) {
@@ -38,16 +39,14 @@ fun main() {
             return@runBlocking
         }
 
-        val htmlFile = File("desktopApp/src/test/resources/headless_viewport_test.html")
+        val htmlFile = File("desktopApp/src/test/resources/viewport_test.html")
         val url = htmlFile.toURI().toString()
         println("[Test] 加载测试页面: $url")
         page.loadUrl(url)
         delay(2000)
 
-        // 多尺寸 resize 验证
         println("[Test] === 非 OSR 多尺寸 resize ===")
         val sizes = listOf(800 to 600, 1024 to 768, 640 to 480, 1280 to 720)
-        var allPass = true
         for ((w, h) in sizes) {
             jvmWebView.resizeViewport(w, h)
             delay(1000)
@@ -74,4 +73,5 @@ fun main() {
         KBrowser.shutdown()
         println("====== Test finished: ${if (allPass) "ALL PASS ✅" else "SOME FAILED ❌"} ======")
     }
+    if (!allPass) exitProcess(1)
 }

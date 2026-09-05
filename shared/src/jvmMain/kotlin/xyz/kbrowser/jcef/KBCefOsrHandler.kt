@@ -60,9 +60,9 @@ open class KBCefOsrHandler(
     private val RESIZE_PUSHER_TIMEOUT_MS: Long = 2000
 
     /**
-     * IME 光标监听器，用于将 CEF 的 OnImeCompositionRangeChanged/OnTextSelectionChanged
-     * 回调桥接到 [KBCefInputMethodAdapter]，使 OS 输入法能获取正确的光标位置。
-     * 参照 IntelliJ 的 JBCefCaretListener + JBCefInputMethodAdapter 架构。
+     * IME caret listener that bridges CEF's OnImeCompositionRangeChanged / OnTextSelectionChanged
+     * callbacks to [KBCefInputMethodAdapter] so the OS input method gets correct caret bounds.
+     * Modeled after IntelliJ's JBCefCaretListener + JBCefInputMethodAdapter.
      */
     @Volatile
     private var myCaretListener: KBCefInputMethodAdapter? = null
@@ -183,8 +183,8 @@ open class KBCefOsrHandler(
     }
 
     /**
-     * 注册 IME 光标监听器，将 CEF 回调桥接到 [KBCefInputMethodAdapter]。
-     * 参照 IntelliJ 的 JBCefOsrHandler.addCaretListener()。
+     * Registers an IME caret listener that bridges CEF callbacks to [KBCefInputMethodAdapter].
+     * Modeled after IntelliJ's JBCefOsrHandler.addCaretListener().
      */
     fun addCaretListener(listener: KBCefInputMethodAdapter) {
         myCaretListener = listener
@@ -220,8 +220,8 @@ open class KBCefOsrHandler(
         frameSize ?: return
         var vi = myVolatileImage
 
-        // BufferedImage 是物理像素，VolatileImage 需要用逻辑像素尺寸创建，
-        // 这样 g.drawImage(vi, 0, 0, component.width, component.height, null) 在 HiDPI 下才正确。
+        // BufferedImages hold physical pixels; the VolatileImage must be created at logical size
+        // so drawing it at component size is correct under HiDPI scaling.
         val scale = if (pixelDensity > 0.0) pixelDensity else 1.0
         val logicalW = (frameSize.width / scale).toInt().coerceAtLeast(1)
         val logicalH = (frameSize.height / scale).toInt().coerceAtLeast(1)
@@ -235,12 +235,12 @@ open class KBCefOsrHandler(
                 drawVolatileImage(vi)
             }
 
-            when (vi!!.validate(g.deviceConfiguration)) {
+            when (vi.validate(g.deviceConfiguration)) {
                 VolatileImage.IMAGE_RESTORED -> drawVolatileImage(vi)
                 VolatileImage.IMAGE_INCOMPATIBLE -> vi = createVolatileImage(g, logicalW, logicalH)
             }
 
-            // drawImage 到组件尺寸：稳态时 1:1，resize 过渡期拉伸跟手
+            // Draw at component size: 1:1 in steady state, stretched to track resizes
             g.drawImage(vi, 0, 0, component.width, component.height, null)
         } while (vi.contentsLost())
 
@@ -264,7 +264,8 @@ open class KBCefOsrHandler(
             g.composite = AlphaComposite.Src
             g.clearRect(0, 0, vi.width, vi.height)
             if (image != null) {
-                // BufferedImage 是物理像素，缩放到 VolatileImage 的逻辑尺寸（由 Graphics DPI transform 处理设备像素映射）
+                // The BufferedImage holds physical pixels; scale to the VolatileImage's logical size
+                // (the Graphics DPI transform maps logical to device pixels)
                 g.drawImage(image, 0, 0, vi.width, vi.height, null)
             }
         } finally {
@@ -318,7 +319,8 @@ open class KBCefOsrHandler(
     }
 
     fun stopResizePusher() {
-        // CEF 渲染线程预检查：pusher 已停止时不排 invokeLater，避免稳态每帧无用 EDT 排队
+        // Runs on the CEF render thread: skip the invokeLater when the pusher is already
+        // stopped, avoiding a useless EDT dispatch on every frame in steady state.
         if (myResizePusherAlarm == null) return
         SwingUtilities.invokeLater {
             myResizePusherAlarm?.stop()

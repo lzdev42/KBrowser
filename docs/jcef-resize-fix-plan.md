@@ -226,8 +226,8 @@ if (!isOffScreenRendering) {
 
 - **HwFacadeHelper**：非 OSR 模式下重量级组件覆盖轻量级组件的 Z-order 问题。
   这是独立问题，影响范围大，需要单独规划。
-- **headless 模式 JFrame resize 联动**：当前 headless 模式使用固定尺寸 JFrame，
-  不涉及拖拽场景。
+- **后台 page 的 resize 联动**：后台 page（`newPage(viewportWidth, viewportHeight)`）没有窗口拖拽场景，
+  通过 `JvmWebView.resizeViewport()` 程序化变更尺寸，由 `KBCefOsrComponent.reshape()` 的节流逻辑兜底。
 
 ## 七、验证方法
 

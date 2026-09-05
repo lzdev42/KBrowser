@@ -7,7 +7,8 @@ interface Platform {
 expect fun getPlatform(): Platform
 
 /**
- * 跨平台时间戳（毫秒），用于替代 commonMain 中不可用的 java.time / kotlin.system
+ * Cross-platform timestamp in milliseconds, replacing java.time / kotlin.system, which are
+ * unavailable in commonMain.
  */
 expect fun currentTimeMillis(): Long
 

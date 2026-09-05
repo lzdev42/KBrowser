@@ -5,7 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 actual suspend fun initializeKBrowser() {
-    // 自动为宿主配置 Compose 混排所需的系统属性
+    // System properties required for Compose/AWT interop blending
     try {
         java.awt.Toolkit.getDefaultToolkit().setDynamicLayout(true)
     } catch (e: Exception) {

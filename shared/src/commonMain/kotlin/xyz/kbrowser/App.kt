@@ -160,7 +160,6 @@ fun DesktopApp() {
     }
 }
 
-// ==================== 1. 首页 (HomeScreen) ====================
 @Composable
 fun HomeScreen(
     onNavigateToBrowser: () -> Unit,
@@ -173,7 +172,6 @@ fun HomeScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // 大标题与副标题
         Text(
             text = "KBrowser 核心引擎演示系统",
             fontSize = 32.sp,
@@ -191,14 +189,12 @@ fun HomeScreen(
         
         Spacer(modifier = Modifier.height(48.dp))
 
-        // 磁贴卡片
         Row(
             modifier = Modifier
                 .fillMaxWidth(0.85f)
                 .height(280.dp),
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // 卡片 1：浏览器模式
             HomeTileCard(
                 modifier = Modifier.weight(1f),
                 title = "Browser 浏览器模式",
@@ -208,7 +204,6 @@ fun HomeScreen(
                 onClick = onNavigateToBrowser
             )
 
-            // 卡片 2：WebView API 实验室
             HomeTileCard(
                 modifier = Modifier.weight(1f),
                 title = "KBWebView 组件演示",
@@ -294,7 +289,6 @@ fun HomeTileCard(
     }
 }
 
-// ==================== 2. 浏览器示例页面 (BrowserExampleScreen) ====================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserExampleScreen(
@@ -306,7 +300,6 @@ fun BrowserExampleScreen(
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
-        // 导航顶部条
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -331,9 +324,8 @@ fun BrowserExampleScreen(
             )
         }
 
-        // 用 Box 包裹整个内容区，让悬浮卡片能提升到 SwingPanel 父级之外
-        // 这是 compose.interop.blending=true 下让 Compose 覆盖层正常响应事件的关键：
-        // 覆盖层不能是 SwingPanel 直接父级 Box 的子节点，否则事件会穿透到 Swing 层
+        // Extra Box wrapper so the floating Compose overlay below can sit outside the
+        // SwingPanel's parent (see the overlay note at the bottom of this screen).
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -343,13 +335,11 @@ fun BrowserExampleScreen(
             modifier = Modifier
                 .fillMaxSize()
         ) {
-            // 左侧：浏览器区域 (60%)
             Column(
                 modifier = Modifier
                     .weight(0.6f)
                     .fillMaxHeight()
             ) {
-                // 地址栏
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -377,7 +367,7 @@ fun BrowserExampleScreen(
                     }
                 }
 
-                // WebView 挂载区（纯 SwingPanel，不在此处叠加任何 Compose 视图）
+                // WebView mount point — keep this pure SwingPanel; no Compose views stacked here.
                 Box(modifier = Modifier.fillMaxSize()) {
                     val activePage = state.page
                     if (activePage != null) {
@@ -396,7 +386,6 @@ fun BrowserExampleScreen(
                 }
             }
 
-            // 右侧：控制调试面板 (40%)
             Column(
                 modifier = Modifier
                     .weight(0.4f)
@@ -412,9 +401,6 @@ fun BrowserExampleScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                // OSR Checkbox has been removed; rendering is decided by engine natively
-
-                // 终端日志
                 Column(
                     modifier = Modifier
                         .weight(0.4f)
@@ -450,7 +436,6 @@ fun BrowserExampleScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Tab Row
                 PrimaryTabRow(selectedTabIndex = state.selectedTab, containerColor = Color(0xFF16161A), contentColor = MaterialTheme.colorScheme.primary, modifier = Modifier.fillMaxWidth()) {
                     Tab(selected = state.selectedTab == 0, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(0)) }, text = { Text("控制", fontSize = 12.sp) })
                     Tab(selected = state.selectedTab == 1, onClick = { viewModel.dispatch(BrowserIntent.ChangeTab(1)) }, text = { Text("Aria", fontSize = 12.sp) })
@@ -460,7 +445,6 @@ fun BrowserExampleScreen(
                 }
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Tab 内容
                 Box(modifier = Modifier.weight(0.6f).fillMaxWidth()) {
                     when (state.selectedTab) {
                         0 -> {
@@ -482,7 +466,6 @@ fun BrowserExampleScreen(
                                 ) {
                                     Text("测试网页截图", color = Color.White, fontWeight = FontWeight.Bold)
                                 }
-                                // AXTree 画框调试工具
                                 Text("AXTree 画框调试", color = Color(0xFF888894), fontSize = 11.sp)
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Button(
@@ -513,7 +496,6 @@ fun BrowserExampleScreen(
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text("KBLocator 自动化定位测试", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                     
-                                    // 1. 选择器类型单选 (2 rows of 5 and 4)
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                         listOf(
                                             listOf("CSS", "XPath", "Text", "Role", "Label"),
@@ -547,7 +529,6 @@ fun BrowserExampleScreen(
                                         }
                                     }
 
-                                    // 2. 选择器表达式输入
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
@@ -595,7 +576,6 @@ fun BrowserExampleScreen(
                                         }
                                     }
 
-                                    // 3. 填充值输入框（针对 Fill, Type 等操作）
                                     OutlinedTextField(
                                         value = state.locatorValue,
                                         onValueChange = { viewModel.dispatch(BrowserIntent.ChangeLocatorValue(it)) },
@@ -609,7 +589,6 @@ fun BrowserExampleScreen(
                                         textStyle = LocalTextStyle.current.copy(fontSize = 11.sp)
                                     )
 
-                                    // 4. 按钮交互矩阵
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -856,7 +835,6 @@ fun BrowserExampleScreen(
                                     }
                                 }
                                 HorizontalDivider(color = Color(0xFF23232A))
-                                // 物理键盘模拟
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text("物理键盘模拟", color = Color(0xFF888894), fontSize = 12.sp)
                                     Row(
@@ -928,7 +906,6 @@ fun BrowserExampleScreen(
                                     }
                                 }
                                 HorizontalDivider(color = Color(0xFF23232A))
-                                // 会话管理
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text("会话管理", color = Color(0xFF888894), fontSize = 12.sp)
                                     Button(
@@ -967,12 +944,11 @@ fun BrowserExampleScreen(
                     }
                 }
             }
-        } // end Row
+        }
 
-        // ── Compose 混合渲染实验：悬浮卡片 ──────────────────────────────────────
-        // 关键：放在 Row（含 SwingPanel）的同级 Box 里，而不是 SwingPanel 的直接父级 Box 里。
-        // compose.interop.blending=true 下，事件穿透只发生在 SwingPanel 直接父级的 Box 内；
-        // 提升到这一层后，Compose 覆盖层可以正常接收鼠标/点击事件。
+        // Compose overlay over the Swing-rendered browser. With compose.interop.blending=true,
+        // event pass-through only happens inside the SwingPanel's direct parent Box, so this
+        // overlay must stay a sibling of that Row (not nested inside it) to receive clicks.
         if (state.page != null) {
             Box(
                 modifier = Modifier
@@ -1016,7 +992,7 @@ fun BrowserExampleScreen(
                 }
             }
         }
-        } // end outer Box
+        }
     }
 }
 
@@ -1135,7 +1111,6 @@ fun ScreenshotPreview(bytes: ByteArray?, axTree: xyz.kbrowser.webview.AxTreeData
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             ) {
-                // 工具栏
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1159,7 +1134,6 @@ fun ScreenshotPreview(bytes: ByteArray?, axTree: xyz.kbrowser.webview.AxTreeData
                     }
                 }
 
-                // 截图 + 叠加框
                 Box(modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF2E2E36))) {
                     androidx.compose.foundation.Image(
                         bitmap = bitmap,
@@ -1198,7 +1172,6 @@ fun ScreenshotPreview(bytes: ByteArray?, axTree: xyz.kbrowser.webview.AxTreeData
                     }
                 }
 
-                // 图例
                 if (showOverlay) {
                     Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         listOf(
