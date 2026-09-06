@@ -55,6 +55,8 @@ fun registerKBrowserTest(name: String, mainClass: String) {
 registerKBrowserTest("runFileUploadTest", "xyz.kbrowser.FileUploadTestKt")
 registerKBrowserTest("runTimingLoadTest", "xyz.kbrowser.TimingLoadTestKt")
 registerKBrowserTest("runNonOsrLoadHtmlTest", "xyz.kbrowser.NonOsrLoadHtmlTestKt")
+registerKBrowserTest("runNonOsrUiLoadTest", "xyz.kbrowser.NonOsrUiLoadTestKt")
+registerKBrowserTest("runDiagNonOsr", "xyz.kbrowser.DiagNonOsrKt")
 registerKBrowserTest("runResizeFollowTest", "xyz.kbrowser.ResizeFollowTestKt")
 registerKBrowserTest("runNonOsrResizeTest", "xyz.kbrowser.NonOsrResizeTestKt")
 registerKBrowserTest("runKBDebugTest", "xyz.kbrowser.KBDebugTestKt")

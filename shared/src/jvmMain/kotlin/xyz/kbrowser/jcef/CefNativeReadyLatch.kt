@@ -10,11 +10,14 @@ import java.util.concurrent.TimeUnit
 /**
  * Per-[CefBrowser] cache of native-peer readiness probe results.
  *
- * In Remote mode the native peer is created asynchronously inside the cef_server process and
- * can only be observed by reflectively polling isNativeBrowserCreated(). Previously loadUrl
- * waits, CDP dialog attachment, AX fetching, and Debug init each duplicated their own polling
- * implementation and spun threads polling the same browser. This latch caches the probe
- * outcome: the first caller triggers one background probe, the rest simply await its result.
+ * In Remote mode (OSR) the native peer is created asynchronously inside the cef_server process
+ * and can only be observed by reflectively polling isNativeBrowserCreated(). In local mode
+ * (non-OSR) that method does not exist; instead getDevToolsClient() returns null until the
+ * native browser exists (it gates on the internal isPending_ flag set by notifyBrowserCreated()),
+ * and polling it avoids issuing loadUrl/loadHtml before creation, where JCEF silently drops them.
+ *
+ * This latch caches the probe outcome: the first caller triggers one background probe, the
+ * rest simply await its result.
  */
 internal object CefNativeReadyLatch {
 
@@ -41,24 +44,33 @@ internal object CefNativeReadyLatch {
 
     /**
      * Return semantics:
-     * true  — native peer is ready, or optimistically allowed when it cannot be probed
-     *         (non-Remote mode has no such method, which is the normal case);
-     * false — probing is available but timed out; the caller decides how to degrade.
+     * true  — native browser is ready, or optimistically allowed when no creation
+     *         signal can be probed at all;
+     * false — a signal exists but timed out; the caller decides how to degrade.
      */
     private fun probe(browser: CefBrowser): Boolean {
-        val method = try {
-            browser.javaClass.getMethod("isNativeBrowserCreated").also { it.isAccessible = true }
-        } catch (e: NoSuchMethodException) {
-            return true
-        } catch (e: Exception) {
-            return true
+        // Remote mode (OSR): public JBR method reporting native-peer creation.
+        val createdMethod = try {
+            browser.javaClass.getMethod("isNativeBrowserCreated").apply { isAccessible = true }
+        } catch (_: Exception) {
+            null
         }
+
         val deadline = System.currentTimeMillis() + 15_000
         while (System.currentTimeMillis() < deadline) {
-            val ready = try {
-                method.invoke(browser) as? Boolean ?: return true
-            } catch (e: Exception) {
-                return true
+            val ready = if (createdMethod != null) {
+                try {
+                    createdMethod.invoke(browser) as? Boolean ?: true
+                } catch (_: Exception) {
+                    true
+                }
+            } else {
+                // Local mode (non-OSR): non-null only after the native browser exists.
+                try {
+                    browser.devToolsClient != null
+                } catch (_: Exception) {
+                    true
+                }
             }
             if (ready) return true
             try {
