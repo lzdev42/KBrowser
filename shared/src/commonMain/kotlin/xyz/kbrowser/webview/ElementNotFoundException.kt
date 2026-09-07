@@ -1,3 +1,4 @@
 package xyz.kbrowser.webview
 
-class ElementNotFoundException(refid: String) : Exception("Element with refid '$refid' not found in AxTree Map.")
+class ElementNotFoundException(val refid: String) :
+    Exception("refid '$refid' not found — the node cache is empty or stale. Call snapshot() first and use refids from its result.")

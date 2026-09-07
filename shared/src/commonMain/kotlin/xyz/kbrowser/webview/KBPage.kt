@@ -88,6 +88,146 @@ class KBPage(val webView: KBWebView) {
         }
     }
 
+    /**
+     * Reloads the current page and suspends until it has finished loading.
+     *
+     * @throws Exception when the reload fails
+     */
+    suspend fun reload() {
+        withContext(Dispatchers.Main) {
+            suspendCancellableCoroutine<Unit> { continuation ->
+                val client = object : KBWebViewClient {
+                    override fun onPageStarted(url: String) {}
+                    override fun onPageFinished(url: String) {
+                        webView.setWebViewClient(null)
+                        if (continuation.isActive) continuation.resume(Unit)
+                    }
+                    override fun onReceivedError(error: Diagnostics) {
+                        webView.setWebViewClient(null)
+                        if (continuation.isActive) {
+                            continuation.resumeWith(Result.failure(Exception("Reload failed: ${error.description} (Code: ${error.errorCode})")))
+                        }
+                    }
+                }
+
+                continuation.invokeOnCancellation { webView.setWebViewClient(null) }
+                webView.setWebViewClient(client)
+                webView.reload()
+            }
+        }
+    }
+
+    /**
+     * Scrolls the element with [refid] into the viewport (centered vertically),
+     * using the DOM scrollIntoView API.
+     *
+     * Requires a prior [snapshot] to populate the node cache. Returns an
+     * [OperationResult] whose detail carries the post-scroll bounding rect
+     * (CSS viewport pixels), so the caller can verify visibility without a
+     * new snapshot.
+     *
+     * @throws ElementNotFoundException if [refid] is not in the cache
+     */
+    suspend fun scrollIntoView(refid: String): OperationResult {
+        val node = nodeCache[refid] ?: throw ElementNotFoundException(refid)
+        val escaped = node.selector.replace("\\", "\\\\").replace("'", "\\'")
+        val js = """
+            (function(){
+                var e = document.querySelector('$escaped');
+                if (!e) return JSON.stringify({ok:false});
+                e.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
+                var r = e.getBoundingClientRect();
+                return JSON.stringify({ok:true, top:Math.round(r.top), left:Math.round(r.left),
+                    width:Math.round(r.width), height:Math.round(r.height),
+                    vw:window.innerWidth, vh:window.innerHeight});
+            })()
+        """.trimIndent()
+        val result = evaluateJavascript(js).trim()
+        return try {
+            val obj = kotlinx.serialization.json.Json.parseToJsonElement(result) as kotlinx.serialization.json.JsonObject
+            val ok = (obj["ok"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toBoolean() ?: false
+            fun int(key: String) = (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0
+            when {
+                !ok -> OperationResult.Failure("scroll_into_view", "element not found by selector")
+                int("top") < int("vh") && int("top") + int("height") > 0 &&
+                    int("left") < int("vw") && int("left") + int("width") > 0 ->
+                    OperationResult.Success(
+                        "scroll_into_view",
+                        detail = "rect top=${int("top")} left=${int("left")} ${int("width")}x${int("height")} (viewport ${int("vw")}x${int("vh")})"
+                    )
+                else -> OperationResult.Failure(
+                    "scroll_into_view",
+                    "still out of viewport after scroll (top=${int("top")}, vh=${int("vh")})"
+                )
+            }
+        } catch (e: Exception) {
+            OperationResult.Success("scroll_into_view", verified = false, detail = "scroll sent (verification failed: ${e.message})")
+        }
+    }
+
+    /**
+     * Waits for a condition, suspend-style. Throws [IllegalStateException] on timeout.
+     *
+     * - [text]       : wait until page body contains this text
+     * - [textGone]   : wait until page body no longer contains this text
+     * - [urlPattern] : wait until current URL contains this fragment
+     *
+     * At least one condition must be provided; conditions are AND-combined.
+     * [timeoutMs] is capped at 60s; polls every 200ms.
+     */
+    suspend fun waitFor(
+        text: String? = null,
+        textGone: String? = null,
+        urlPattern: String? = null,
+        timeoutMs: Long = 10_000
+    ) {
+        require(text != null || textGone != null || urlPattern != null) {
+            "waitFor: provide at least one of text / textGone / urlPattern"
+        }
+        val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(100, 60_000)
+        val esc = { s: String -> s.replace("\\", "\\\\").replace("'", "\\'") }
+        while (true) {
+            val bodyOk = when {
+                text != null -> evaluateJavascript(
+                    "(function(){var b=document.body;return b&&b.innerText.indexOf('${esc(text)}')>=0})()"
+                ).trim() == "true"
+                else -> true
+            }
+            val goneOk = textGone == null || evaluateJavascript(
+                "(function(){var b=document.body;return !(b&&b.innerText.indexOf('${esc(textGone)}')>=0)})()"
+            ).trim() == "true"
+            val urlOk = urlPattern == null || (webView.currentUrl.value ?: "").contains(urlPattern)
+            if (bodyOk && goneOk && urlOk) return
+            if (System.currentTimeMillis() >= deadline) {
+                throw IllegalStateException("waitFor timeout after ${timeoutMs}ms (text=$text, textGone=$textGone, urlPattern=$urlPattern)")
+            }
+            delay(200)
+        }
+    }
+
+    /**
+     * Goes back in history and suspends until the previous page has finished loading.
+     *
+     * @throws IllegalStateException when there is no previous page in history,
+     *         or the page did not finish loading within [timeoutMs]
+     */
+    suspend fun goBack(timeoutMs: Long = 15_000) {
+        if (webView.canGoBack.value != true) throw IllegalStateException("no previous page in history")
+        val timeout = timeoutMs.coerceIn(1000, 60_000)
+        val deadline = System.currentTimeMillis() + timeout
+        val urlBefore = webView.currentUrl.value
+        var sawActivity = false
+        withContext(Dispatchers.Main) { webView.goBack() }
+        while (System.currentTimeMillis() < deadline) {
+            val state = webView.loadingState.value
+            if (state is LoadingState.Loading) sawActivity = true
+            if (webView.currentUrl.value != urlBefore) sawActivity = true
+            if (sawActivity && state is LoadingState.Finished) return
+            delay(200)
+        }
+        throw IllegalStateException("goBack: page did not finish loading within ${timeout}ms")
+    }
+
     suspend fun evaluateJavascript(script: String): String {
         return withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { continuation ->

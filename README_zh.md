@@ -208,6 +208,10 @@ fun main() = ComposeViewport {
 - [数据结构](docs/KBrowser_API_Reference_zh.md#6-数据结构) — `AxNode`、`AxTreeData`、`SnapshotResult` 等
 - [调试 API](docs/KBrowser_API_Reference_zh.md#9-调试-apikbdebug) — `KBDebug` 查询式 CDP 诊断
 
+### AI Agent 工具层
+
+给 AI agent 用？不用把几十个 API 暴露给模型——[`BrowserTools`](docs/AI_Tools.md) 把自动化能力收敛为 **7 个工具**（navigate / snapshot / act / observe / tabs / eval），refid 句柄 + 遮挡自动降级 + 错误即数据。宿主内嵌注册（`listSpecs()` + `call()`），详见 [AI_Tools.md](docs/AI_Tools.md)。demo 里另带一个 MCP stdio 模式，但它是**调试后门**（用 AI 助手调试 KBrowser 本身用的），不是库功能。
+
 ---
 
 ## 平台状态

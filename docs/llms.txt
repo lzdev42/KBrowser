@@ -1,0 +1,18 @@
+# KBrowser
+
+> Playwright 风格的 Compose Multiplatform 浏览器自动化库，基于 Chrome DevTools Protocol (CDP)。显示网页用 `KBWebView`，自动化操作用 `KBPage`。内置面向 LLM agent 的工具层 `BrowserTools`（7 个工具），可内嵌宿主注册，也可通过 MCP stdio 供外部 AI 客户端使用。
+
+KBrowser 是 Kotlin Multiplatform 库（Android/iOS/Desktop JVM/WasmJS），Desktop (JVM) 基于 JCEF，提供 AXTree 语义树提取、CSP 安全元素定位、防检测物理点击（CDP 输入管线 + 拟人延迟）、截图捕获、操作结果验证（遮挡检测、值回读、滚动对比）、协程级线程安全，以及专为 AI/MCP toolcall 设计的 CDP 调试观测层 KBDebug。
+
+## 文档
+
+- [API Reference（中文）](KBrowser_API_Reference_zh.md)：KBWebView UI 层、KBPage 自动化层、KBLocator、KBDebug 调试 API、数据结构
+- [API Reference (English)](KBrowser_API_Reference.md)
+- [AI Tools — Agent 工具层参考](AI_Tools.md)：7 个 agent 工具（navigate/snapshot/act/observe/tabs/eval）的参数表、返回约定、错误即数据设计、刻意不暴露的能力、宿主内嵌方式；附带的 demo MCP transport 仅是调试后门，非库功能
+- [Architecture Design（中文）](KBrowser_Architecture_Design_zh.md)：分层设计、线程模型、节点缓存
+- [Selector Guide](KBrowser_Selector_Guide.md)：CSS/XPath/role/text 选择器
+
+## 可选
+
+- [README（中文）](../README_zh.md)：快速开始、初始化模式（OSR/非 OSR）、Demo 说明
+- [README (English)](../README.md)

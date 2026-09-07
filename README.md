@@ -208,6 +208,10 @@ Full API documentation: [docs/KBrowser_API_Reference.md](docs/KBrowser_API_Refer
 - [Data structures](docs/KBrowser_API_Reference.md#6-data-structures) — `AxNode`, `AxTreeData`, `SnapshotResult`, etc.
 - [Debug API](docs/KBrowser_API_Reference.md#9-debug-api-kbdebug) — `KBDebug` query-style CDP diagnostics
 
+### AI Agent Tool Layer
+
+Using KBrowser with AI agents? Don't expose dozens of APIs to the model — [`BrowserTools`](docs/AI_Tools.md) collapses the automation surface into **7 tools** (navigate / snapshot / act / observe / tabs / eval) with refid handles, automatic occlusion fallback, and errors-as-data. Embed it in your host (`listSpecs()` + `call()`) — see [AI_Tools.md](docs/AI_Tools.md). The demo also ships an MCP stdio mode, but it is a **debug backdoor** for developing KBrowser itself with an AI assistant, not a feature of the library.
+
 ---
 
 ## Platform Status

@@ -1203,8 +1203,7 @@ class JvmWebView(
     /**
      * Maps [KeyboardKey] to Windows Virtual Key Code (used by CDP Input.dispatchKeyEvent).
      */
-    private fun keyToWindowsKeyCode(key: KeyboardKey): Int = when (key) {
-        KeyboardKey.ENTER -> 13
+    private fun keyToWindowsKeyCode(key: KeyboardKey): Int = when (key) {        KeyboardKey.ENTER -> 13
         KeyboardKey.TAB -> 9
         KeyboardKey.ESCAPE -> 27
         KeyboardKey.BACKSPACE -> 8
@@ -1256,19 +1255,31 @@ class JvmWebView(
 
     /**
      * Presses a single key using CDP Input.dispatchKeyEvent.
+     *
+     * Sends the full three-phase sequence Chromium expects:
+     * rawKeyDown → char → keyUp. Omitting the `char` phase makes form-submitting
+     * keys (Enter) inert — the browser never sees a complete keypress, so
+     * implicit form submission does not fire.
      */
     fun pressKey(key: KeyboardKey) {
         if (isDestroyed.get()) return
         val keyCode = keyToWindowsKeyCode(key)
+        val text = keyToKeyText(key)
         val devTools = cefBrowser.devToolsClient ?: return
 
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
-            "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode}"
+            "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode,\"code\":\"${keyToCode(key)}\"}"
         )
+        if (text != null) {
+            devTools.executeDevToolsMethod(
+                "Input.dispatchKeyEvent",
+                "{\"type\":\"char\",\"windowsVirtualKeyCode\":$keyCode,\"code\":\"${keyToCode(key)}\",\"text\":\"$text\",\"unmodifiedText\":\"$text\",\"key\":\"${keyToKeyName(key)}\"}"
+            )
+        }
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
-            "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode}"
+            "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode,\"code\":\"${keyToCode(key)}\",\"key\":\"${keyToKeyName(key)}\"}"
         )
     }
 
@@ -1279,16 +1290,92 @@ class JvmWebView(
         if (isDestroyed.get()) return
         val keyCode = keyToWindowsKeyCode(key)
         val modMask = keyToCdpModifierMask(modifier)
+        val text = keyToKeyText(key)
         val devTools = cefBrowser.devToolsClient ?: return
 
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
-            "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode,\"modifiers\":$modMask}"
+            "{\"type\":\"rawKeyDown\",\"windowsVirtualKeyCode\":$keyCode,\"code\":\"${keyToCode(key)}\",\"modifiers\":$modMask}"
         )
+        if (text != null && modifier == KeyboardKey.SHIFT) {
+            devTools.executeDevToolsMethod(
+                "Input.dispatchKeyEvent",
+                "{\"type\":\"char\",\"windowsVirtualKeyCode\":$keyCode,\"code\":\"${keyToCode(key)}\",\"modifiers\":$modMask,\"text\":\"$text\",\"unmodifiedText\":\"$text\",\"key\":\"${keyToKeyName(key)}\"}"
+            )
+        }
         devTools.executeDevToolsMethod(
             "Input.dispatchKeyEvent",
-            "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode,\"modifiers\":$modMask}"
+            "{\"type\":\"keyUp\",\"windowsVirtualKeyCode\":$keyCode,\"code\":\"${keyToCode(key)}\",\"modifiers\":$modMask,\"key\":\"${keyToKeyName(key)}\"}"
         )
+    }
+
+    /** Printable char the key produces (null for non-printable keys). */
+    private fun keyToKeyText(key: KeyboardKey): String? = when (key) {
+        KeyboardKey.ENTER -> "\\r"
+        KeyboardKey.SPACE -> " "
+        KeyboardKey.A -> "a"; KeyboardKey.C -> "c"; KeyboardKey.V -> "v"
+        KeyboardKey.X -> "x"; KeyboardKey.S -> "s"; KeyboardKey.Z -> "z"
+        else -> null
+    }
+
+    /** DOM KeyboardEvent.key name. */
+    private fun keyToKeyName(key: KeyboardKey): String = when (key) {
+        KeyboardKey.ENTER -> "Enter"
+        KeyboardKey.TAB -> "Tab"
+        KeyboardKey.ESCAPE -> "Escape"
+        KeyboardKey.BACKSPACE -> "Backspace"
+        KeyboardKey.DELETE -> "Delete"
+        KeyboardKey.ARROW_UP -> "ArrowUp"
+        KeyboardKey.ARROW_DOWN -> "ArrowDown"
+        KeyboardKey.ARROW_LEFT -> "ArrowLeft"
+        KeyboardKey.ARROW_RIGHT -> "ArrowRight"
+        KeyboardKey.SHIFT -> "Shift"
+        KeyboardKey.CONTROL -> "Control"
+        KeyboardKey.ALT -> "Alt"
+        KeyboardKey.META -> "Meta"
+        KeyboardKey.SPACE -> " "
+        KeyboardKey.HOME -> "Home"
+        KeyboardKey.END -> "End"
+        KeyboardKey.PAGE_UP -> "PageUp"
+        KeyboardKey.PAGE_DOWN -> "PageDown"
+        KeyboardKey.INSERT -> "Insert"
+        else -> key.name
+    }
+
+    /** DOM KeyboardEvent.code (physical key position). */
+    private fun keyToCode(key: KeyboardKey): String = when (key) {
+        KeyboardKey.ENTER -> "Enter"
+        KeyboardKey.TAB -> "Tab"
+        KeyboardKey.ESCAPE -> "Escape"
+        KeyboardKey.BACKSPACE -> "Backspace"
+        KeyboardKey.DELETE -> "Delete"
+        KeyboardKey.ARROW_UP -> "ArrowUp"
+        KeyboardKey.ARROW_DOWN -> "ArrowDown"
+        KeyboardKey.ARROW_LEFT -> "ArrowLeft"
+        KeyboardKey.ARROW_RIGHT -> "ArrowRight"
+        KeyboardKey.SHIFT -> "ShiftLeft"
+        KeyboardKey.CONTROL -> "ControlLeft"
+        KeyboardKey.ALT -> "AltLeft"
+        KeyboardKey.META -> "MetaLeft"
+        KeyboardKey.SPACE -> "Space"
+        KeyboardKey.HOME -> "Home"
+        KeyboardKey.END -> "End"
+        KeyboardKey.PAGE_UP -> "PageUp"
+        KeyboardKey.PAGE_DOWN -> "PageDown"
+        KeyboardKey.INSERT -> "Insert"
+        KeyboardKey.F1 -> "F1"
+        KeyboardKey.F2 -> "F2"
+        KeyboardKey.F3 -> "F3"
+        KeyboardKey.F4 -> "F4"
+        KeyboardKey.F5 -> "F5"
+        KeyboardKey.F6 -> "F6"
+        KeyboardKey.F7 -> "F7"
+        KeyboardKey.F8 -> "F8"
+        KeyboardKey.F9 -> "F9"
+        KeyboardKey.F10 -> "F10"
+        KeyboardKey.F11 -> "F11"
+        KeyboardKey.F12 -> "F12"
+        else -> "Key${key.name}"
     }
 
     /**
