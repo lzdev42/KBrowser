@@ -1,5 +1,6 @@
 package xyz.kbrowser.webview
 
+import xyz.kbrowser.currentTimeMillis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -184,7 +185,7 @@ class KBPage(val webView: KBWebView) {
         require(text != null || textGone != null || urlPattern != null) {
             "waitFor: provide at least one of text / textGone / urlPattern"
         }
-        val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(100, 60_000)
+        val deadline = currentTimeMillis() + timeoutMs.coerceIn(100, 60_000)
         val esc = { s: String -> s.replace("\\", "\\\\").replace("'", "\\'") }
         while (true) {
             val bodyOk = when {
@@ -198,7 +199,7 @@ class KBPage(val webView: KBWebView) {
             ).trim() == "true"
             val urlOk = urlPattern == null || (webView.currentUrl.value ?: "").contains(urlPattern)
             if (bodyOk && goneOk && urlOk) return
-            if (System.currentTimeMillis() >= deadline) {
+            if (currentTimeMillis() >= deadline) {
                 throw IllegalStateException("waitFor timeout after ${timeoutMs}ms (text=$text, textGone=$textGone, urlPattern=$urlPattern)")
             }
             delay(200)
@@ -214,11 +215,11 @@ class KBPage(val webView: KBWebView) {
     suspend fun goBack(timeoutMs: Long = 15_000) {
         if (webView.canGoBack.value != true) throw IllegalStateException("no previous page in history")
         val timeout = timeoutMs.coerceIn(1000, 60_000)
-        val deadline = System.currentTimeMillis() + timeout
+        val deadline = currentTimeMillis() + timeout
         val urlBefore = webView.currentUrl.value
         var sawActivity = false
         withContext(Dispatchers.Main) { webView.goBack() }
-        while (System.currentTimeMillis() < deadline) {
+        while (currentTimeMillis() < deadline) {
             val state = webView.loadingState.value
             if (state is LoadingState.Loading) sawActivity = true
             if (webView.currentUrl.value != urlBefore) sawActivity = true
