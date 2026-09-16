@@ -12,6 +12,10 @@ import java.awt.event.MouseEvent
 import java.awt.im.InputMethodRequests
 import javax.swing.JComponent
 import javax.swing.JPanel
+import kotlin.concurrent.Volatile
+import org.cef.browser.CefBrowser
+import org.cef.browser.CefFrame
+import org.cef.handler.CefLoadHandlerAdapter
 
 class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
 
@@ -27,6 +31,10 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
      * visually with the outer JPanel.
      */
     private val myComponent: KBMyPanel = KBMyPanel()
+
+    /** Last requested background color (ARGB), re-applied to each new document in non-OSR mode. */
+    @Volatile
+    private var myBackgroundColor: Color = Color.BLACK
 
     /** Finds the inner OSR component (only present in OSR mode). */
     private fun findOsrComponent(): KBCefOsrComponent? {
@@ -67,6 +75,16 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
                 uiComp.requestFocusInWindow()
             }
         })
+
+        if (!myIsOffScreenRendering) {
+            // Non-OSR: re-apply the page background on every main-frame load, since a new
+            // navigation resets the document and drops the injected inline style.
+            myCefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
+                override fun onLoadEnd(b: CefBrowser, f: CefFrame, httpStatusCode: Int) {
+                    if (f.isMain) applyPageBackgroundCss(myBackgroundColor)
+                }
+            }, myCefBrowser)
+        }
     }
 
     override fun getComponent(): JComponent = myComponent
@@ -76,9 +94,14 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
     }
 
     /**
-     * Sets the browser background color at both levels:
-     * - the outer Swing container myComponent (KBMyPanel.setBackground forwards it to uiComp)
-     * - the inner KBCefOsrComponent (the OSR render background)
+     * Sets the browser background color.
+     *
+     * Internal handling branches by rendering mode:
+     * - OSR: the outer container and the OSR render component paint the color, and CEF's
+     *   transparent painting (alpha=0 in the global CefSettings.background_color) lets it
+     *   show through the raster wherever the page paints nothing.
+     * - Non-OSR: the heavyweight native window ignores AWT backgrounds, so the color is
+     *   applied inside the page via CSS injection (re-applied on every main-frame load).
      *
      * Must be called on the EDT since it mutates Swing component state.
      */
@@ -87,8 +110,32 @@ class KBCefBrowser(builder: KBCefBrowserBuilder) : KBCefBrowserBase(builder) {
             javax.swing.SwingUtilities.invokeLater { setBrowserBackgroundColor(color) }
             return
         }
+        myBackgroundColor = color
         myComponent.background = color
-        findOsrComponent()?.background = color
+        if (myIsOffScreenRendering) {
+            // OSR: the raster is transparent where the page paints nothing, so the color
+            // of the OSR component behind it is what the user sees.
+            findOsrComponent()?.background = color
+        } else {
+            applyPageBackgroundCss(color)
+        }
+    }
+
+    /**
+     * Injects the background color into the loaded document (non-OSR path). Inline style
+     * on the root element wins over the page's own `html` background rule and propagates
+     * to the viewport canvas per the CSS background propagation rules.
+     */
+    private fun applyPageBackgroundCss(color: Color) {
+        val alpha = color.alpha / 255f
+        val css = "rgba(${color.red}, ${color.green}, ${color.blue}, $alpha)"
+        val script = """
+            (function() {
+                var d = document.documentElement;
+                if (d) d.style.backgroundColor = '$css';
+            })()
+        """.trimIndent()
+        myCefBrowser.executeJavaScript(script, "", 0)
     }
 
     /**

@@ -79,8 +79,12 @@ interface KBWebView {
 
     /**
      * Page background color. Defaults to black.
-     * JVM Desktop: sets the background of both the outer Swing container and the CEF
-     * rendering layer (works in OSR and non-OSR modes).
+     * External usage is identical regardless of rendering mode; internally the JVM
+     * implementation branches by mode:
+     * - OSR: sets the background of the OSR render component, painted behind CEF's
+     *   transparent raster.
+     * - Non-OSR: the heavyweight native window ignores AWT backgrounds, so the color is
+     *   applied inside the page via CSS injection (re-applied on every main-frame load).
      * Android/iOS: no-op property; the background is determined by the WebView's own CSS.
      */
     var backgroundColor: Color

@@ -34,33 +34,12 @@ compose.desktop {
     }
 }
 
-// Integration tests: each is a `fun main()` that drives a real JCEF browser and
-// exits non-zero on failure, so they double as JavaExec tasks.
+// Shared JVM args for launching JCEF (also used by the MCP server tasks below).
 val testJvmArgs = listOf(
     "--enable-native-access=jcef",
     "--add-opens=jcef/com.jetbrains.cef.remote.browser=ALL-UNNAMED",
     "--add-opens=jcef/com.jetbrains.cef.remote=ALL-UNNAMED"
 )
-
-fun registerKBrowserTest(name: String, mainClass: String) {
-    tasks.register<JavaExec>(name) {
-        group = "application"
-        this.mainClass.set(mainClass)
-        val compileTestKotlin = tasks.named("compileTestKotlin")
-        classpath = files(compileTestKotlin, configurations.named("testRuntimeClasspath"))
-        jvmArgs(testJvmArgs)
-        workingDir = rootProject.projectDir
-    }
-}
-
-registerKBrowserTest("runFileUploadTest", "xyz.kbrowser.FileUploadTestKt")
-registerKBrowserTest("runTimingLoadTest", "xyz.kbrowser.TimingLoadTestKt")
-registerKBrowserTest("runNonOsrLoadHtmlTest", "xyz.kbrowser.NonOsrLoadHtmlTestKt")
-registerKBrowserTest("runNonOsrUiLoadTest", "xyz.kbrowser.NonOsrUiLoadTestKt")
-registerKBrowserTest("runDiagNonOsr", "xyz.kbrowser.DiagNonOsrKt")
-registerKBrowserTest("runResizeFollowTest", "xyz.kbrowser.ResizeFollowTestKt")
-registerKBrowserTest("runNonOsrResizeTest", "xyz.kbrowser.NonOsrResizeTestKt")
-registerKBrowserTest("runKBDebugTest", "xyz.kbrowser.KBDebugTestKt")
 
 // MCP server over stdio: the AI client launches this directly as its MCP command.
 tasks.register<JavaExec>("runMcpServer") {

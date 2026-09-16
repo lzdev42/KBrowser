@@ -243,7 +243,7 @@ The mode is fixed at startup via `KBrowser.initializeConfig(useOsr = ...)` and *
 
 - **Recommendation**: use OSR by default (the only mode supporting Compose overlay); use non-OSR only for maximum performance with a guarantee of never drawing Compose UI over the browser. The API is identical for both modes.
 - ⚠️ Compose overlays above the browser: an overlay placed inside the browser view's mount container has its mouse/keyboard events pass through to the underlying JCEF view. Move it one level up (a sibling of the browser container) and it receives events normally — see the Demo's floating-card example in `BrowserExampleScreen` (`compose.interop.blending=true` is set by `initializeKBrowser()`). In-page interaction, `registerJsCallback`/`registerJsHandler` JS↔Native communication, and all CDP-based automation APIs are unaffected and work in both modes.
-- **macOS live-resize caveat (non-OSR)**: browser content refreshes only after dragging window/splitter edges is released — a CEF + Core Animation architecture limitation that cannot be worked around from Java/AWT. See [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md).
+- **macOS live-resize caveat (non-OSR)**: browser content refreshes only after dragging window/splitter edges is released — a CEF + Core Animation architecture limitation that cannot be worked around from Java/AWT.
 
 ---
 

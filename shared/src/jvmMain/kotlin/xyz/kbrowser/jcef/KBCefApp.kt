@@ -55,6 +55,8 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         ourInitialized.set(true)
         SystemBootstrap.setLoader(config.loader)
 
+        val useOsr = xyz.kbrowser.webview.KBrowser.useOsrMode
+
         try {
             val isRemote = try {
                 val method = config.javaClass.getMethod("isRemoteEnabled")
@@ -66,7 +68,6 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
             }
             // Remote mode (a separate JCEF process) is enabled only in OSR mode; IDEA
             // does not enable it by default, but this library always runs OSR.
-            val useOsr = xyz.kbrowser.webview.KBrowser.useOsrMode
             CefApp.setIsRemoteEnabled(useOsr)
             println("[KBCefApp] Set CefApp.setIsRemoteEnabled to: $useOsr")
         } catch (e: Throwable) {
@@ -76,7 +77,7 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         val macCefFrameworkPathOSX = config.cefFrameworkPathOSX
         val settings = config.cefSettings
 
-        settings.windowless_rendering_enabled = xyz.kbrowser.webview.KBrowser.useOsrMode
+        settings.windowless_rendering_enabled = useOsr
         settings.log_severity = CefSettings.LogSeverity.LOGSEVERITY_INFO
 
         // Aligned with IDEA (SettingsHelper.loadSettings): on macOS the sandbox must be
@@ -85,8 +86,18 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
             settings.no_sandbox = true
         }
 
-        // Default background color (what CEF shows before the page renders)
-        settings.background_color = settings.ColorType(0, 0, 0, 255)
+        // Per-mode default background color. ColorType(a, r, g, b) packs ARGB; alpha
+        // must be 0xFF to enable the RGB value, otherwise CEF falls back to opaque white.
+        // - OSR: fully transparent (alpha=0) enables CEF transparent painting, so each
+        //   WebView's backgroundColor (painted by the OSR component's AWT background)
+        //   shows through the raster where the page paints nothing.
+        // - Non-OSR: opaque black as the native window's fallback before the document
+        //   paints / where the document sets no background color.
+        settings.background_color = if (useOsr) {
+            settings.ColorType(0, 0, 0, 255)
+        } else {
+            settings.ColorType(255, 0, 0, 0)
+        }
         
         // Ensure Alloy rendering mode by disabling Chrome Runtime
         try {

@@ -178,7 +178,7 @@ Per frame, OSR requires a GPU → CPU → GPU pixel round-trip, so it has higher
 
 JCEF creates a native heavyweight window component. The browser renders directly through the native window system, providing the best performance. However, the heavyweight component renders on top of all lightweight Swing/Compose components, making it impossible to overlay Compose UI on top of the JCEF view.
 
-**macOS live-resize caveat**: On macOS, browser content does not update while dragging window or splitter edges — it refreshes once the drag is released. This is a CEF + Core Animation architecture limitation (the AWT event queue is blocked and Core Animation does not commit frames during live-resize) that cannot be worked around from Java/AWT. See [jcef-resize-fix-plan.md](jcef-resize-fix-plan.md). Non-OSR is nonetheless a fully supported mode for display and is used in production (e.g. when no Compose overlay is needed and maximum rendering performance is required).
+**macOS live-resize caveat**: On macOS, browser content does not update while dragging window or splitter edges — it refreshes once the drag is released. This is a CEF + Core Animation architecture limitation (the AWT event queue is blocked and Core Animation does not commit frames during live-resize) that cannot be worked around from Java/AWT. Non-OSR is nonetheless a fully supported mode for display and is used in production (e.g. when no Compose overlay is needed and maximum rendering performance is required).
 
 ### Chinese Input in OSR Mode
 

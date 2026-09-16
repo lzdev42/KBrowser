@@ -178,7 +178,7 @@ OSR 每帧需要 GPU → CPU → GPU 像素往返，因此 CPU/GPU 开销高于�
 
 JCEF 创建原生重量级窗口组件。浏览器通过原生窗口系统直接渲染，性能最佳。但重量级组件渲染在所有轻量级 Swing/Compose 组件之上，无法在其上方叠加 Compose UI。
 
-**macOS 实时缩放限制**：在 macOS 上，拖拽窗口或分隔条边框时浏览器内容不会实时更新——松开后才会刷新。这是 CEF + Core Animation 的架构限制（live-resize 期间 AWT 事件队列被阻塞，Core Animation 不提交帧），无法从 Java/AWT 侧绕过。详见 [jcef-resize-fix-plan.md](jcef-resize-fix-plan.md)。尽管如此，非 OSR 仍是完全可用的显示模式（当不需要叠加 Compose UI 且需要极限渲染性能时已在生产中使用）。
+**macOS 实时缩放限制**：在 macOS 上，拖拽窗口或分隔条边框时浏览器内容不会实时更新——松开后才会刷新。这是 CEF + Core Animation 的架构限制（live-resize 期间 AWT 事件队列被阻塞，Core Animation 不提交帧），无法从 Java/AWT 侧绕过。尽管如此，非 OSR 仍是完全可用的显示模式（当不需要叠加 Compose UI 且需要极限渲染性能时已在生产中使用）。
 
 ### OSR 模式下的中文输入
 

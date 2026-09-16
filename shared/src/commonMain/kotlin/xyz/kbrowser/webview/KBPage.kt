@@ -12,11 +12,29 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.delay
 import kotlin.random.Random
+import androidx.compose.ui.graphics.Color
 import xyz.kbrowser.webview.debug.KBDebug
 
 class KBPage(val webView: KBWebView) {
     val uuid: String = Random.nextLong().toString()
     val debug: KBDebug get() = webView.debug
+
+    /**
+     * Page background color. Defaults to black.
+     *
+     * External usage is identical regardless of rendering mode; internally the JVM
+     * implementation branches by mode:
+     * - OSR: painted by the OSR component's AWT background behind CEF's transparent raster.
+     * - Non-OSR: applied inside the page via CSS injection (re-applied on every main-frame
+     *   load); the native window's pre-document fallback color is fixed at engine init.
+     *
+     * Android/iOS: no-op property; the background is determined by the WebView's own CSS.
+     */
+    var backgroundColor: Color
+        get() = webView.backgroundColor
+        set(value) {
+            webView.backgroundColor = value
+        }
 
     /**
      * Cache of node coordinates, refreshed on [getRawAxTree].

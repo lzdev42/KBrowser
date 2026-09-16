@@ -243,7 +243,7 @@ fun main() = ComposeViewport {
 
 - **建议**：默认 OSR（唯一支持 Compose 叠加的模式）；仅在需要极限性能且绝不叠加 Compose UI 时用非 OSR。两种模式 API 完全一致。
 - ⚠️ 浏览器上方的 Compose 覆盖层：直接放在 WebView 挂载容器内部的覆盖层，鼠标/键盘事件会穿透到下层 JCEF 视图；把它上移一层（作为浏览器容器的同级）即可正常接收事件——参见 Demo 浏览器界面的悬浮卡片示例（`compose.interop.blending=true` 由 `initializeKBrowser()` 自动设置）。网页内的用户交互、`registerJsCallback`/`registerJsHandler` JS↔Native 双向通信、以及基于 CDP 的全部自动化 API（`KBPage` 的所有方法在两种模式下均正常工作）不受影响。
-- **macOS live-resize 限制（非 OSR）**：拖拽窗口/分隔条时浏览器内容松手后才刷新，是 CEF + Core Animation 的架构限制，无法从 Java/AWT 侧绕过。详见 [jcef-resize-fix-plan.md](docs/jcef-resize-fix-plan.md)。
+- **macOS live-resize 限制（非 OSR）**：拖拽窗口/分隔条时浏览器内容松手后才刷新，是 CEF + Core Animation 的架构限制，无法从 Java/AWT 侧绕过。
 
 ---
 
