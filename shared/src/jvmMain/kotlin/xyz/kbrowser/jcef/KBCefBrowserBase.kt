@@ -141,6 +141,18 @@ abstract class KBCefBrowserBase protected constructor(builder: KBCefBrowserBuild
 
         myCefClient.addLifeSpanHandler(object : CefLifeSpanHandlerAdapter() {
             override fun onAfterCreated(browser: CefBrowser) {
+                // 异步等待原生 peer 就绪后执行反指纹 CDP 调用
+                Thread({
+                    try {
+                        if (CefNativeReadyLatch.awaitBlocking(browser, 15)) {
+                            KBCefAntiFingerprint.apply(browser)
+                        } else {
+                            println("[KBCefBrowserBase] Native browser not ready within timeout, skipping anti-fingerprint")
+                        }
+                    } catch (e: Exception) {
+                        println("[KBCefBrowserBase] Anti-fingerprint setup failed: ${e.message}")
+                    }
+                }, "KB-AntiFingerprint-Setup").apply { isDaemon = true }.start()
             }
 
             override fun onBeforeClose(browser: CefBrowser) {

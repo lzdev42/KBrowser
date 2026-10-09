@@ -18,12 +18,12 @@ class KBCefJSQuery private constructor(
     private val myHandlerMap = Collections.synchronizedMap(HashMap<((String) -> Response), CefMessageRouterHandler>())
 
     class JSQueryFunc(client: KBCefClient, index: Int) {
-        val myFuncName = "cefQuery_${client.hashCode().toString().replace("-", "_")}_slot_$index"
+        val myFuncName = "_kbq_${client.hashCode().toString().replace("-", "_")}_$index"
         val myRouter: CefMessageRouter
         init {
             val config = CefMessageRouter.CefMessageRouterConfig()
             config.jsQueryFunction = myFuncName
-            config.jsCancelFunction = "cefQuery_cancel_${client.hashCode().toString().replace("-", "_")}_slot_$index"
+            config.jsCancelFunction = "_kbq_cancel_${client.hashCode().toString().replace("-", "_")}_$index"
             myRouter = CefMessageRouter.create(config)
             client.cefClient.addMessageRouter(myRouter)
         }

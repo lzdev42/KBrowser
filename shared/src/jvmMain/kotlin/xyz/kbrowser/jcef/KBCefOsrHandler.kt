@@ -78,7 +78,15 @@ open class KBCefOsrHandler(
     override fun getScreenInfo(browser: CefBrowser, screenInfo: CefScreenInfo): Boolean {
         val rect = screenBoundsProvider(component)
         val scale = scaleFactor * pixelDensity
-        screenInfo.Set(scale, 32, 4, false, rect, rect)
+        val gc = component.graphicsConfiguration
+        val insets = if (gc != null) Toolkit.getDefaultToolkit().getScreenInsets(gc) else Insets(0, 0, 0, 0)
+        val availableRect = Rectangle(
+            rect.x + insets.left,
+            rect.y + insets.top,
+            rect.width - insets.left - insets.right,
+            rect.height - insets.top - insets.bottom
+        )
+        screenInfo.Set(scale, 24, 8, false, rect, availableRect)
         return true
     }
 

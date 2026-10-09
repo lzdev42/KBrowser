@@ -6,6 +6,9 @@
 # TRAE IDE
 .trae/
 
+# Playwright MCP
+.playwright-mcp/
+
 # IntelliJ IDEA
 .idea/
 *.iml
@@ -75,3 +78,6 @@ lib/
 
 # composeResources generated
 */build/generated/
+
+# Mederi agent workdir
+.mederi/

@@ -112,6 +112,9 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         settings.cache_path = storageDir
         
         val args = config.appArgs.toMutableList()
+        // Remove hardcoded --disable-notifications from JBR config.appArgs;
+        // notification permission denial should be handled via CefPermissionHandler instead.
+        args.removeAll { it.trim() == "--disable-notifications" }
         println("[KBCefApp] Raw Args from Config: $args")
         println("[KBCefApp] Server Exe: ${config.serverExe}")
         
@@ -121,9 +124,9 @@ class KBCefApp private constructor(val config: JCefAppConfig, storageDir: String
         if (!args.contains("--disable-component-update")) {
             args.add("--disable-component-update")
         }
-        // Disable navigator.webdriver control flag
-        if (!args.any { it.startsWith("--disable-features") && it.contains("AutomationControl") }) {
-            args.add("--disable-features=AutomationControl")
+        // Disable navigator.webdriver control flag (Blink engine layer parameter)
+        if (!args.any { it.startsWith("--disable-blink-features") && it.contains("AutomationControlled") }) {
+            args.add("--disable-blink-features=AutomationControlled")
         }
         
         args.add("--disable-chrome-runtime")
